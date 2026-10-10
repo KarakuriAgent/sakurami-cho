@@ -1,0 +1,304 @@
+import * as THREE from 'three'
+import { SITE } from '../../../core/town'
+import { outdoor } from '../../environment/daylight'
+
+/**
+ * 夜の灯りが壁と地面を照らす（ライトの表 = 地面の格子ごとの「近い灯りの表」）。
+ *
+ * 町の灯り（街灯・提灯・足元灯・港の作業灯・店先・名前のある建物の灯具・停留所の灯り）は 2 万を超えるので、ライトとしては置けない
+ * （three のライトを足すと、すべてのシェーダーの計算が増え、作り直しにもなる）。そこで、細かさの中心のまわり（TABLE_SIZE m 四方）を
+ * CELL m の升に分け、升ごとに「その升をいちばん照らす灯り」を SLOTS 個まで選んで 1 枚の浮動小数の画像に書く（CPU で 1 回。細かさの中心が動いたら作り直す）。
+ * 画素のシェーダーは自分の升の SLOTS 個だけを読み、灯りの向き（N・L）と距離の減衰で照らす（`townLamps(位置, 法線)`）。
+ *
+ * - 画像の 1 画素 = 1 つの灯り: xyz = シーンの位置、w = 種類 + 強さ / 16（強さは 0〜16）
+ * - 種類（LAMP）ごとの色・点き具合・届く距離は uniform（時刻で毎コマ変わる）
+ * - 遠くは描かない（カメラからの距離でうすめる）。窓から見た遠くの町は今までどおり地面の画像の照り返し（金色の絨毯を崩さない）
+ */
+
+/** 灯りの種類（照らし方の決まり。色・点き具合・届く距離は LAMP_STYLE） */
+export const LAMP = { street: 1, lantern: 2, foot: 3, port: 4, shop: 5, named: 6, stop: 7 } as const
+export type LampKind = (typeof LAMP)[keyof typeof LAMP]
+
+/** 種類ごとの色（sRGB）・強さの倍率・届く距離（m） */
+const LAMP_STYLE: Record<LampKind, { color: string; gain: number; radius: number }> = {
+  [LAMP.street]: { color: '#ffc27a', gain: 2.4, radius: 26 },
+  [LAMP.lantern]: { color: '#ff9a52', gain: 1.5, radius: 10 },
+  [LAMP.foot]: { color: '#ffb866', gain: 0.9, radius: 6 },
+  [LAMP.port]: { color: '#ffdcae', gain: 2.2, radius: 60 },
+  // 店先は間口ごとに並ぶので、強いと路地が昼のように一様に明るくなる（段階 5 の色の仕上げで 1.6・11m → 0.95・9m。灯りの溜まりが残るように）
+  [LAMP.shop]: { color: '#ffd2a0', gain: 0.95, radius: 9 },
+  [LAMP.named]: { color: '#ffc988', gain: 1.6, radius: 16 },
+  [LAMP.stop]: { color: '#ffe8cc', gain: 1.3, radius: 9 },
+}
+
+export interface Lamp {
+  /** 町の平面座標と標高 */
+  x: number
+  y: number
+  z: number
+  kind: LampKind
+  /** 強さ（0〜16。種類の倍率に掛ける） */
+  power: number
+}
+
+const LAB = SITE.labFloorElevation
+/** 表の升の大きさ（m）・升の数（一辺）・升ごとの灯りの数 */
+const CELL = 4
+const CELLS = 384
+const SLOTS = 8
+const KINDS = 8
+
+export const lampUniforms = {
+  uLampTable: { value: null as THREE.DataTexture | null },
+  /** x, y = 表の左下の角（シーンの x, z）、z = 升の大きさ、w = 使うか（0 / 1） */
+  uLampInfo: { value: new THREE.Vector4(0, 0, CELL, 0) },
+  /** 種類ごとの色 × 点き具合 × 強さ（rgb）と届く距離（a） */
+  uLampKind: { value: Array.from({ length: KINDS }, () => new THREE.Vector4()) },
+  /** カメラからの距離でうすめる [始まり, 終わり]（m。画質の段ごと。setLampFade） */
+  uLampFade: { value: new THREE.Vector2(260, 700) },
+  /** どれかの灯りが点いているか（昼は 0 で、画素のシェーダーは表を読まない） */
+  uLampAny: { value: 0 },
+}
+
+/** GLSL: townLamps(ワールドの位置, 法線) → 照度（albedo を掛ける前）。skipNamed = 1 なら名前のある建物の灯具（named）を除く */
+export const TOWN_LAMPS = /* glsl */ `
+uniform highp sampler2D uLampTable;
+uniform vec4 uLampInfo;
+uniform vec4 uLampKind[${KINDS}];
+uniform vec2 uLampFade;
+uniform float uLampAny;
+vec3 townLampsEx(vec3 wp, vec3 N, float skipNamed, float wrap) {
+  vec3 acc = vec3(0.0);
+  if (uLampInfo.w < 0.5 || uLampAny < 0.5) return acc;
+  float fade = 1.0 - smoothstep(uLampFade.x, uLampFade.y, length(wp - cameraPosition));
+  if (fade <= 0.0) return acc;
+  vec2 c = floor((wp.xz - uLampInfo.xy) / uLampInfo.z);
+  if (c.x < 0.0 || c.y < 0.0 || c.x >= ${CELLS}.0 || c.y >= ${CELLS}.0) return acc;
+  ivec2 base = ivec2(int(c.x) * ${SLOTS}, int(c.y));
+  for (int i = 0; i < ${SLOTS}; i++) {
+    vec4 t = texelFetch(uLampTable, base + ivec2(i, 0), 0);
+    if (t.w <= 0.0) break;
+    float kind = floor(t.w);
+    if (skipNamed > 0.5 && abs(kind - 6.0) < 0.5) continue;
+    vec4 k = uLampKind[int(kind)];
+    if (dot(k.rgb, k.rgb) < 1e-8) continue;
+    float power = fract(t.w) * 16.0;
+    vec3 L = t.xyz - wp;
+    float d2 = dot(L, L);
+    float R = k.a;
+    if (d2 > R * R) continue;
+    float d = sqrt(d2);
+    vec3 l = L / max(d, 1e-3);
+    // 灯具は下向き（上は暗い）。面の向き（回り込み wrap）と距離の減衰
+    float spot = 0.3 + 0.7 * smoothstep(-0.25, 0.55, l.y);
+    float ndl = max(dot(N, l), 0.0) * (1.0 - wrap) + wrap;
+    float att = power / (1.0 + d2 * 0.09) * (1.0 - smoothstep(R * 0.45, R, d));
+    acc += k.rgb * att * ndl * spot;
+  }
+  return acc * fade;
+}
+vec3 townLamps(vec3 wp, vec3 N) { return townLampsEx(wp, N, 0.0, 0.08); }
+/**
+ * 水面に映る灯り（段階 5 の色の仕上げ）: 映った向き R の近くに灯りがあれば、その光（さざ波の法線で揺れて縦に伸びる）。
+ * 灯りは升の表の 8 つ（その升を照らす灯り）。映り込みは照らす範囲より遠くまで見えるので、届く距離の 2 倍まで
+ */
+vec3 townLampsMirror(vec3 wp, vec3 R) {
+  vec3 acc = vec3(0.0);
+  if (uLampInfo.w < 0.5 || uLampAny < 0.5) return acc;
+  float fade = 1.0 - smoothstep(uLampFade.x, uLampFade.y, length(wp - cameraPosition));
+  if (fade <= 0.0) return acc;
+  vec2 c = floor((wp.xz - uLampInfo.xy) / uLampInfo.z);
+  if (c.x < 0.0 || c.y < 0.0 || c.x >= ${CELLS}.0 || c.y >= ${CELLS}.0) return acc;
+  ivec2 base = ivec2(int(c.x) * ${SLOTS}, int(c.y));
+  for (int i = 0; i < ${SLOTS}; i++) {
+    vec4 t = texelFetch(uLampTable, base + ivec2(i, 0), 0);
+    if (t.w <= 0.0) break;
+    vec4 k = uLampKind[int(floor(t.w))];
+    if (dot(k.rgb, k.rgb) < 1e-8) continue;
+    float power = fract(t.w) * 16.0;
+    vec3 L = t.xyz - wp;
+    float d2 = dot(L, L);
+    float Rr = k.a * 2.0;
+    if (d2 > Rr * Rr) continue;
+    vec3 l = L * inversesqrt(max(d2, 1e-4));
+    // 横には細く、縦に長い光の筋（水面のさざ波は縦の向きに映りを引き伸ばす）。dAz ≒ 方位の差の 2 乗 / 2、dEl = 高さの向きの差
+    float dAz = 1.0 - dot(normalize(R.xz + vec2(1e-5)), normalize(l.xz + vec2(1e-5)));
+    float dEl = R.y - l.y;
+    float spec = exp(-dAz / 0.00009 - dEl * dEl / 0.006) * 5.0 + exp(-dAz / 0.0018 - dEl * dEl / 0.05) * 0.35;
+    acc += k.rgb * spec * power / (1.0 + d2 * 0.004);
+  }
+  return acc * fade;
+}
+`
+
+const _c = new THREE.Color()
+
+/**
+ * 表を作る（細かさの中心 center（平面座標）のまわり）。lamps は町じゅうの灯り（範囲の外は使わない）
+ */
+export function buildLampTable(lamps: readonly Lamp[], center: [number, number]) {
+  const g = lampTableSteps(lamps, center)
+  for (;;) {
+    const r = g.next()
+    if (r.done) return r.value
+  }
+}
+
+/** 表を作る手順（升の行を 32 行作るごとに yield。町の中を歩く間は 1 コマに少しずつ。landscape.ts）。最後に結果を返す */
+export function* lampTableSteps(lamps: readonly Lamp[], center: [number, number]): Generator<void, { ms: number; cells: number; lamps: number }> {
+  const t0 = performance.now()
+  const half = (CELLS * CELL) / 2
+  // シーンの座標: x = 東、z = -北。表の左下（x, z が小さい角）
+  const ox = Math.round((center[0] - half) / CELL) * CELL
+  const oz = Math.round((-center[1] - half) / CELL) * CELL
+  // 灯りを 32m の升に分ける
+  const B = 32
+  const nb = Math.ceil((CELLS * CELL) / B) + 2
+  const buckets: number[][] = Array.from({ length: nb * nb }, () => [])
+  const sx = new Float32Array(lamps.length)
+  const sy = new Float32Array(lamps.length)
+  const sz = new Float32Array(lamps.length)
+  lamps.forEach((l, i) => {
+    sx[i] = l.x
+    sy[i] = l.z - LAB
+    sz[i] = -l.y
+    const bx = Math.floor((sx[i] - ox) / B) + 1
+    const bz = Math.floor((sz[i] - oz) / B) + 1
+    if (bx < 0 || bz < 0 || bx >= nb || bz >= nb) return
+    buckets[bz * nb + bx].push(i)
+  })
+  const data = new Float32Array(CELLS * SLOTS * CELLS * 4)
+  const score = new Float32Array(SLOTS)
+  const pick = new Int32Array(SLOTS)
+  let used = 0
+  for (let cz = 0; cz < CELLS; cz++) {
+    if (cz % 32 === 31) yield
+    for (let cx = 0; cx < CELLS; cx++) {
+      const px = ox + (cx + 0.5) * CELL
+      const pz = oz + (cz + 0.5) * CELL
+      let n = 0
+      const bx = Math.floor((px - ox) / B) + 1
+      const bz = Math.floor((pz - oz) / B) + 1
+      for (let dz = -2; dz <= 2; dz++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const xx = bx + dx
+          const zz = bz + dz
+          if (xx < 0 || zz < 0 || xx >= nb || zz >= nb) continue
+          for (const i of buckets[zz * nb + xx]) {
+            const l = lamps[i]
+            const R = LAMP_STYLE[l.kind].radius + CELL
+            const ddx = sx[i] - px
+            const ddz = sz[i] - pz
+            const d2 = ddx * ddx + ddz * ddz
+            if (d2 > R * R) continue
+            const s = (l.power * LAMP_STYLE[l.kind].gain) / (1 + d2 * 0.09) * (1 - Math.min(1, Math.sqrt(d2) / R) ** 2)
+            if (n < SLOTS) {
+              score[n] = s
+              pick[n] = i
+              n++
+            } else {
+              let m = 0
+              for (let k = 1; k < SLOTS; k++) if (score[k] < score[m]) m = k
+              if (s > score[m]) {
+                score[m] = s
+                pick[m] = i
+              }
+            }
+          }
+        }
+      }
+      if (n) used++
+      const row = (cz * CELLS * SLOTS + cx * SLOTS) * 4
+      for (let k = 0; k < n; k++) {
+        const i = pick[k]
+        const l = lamps[i]
+        data[row + k * 4] = sx[i]
+        data[row + k * 4 + 1] = sy[i]
+        data[row + k * 4 + 2] = sz[i]
+        data[row + k * 4 + 3] = l.kind + Math.min(15.99, Math.max(0.01, l.power)) / 16
+      }
+    }
+  }
+  cpuTable.data = data
+  cpuTable.ox = ox
+  cpuTable.oz = oz
+  const old = lampUniforms.uLampTable.value
+  const tex = new THREE.DataTexture(data, CELLS * SLOTS, CELLS, THREE.RGBAFormat, THREE.FloatType)
+  tex.minFilter = THREE.NearestFilter
+  tex.magFilter = THREE.NearestFilter
+  tex.generateMipmaps = false
+  tex.needsUpdate = true
+  lampUniforms.uLampTable.value = tex
+  lampUniforms.uLampInfo.value.set(ox, oz, CELL, 1)
+  old?.dispose()
+  return { ms: performance.now() - t0, cells: used, lamps: lamps.length }
+}
+
+/** 表の CPU の写し（花音を照らす灯りを選ぶ。lampNear） */
+const cpuTable = { data: null as Float32Array | null, ox: 0, oz: 0 }
+
+/** lampNear が選んだ灯りの種類（LAMP。選べなかったら 0） */
+export const lampNearInfo = { kind: 0 as LampKind | 0 }
+
+/**
+ * シーンの点 (x, y, z) をいちばん明るく照らす町の灯り（表の升の灯りのうち、今の点き具合・強さ・距離で。点いていなければ null）。
+ * 夜に町の中を歩く花音の灯り（outdoorLighting.ts の updateLamp）が使う。out に灯りの位置を入れ、照らす強さ（0〜）を返す（種類は lampNearInfo）
+ */
+export function lampNear(x: number, y: number, z: number, out: THREE.Vector3): number {
+  lampNearInfo.kind = 0
+  const d = cpuTable.data
+  if (!d || lampUniforms.uLampAny.value < 0.5) return 0
+  const cx = Math.floor((x - cpuTable.ox) / CELL)
+  const cz = Math.floor((z - cpuTable.oz) / CELL)
+  if (cx < 0 || cz < 0 || cx >= CELLS || cz >= CELLS) return 0
+  const row = (cz * CELLS * SLOTS + cx * SLOTS) * 4
+  let best = 0
+  for (let k = 0; k < SLOTS; k++) {
+    const w = d[row + k * 4 + 3]
+    if (w <= 0) break
+    const kind = Math.floor(w)
+    const kk = lampUniforms.uLampKind.value[kind]
+    const on = kk ? Math.max(kk.x, kk.y, kk.z) : 0
+    if (on < 1e-4) continue
+    const power = (w - kind) * 16
+    const dx = d[row + k * 4] - x
+    const dy = d[row + k * 4 + 1] - y
+    const dz = d[row + k * 4 + 2] - z
+    const d2 = dx * dx + dy * dy + dz * dz
+    const R = kk.w
+    if (d2 > R * R) continue
+    const s = (on * power) / (1 + d2 * 0.09)
+    if (s > best) {
+      best = s
+      out.set(d[row + k * 4], d[row + k * 4 + 1], d[row + k * 4 + 2])
+      lampNearInfo.kind = kind as LampKind
+    }
+  }
+  return best
+}
+
+/** カメラからの距離でうすめる範囲（m）。配信（high）は窓から見える近くの斜面まで、撮影（film）は町の中の画のため遠くまで */
+export function setLampFade(from: number, to: number) {
+  lampUniforms.uLampFade.value.set(from, to)
+}
+
+/** 毎コマ: 種類ごとの色 × 点き具合（時刻の表）× 強さ */
+export function updateLampUniforms() {
+  const o = outdoor
+  const on: Record<LampKind, number> = {
+    [LAMP.street]: o.lights.street,
+    [LAMP.lantern]: o.lights.path,
+    [LAMP.foot]: o.lights.path,
+    [LAMP.port]: o.lights.port,
+    [LAMP.shop]: o.lights.shop,
+    [LAMP.named]: o.lights.path,
+    [LAMP.stop]: o.lights.street,
+  }
+  const k = lampUniforms.uLampKind.value
+  lampUniforms.uLampAny.value = Math.max(...Object.values(on)) * o.lightGain > 0.002 ? 1 : 0
+  for (const [id, st] of Object.entries(LAMP_STYLE)) {
+    const i = Number(id) as LampKind
+    _c.set(st.color).multiplyScalar(st.gain * on[i] * o.lightGain)
+    k[i].set(_c.r, _c.g, _c.b, st.radius)
+  }
+}

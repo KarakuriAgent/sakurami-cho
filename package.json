@@ -1,0 +1,53 @@
+{
+  "name": "sakurami-cho",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "桜見町の地図（町・ラボ・キャラクターの共通の仕組み・R3F の薄い包み）。ビルドせず .ts のまま読ませる",
+  "license": "MIT AND CC-BY-NC-4.0",
+  "files": ["core", "world", "character", "react", "tools", "assets", "README.md", "LICENSE-DATA"],
+  "scripts": {
+    "test": "bun test test/",
+    "typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json",
+    "check:walk": "bun tools/check-walk.mjs --root . --assets assets",
+    "sync:town": "node --disable-warning=ExperimentalWarning --max-old-space-size=8192 tools/sync-town.mjs --root . --out assets",
+    "sync:anim": "node --disable-warning=ExperimentalWarning tools/sync-anim.mjs --root . --out assets",
+    "example:dev": "pnpm --filter town-walker dev",
+    "example:build": "pnpm --filter town-walker build"
+  },
+  "exports": {
+    "./core": "./core/index.ts",
+    "./core/*": "./core/*.ts",
+    "./world": "./world/index.ts",
+    "./world/*": "./world/*.ts",
+    "./character": "./character/index.ts",
+    "./character/*": "./character/*.ts",
+    "./react": "./react/index.ts",
+    "./tools/anim": "./tools/anim/convert.mjs"
+  },
+  "peerDependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "@pixiv/three-vrm-animation": "3.5.5",
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.1",
+    "react": "^19.2.8",
+    "three": "^0.186.1"
+  },
+  "peerDependenciesMeta": {
+    "@react-three/drei": { "optional": true },
+    "@react-three/fiber": { "optional": true },
+    "react": { "optional": true }
+  },
+  "devDependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "@pixiv/three-vrm-animation": "3.5.5",
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.1",
+    "@types/bun": "^1.4.2",
+    "@types/react": "^19.2.18",
+    "@types/three": "^0.186.0",
+    "react": "^19.2.8",
+    "three": "^0.186.1",
+    "typescript": "~6.0.2"
+  }
+}

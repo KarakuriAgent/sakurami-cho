@@ -1,0 +1,29 @@
+{
+  // パッケージ（sakurami-cho）の型の確かめ。アプリ（tsconfig.app.json）と同じ設定で、Vite の型（vite/client）は読まない
+  // （地図の側は import.meta.env を読まない。5-4）。root の tsconfig.json の references から tsc -b で回る（pnpm build）。
+  // アプリの側も import をたどってパッケージのファイルを読むので、パッケージの型の誤りは 2 回出る
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": [],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["core", "world", "character", "react"]
+}

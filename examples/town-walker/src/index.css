@@ -1,0 +1,414 @@
+/* 3D の Canvas を全画面に敷く */
+:root {
+  --walker-bg: #020409;
+  --walker-text: #cfe9f5;
+  --font-body: 'Noto Sans JP', sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root,
+.app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--walker-bg);
+  color: var(--walker-text);
+  font-family: var(--font-body);
+}
+
+canvas {
+  display: block;
+  touch-action: none;
+}
+
+/* 上に重ねる UI（VRM のつまみ・行き先の一覧） */
+.app {
+  position: relative;
+}
+
+.panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 260px;
+  padding: 10px 12px;
+  border: 1px solid rgba(111, 230, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(2, 4, 9, 0.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.panel-title {
+  margin: 0 0 8px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+}
+
+.button {
+  display: inline-block;
+  margin: 0 6px 6px 0;
+  padding: 4px 10px;
+  border: 1px solid rgba(111, 230, 255, 0.6);
+  border-radius: 4px;
+  background: rgba(111, 230, 255, 0.12);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button.secondary {
+  border-color: rgba(207, 233, 245, 0.35);
+  background: transparent;
+}
+
+.hint {
+  margin: 0 0 6px;
+  opacity: 0.7;
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.row input[type='number'] {
+  width: 64px;
+  font: inherit;
+}
+
+.status {
+  margin: 6px 0 0;
+}
+
+.status-error,
+.status-missing,
+.status-rejected {
+  color: #ffb4a8;
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px dashed rgba(111, 230, 255, 0.7);
+  background: rgba(2, 4, 9, 0.45);
+  font-size: 20px;
+  pointer-events: none;
+}
+
+/* 歩き方の案内（下の真ん中。クリックで歩けなかった理由と操作の説明） */
+.walk-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  max-width: min(640px, calc(100% - 24px));
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.walk-notice p {
+  margin: 6px 0 0;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: rgba(2, 4, 9, 0.72);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.walk-notice .notice {
+  border: 1px solid rgba(255, 180, 168, 0.5);
+  color: #ffd6cf;
+  font-size: 13px;
+}
+
+.walk-notice .help {
+  opacity: 0.75;
+}
+
+/* 行き先の一覧と旅程（右上。6-4） */
+.travel-panel {
+  left: auto;
+  right: 12px;
+  width: 300px;
+  max-height: calc(100% - 150px);
+  overflow-y: auto;
+}
+
+.travel-panel.closed {
+  width: auto;
+  max-width: 300px;
+}
+
+.panel-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.panel-head .panel-title {
+  flex: 1;
+}
+
+.clock {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 15px;
+}
+
+.button.small {
+  margin: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.run p {
+  margin: 0 0 4px;
+}
+
+.run-to {
+  font-weight: 700;
+}
+
+.status-arrived {
+  color: #a8f0c6;
+}
+
+.status-cancelled {
+  color: #f5e3a8;
+}
+
+.status-failed {
+  color: #ffb4a8;
+}
+
+.options {
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.options summary {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.options .row {
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.options select {
+  max-width: 190px;
+  font: inherit;
+}
+
+.wheel {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+  padding: 4px 6px;
+  border: 1px solid rgba(111, 230, 255, 0.3);
+  border-radius: 4px;
+}
+
+.wheel span {
+  flex: 1;
+}
+
+.dest-group-head {
+  display: block;
+  width: 100%;
+  padding: 3px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dest-group.focus > .dest-group-head {
+  color: #6fe6ff;
+}
+
+.dest-group ul {
+  margin: 0 0 4px;
+  padding: 0 0 0 14px;
+  list-style: none;
+}
+
+.dest {
+  display: block;
+  width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dest:hover,
+.dest:focus-visible {
+  background: rgba(111, 230, 255, 0.15);
+}
+
+.events {
+  margin: 6px 0 0;
+  padding: 4px 0 0;
+  border-top: 1px solid rgba(207, 233, 245, 0.15);
+  font-size: 11px;
+  list-style: none;
+  opacity: 0.8;
+}
+
+/* 案内に添える「そこへ行く」（ボタンは押せる） */
+.walk-notice .suggest {
+  background: transparent;
+  pointer-events: auto;
+}
+
+.walk-notice .suggest .button {
+  margin: 0 4px;
+  font-size: 12px;
+}
+
+/* 右上のパネルの札（行き先の一覧・ワープ。6-5） */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 6px 0;
+  border-bottom: 1px solid rgba(111, 230, 255, 0.25);
+}
+
+.tab {
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.tab[aria-selected='true'] {
+  border-color: rgba(111, 230, 255, 0.45);
+  background: rgba(111, 230, 255, 0.12);
+  opacity: 1;
+}
+
+.warp-list .dest:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ワープの暗転（3D の画の上・パネルの下。押しても下へ通す。6-5） */
+.warp-fade {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  pointer-events: none;
+  transition-property: opacity;
+  transition-timing-function: ease-in-out;
+}
+
+/* 左の列（VRM のつまみと、その下の時刻と画質。6-6）。空いた所は 3D の画へ通す */
+.left-column {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 260px;
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  pointer-events: none;
+}
+
+.left-column > .panel {
+  position: static;
+  width: auto;
+  pointer-events: auto;
+}
+
+.left-column > .panel.closed {
+  align-self: flex-start;
+}
+
+.time-slider {
+  width: 100%;
+  margin: 2px 0 0;
+}
+
+.time .row select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+}
+
+.time input[type='date'] {
+  font: inherit;
+  font-size: 12px;
+}
+
+.time .status,
+.time-state {
+  margin: 0 0 4px;
+}
+
+.quality select {
+  font: inherit;
+}
+
+/* 町の地図データの案内（上の真ん中。無い・形の版が合わない・読めないときだけ。6-6） */
+.town-notice {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  width: min(320px, calc(100% - 24px));
+  padding: 8px 12px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 180, 168, 0.6);
+  border-radius: 6px;
+  background: rgba(24, 6, 4, 0.85);
+  color: #ffd6cf;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.town-notice-title {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+}
+
+.town-notice p {
+  margin: 6px 0 0;
+}
+
+.town-notice code {
+  font-family: 'Share Tech Mono', monospace;
+  overflow-wrap: anywhere;
+}

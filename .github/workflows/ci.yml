@@ -1,0 +1,53 @@
+# 地図のリポジトリ sakurami-cho の CI（ビルドとテストだけ。上げる所は無い）。
+# lock のまま依存を入れて、型の確かめ（入口とテスト）・テスト（test/。境目の見張り map-boundary.test.ts も）・例のアプリ town-walker のビルド・
+# 町の歩く道のグラフの確かめ（check:walk）を流す。町の地図データ・.vrma は git に入っているので、取り込み（sync:town・sync:anim）は要らない。秘密の値は使わない。
+# 版は kanon-lab の CI と同じ（Node 24・pnpm 10.13.1・Bun 1.3.10）
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.13.1
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: 依存を入れる（lock のまま）
+        run: pnpm install --frozen-lockfile
+
+      - name: 型の確かめ（入口とテスト）
+        run: pnpm typecheck
+
+      - name: テスト（test/）
+        run: pnpm test
+
+      - name: 例のアプリ town-walker をビルドする（tsc -b と vite build）
+        run: pnpm example:build
+
+      - name: 町の歩く道のグラフの確かめ
+        run: pnpm check:walk

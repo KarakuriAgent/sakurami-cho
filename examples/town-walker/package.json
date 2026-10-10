@@ -1,0 +1,30 @@
+{
+  "name": "town-walker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "地図のパッケージ sakurami-cho の例のアプリ（任意の VRM で町じゅうを動き回る。kanon-lab のコードを読まずに動くことが、分け方の受け入れの確かめ。docs/design/map-split.md §8）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
+    "@pixiv/three-vrm-animation": "3.5.5",
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sakurami-cho": "workspace:*",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  }
+}

@@ -1,0 +1,4 @@
+# 地図のリポジトリ sakurami-cho の pnpm workspace。根（このリポジトリの地図のパッケージ）は自動で入り、例のアプリ examples/town-walker は
+# "sakurami-cho": "workspace:*" で根を指す
+packages:
+  - 'examples/*'

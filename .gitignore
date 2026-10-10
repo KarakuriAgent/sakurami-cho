@@ -1,0 +1,15 @@
+# 地図のパッケージ（このディレクトリを根にしたリポジトリでも使う。8-4）。
+# 書き出したアセット（町の地図データ assets/town/・待機と歩きの .vrma の assets/models/animations/）は git に入れるので、ここで外さない
+# （作り直したら差としてコミットする。test/map-boundary.test.ts が見張る）
+
+# 入れた依存とビルドの出力（例のアプリの examples/town-walker/dist/ も）
+node_modules
+dist
+*.local
+
+# 待機・歩きのアニメーションの素材のダウンロード先（pnpm sync:anim。tools/sync-anim.mjs が根の .cache/anim/ に置く）
+.cache/
+
+# ログ・エディタ
+*.log
+.DS_Store

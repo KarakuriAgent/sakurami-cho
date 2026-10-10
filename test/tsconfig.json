@@ -1,0 +1,29 @@
+{
+  // 地図のテスト（test/。Bun で動かす）の型の確かめ（pnpm typecheck の 2 つ目）。パッケージの tsconfig.json（入口）と同じ設定に、Bun の型を足した形。
+  // 地図のコードの多くは実行の時に読む（import の先を字で作る）ので、ここで確かめるのはテストのコードと、型で読む地図のファイル
+  "compilerOptions": {
+    "tsBuildInfoFile": "../node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["bun"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["."]
+}

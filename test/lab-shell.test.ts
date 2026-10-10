@@ -1,0 +1,286 @@
+/**
+ * ラボの殻の three の形（world/lab/shell/*。docs/design/map-split.md §6 の 4-4）の見張り:
+ *   - 殻の群の並び（部屋・北の扉・中二階・見学エントランスの太陽の影の群）と、床（high は映り込みの素材、low はふつうの PBR の床）
+ *   - attach で太陽の影を落とす物の印が付くのは、窓のある壁と柱・天井の板・見学エントランスの群の中だけ（ガラスと小さな部品は除く）
+ *   - 4-0b の直し（中二階の天井の板は部屋の高さ + 2mm・天井のケーブルラックの縁は 1mm 上げる）がそのまま
+ *   - 光のにじみは、付けている間だけ部屋の照明に合わせて暗くなる
+ *   - 毎コマ: 床の映り込みを描いて（床を隠して撮る）から、見学エントランスの扉を進める（扉は注目点が前に来ると開く）
+ *   - 扉の値（sakurami-cho/core/site.ts の DOOR）は間取りのデータ（plan.ts の ENTRANCE_DOOR）と同じ物
+ *   - dispose は殻の物を捨て、共有の素材は捨てない
+ * Canvas は Bun に無いので、描く物は何もしない Canvas の代わりで作る（絵そのものはアプリの比べる画で見る）。
+ * 地図のコードは DOM の型を使うので、lab-plan.test.ts と同じく実行の時に読む（kanon-lab の server/test にあった時に、server の tsconfig の型の確かめに入れなかった形。型は使う所だけ）
+ */
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import * as THREE from 'three'
+
+const LAB = '../world/lab'
+const LAB_CORE = '../core/lab'
+const load = async <T>(path: string): Promise<T> => (await import(path)) as T
+
+interface Mats {
+  blackMetal: THREE.Material
+  glass: THREE.Material
+}
+interface MaterialsMod {
+  createLabMaterials(tex: Record<string, THREE.Texture>): Mats
+}
+interface Frame {
+  time: number
+  camera: THREE.Camera
+  renderer: unknown
+  scene: THREE.Scene
+}
+interface Shell {
+  object: THREE.Group
+  floor: { mesh: THREE.Mesh }
+  attach(): () => void
+  update(dt: number, f: Frame): void
+  dispose(): void
+}
+interface ShellMod {
+  createLabShell(o: { materials: Mats; floor: Record<string, THREE.Texture>; quality: 'high' | 'low' }): Shell
+}
+interface DoorMod {
+  entranceDoor: { open: number; lastNear: number }
+  DOOR_CENTER: { x: number; z: number }
+}
+interface PlanMod {
+  ROOM: { height: number; south: number }
+  ENTRANCE_DOOR: { x: number; width: number; sensor: number; openSeconds: number; closeSeconds: number; openAngle: number }
+}
+interface SiteMod {
+  DOOR: unknown
+}
+interface SunMod {
+  SUN_SHADOW_LAYER: number
+}
+interface LabLightMod {
+  setLabLight(room: number, flash?: number): void
+}
+interface WashMod {
+  WASH_COLOR: THREE.Color
+}
+interface TownHostMod {
+  configureTown(o: { clock?: { sceneTime?: () => number } }): void
+  setTownFocus(f: unknown): void
+  townFocus(): unknown
+}
+
+/** 何もしない Canvas の 2D（呼ばれた物は何もせず、グラデーションと文字の幅だけそれらしく返す） */
+function fakeContext(canvas: object) {
+  return new Proxy({ canvas } as Record<string | symbol, unknown>, {
+    get(target, key) {
+      if (key in target) return target[key]
+      if (key === 'measureText') return () => ({ width: 10 })
+      return () => ({ addColorStop() {} })
+    },
+    set(target, key, value) {
+      target[key] = value
+      return true
+    },
+  })
+}
+
+const realDocument = (globalThis as { document?: unknown }).document
+beforeAll(async () => {
+  // 扉は場面の時計を読む（地図の口。kanon-lab は townBinding.ts で入れる）
+  ;(await load<TownHostMod>('../world/townHost.ts')).configureTown({ clock: { sceneTime: () => 10 } })
+  ;(globalThis as { document?: unknown }).document = {
+    createElement: () => {
+      const canvas: Record<string, unknown> = { width: 0, height: 0 }
+      canvas.getContext = () => fakeContext(canvas)
+      return canvas
+    },
+  }
+})
+afterAll(() => {
+  ;(globalThis as { document?: unknown }).document = realDocument
+})
+
+const sharedTextures = () =>
+  Object.fromEntries(['brushedNormal', 'brushedRough', 'panelNormal', 'panelRough', 'perfOpacity', 'perfNormal', 'smudge'].map((k) => [k, new THREE.Texture()]))
+const floorTextures = () => Object.fromEntries(['map', 'normalMap', 'roughnessMap'].map((k) => [k, new THREE.Texture()]))
+
+/** 映り込みを撮るのに使う所だけの、何も描かない renderer の代わり（撮った時の様子を書き残す） */
+function fakeRenderer(onRender: (scene: THREE.Object3D, camera: THREE.Camera) => void) {
+  return {
+    autoClear: true,
+    xr: { enabled: false },
+    shadowMap: { autoUpdate: true },
+    state: { buffers: { depth: { setMask() {} } } },
+    targets: [] as unknown[],
+    setRenderTarget(t: unknown) {
+      this.targets.push(t)
+    },
+    clear() {},
+    render(scene: THREE.Object3D, camera: THREE.Camera) {
+      onRender(scene, camera)
+    },
+  }
+}
+
+async function makeShell(quality: 'high' | 'low') {
+  const M = await load<MaterialsMod>('../world/materials/labMaterials.ts')
+  const S = await load<ShellMod>(`${LAB}/shell/createShell.ts`)
+  const mats = M.createLabMaterials(sharedTextures())
+  const floor = floorTextures()
+  return { mats, floor, shell: S.createLabShell({ materials: mats, floor, quality }) }
+}
+
+const meshesOf = (o: THREE.Object3D) => {
+  const out: THREE.Mesh[] = []
+  o.traverse((x) => {
+    if ((x as THREE.Mesh).isMesh) out.push(x as THREE.Mesh)
+  })
+  return out
+}
+
+describe('ラボの殻（4-4）', () => {
+  test('殻の群は「部屋・北の扉・中二階・見学エントランス（太陽の影の群の中）」の並び。high の床は映り込みの素材、low はふつうの PBR の床', async () => {
+    const { shell, floor } = await makeShell('high')
+    expect(shell.object.name).toBe('lab:shell')
+    expect(shell.object.children.length).toBe(4)
+    const [room, , , entrance] = shell.object.children
+    expect(room.children[0]).toBe(shell.floor.mesh)
+    expect(entrance.children.length).toBe(1)
+    const m = shell.floor.mesh.material as THREE.MeshStandardMaterial & { mirror: number; mixStrength: number; tDiffuse: THREE.Texture | null }
+    expect(m.constructor.name).toBe('MeshReflectorMaterial')
+    expect([m.mirror, m.mixStrength, m.roughness, m.metalness]).toEqual([0.8, 7, 0.62, 0])
+    expect(m.defines).toMatchObject({ USE_BLUR: '', USE_DEPTH: '' })
+    expect(m.defines?.USE_DISTORTION).toBeUndefined()
+    expect(m.map).toBe(floor.map)
+    expect(m.tDiffuse).not.toBeNull()
+    expect(m.color.getHexString()).toBe(new THREE.Color('#a3abb4').getHexString())
+    // 床のテクスチャの下ごしらえ（色だけ sRGB）
+    expect([floor.map.colorSpace, floor.normalMap.colorSpace, floor.map.anisotropy]).toEqual([THREE.SRGBColorSpace, THREE.NoColorSpace, 16])
+    expect([shell.floor.mesh.receiveShadow, shell.floor.mesh.rotation.x]).toEqual([true, -Math.PI / 2])
+
+    const low = (await makeShell('low')).shell
+    const lm = low.floor.mesh.material as THREE.MeshStandardMaterial
+    expect(lm.constructor).toBe(THREE.MeshStandardMaterial)
+    expect([lm.roughness, lm.normalScale.x, lm.normalMap !== null]).toEqual([0.55, 0.6, true])
+    let renders = 0
+    low.update(0.016, { time: 0, camera: new THREE.PerspectiveCamera(), renderer: fakeRenderer(() => renders++), scene: new THREE.Scene() })
+    expect(renders).toBe(0)
+  })
+
+  test('attach で太陽の影を落とす物の印が付くのは、窓のある壁と柱・天井の板・見学エントランスだけ（ガラスと小さな部品は除く）', async () => {
+    const { shell } = await makeShell('high')
+    const Sun = await load<SunMod>('../world/environment/sunShadow.ts')
+    const marked = () => meshesOf(shell.object).filter((x) => x.layers.isEnabled(Sun.SUN_SHADOW_LAYER))
+    expect(marked().length).toBe(0)
+    shell.attach()
+    const [room, north, mezz, entrance] = shell.object.children
+    const casters = [room.children[3], room.children[6].children[0], entrance]
+    const inCasters = (x: THREE.Object3D) => {
+      for (let p: THREE.Object3D | null = x; p; p = p.parent) if (casters.includes(p)) return true
+      return false
+    }
+    const got = marked()
+    expect(got.length).toBeGreaterThan(0)
+    expect(got.every(inCasters)).toBe(true)
+    expect(meshesOf(north).some((x) => x.layers.isEnabled(Sun.SUN_SHADOW_LAYER))).toBe(false)
+    expect(meshesOf(mezz).some((x) => x.layers.isEnabled(Sun.SUN_SHADOW_LAYER))).toBe(false)
+    // 天井の板は入り、ガラス（半透明）は入らない
+    const ceilingPlane = room.children[6].children[0].children[0] as THREE.Mesh
+    expect(ceilingPlane.layers.isEnabled(Sun.SUN_SHADOW_LAYER)).toBe(true)
+    for (const x of meshesOf(shell.object)) {
+      const mats = Array.isArray(x.material) ? x.material : [x.material]
+      if (mats.some((m) => m.transparent)) expect(x.layers.isEnabled(Sun.SUN_SHADOW_LAYER)).toBe(false)
+    }
+    // 入れた物のうち、ここで影を落とす物（castShadow）でなかった物は、太陽の影の間だけ落とす（前と同じ）
+    expect(got.filter((x) => x.castShadow).length).toBeGreaterThan(0)
+  })
+
+  test('4-0b の直しがそのまま: 中二階の天井の板は部屋の高さ + 2mm、天井のケーブルラックの縁は 1mm 上げる', async () => {
+    const { shell } = await makeShell('high')
+    const P = await load<PlanMod>(`${LAB_CORE}/plan.ts`)
+    const mezz = shell.object.children[2]
+    const ceilings = meshesOf(mezz).filter((x): x is THREE.InstancedMesh => (x as THREE.InstancedMesh).isInstancedMesh && (x.material as THREE.MeshStandardMaterial).color.getHexString() === new THREE.Color('#07090c').getHexString())
+    expect(ceilings.length).toBe(1)
+    const m = new THREE.Matrix4()
+    const p = new THREE.Vector3()
+    for (let i = 0; i < ceilings[0].count; i++) {
+      ceilings[0].getMatrixAt(i, m)
+      expect(p.setFromMatrixPosition(m).y).toBe(Math.fround(P.ROOM.height + 0.002))
+    }
+    const rails = meshesOf(shell.object.children[0]).filter((x) => {
+      const g = x.geometry as THREE.BoxGeometry
+      return g.type === 'BoxGeometry' && g.parameters.width === 0.01 && g.parameters.height === 0.1
+    })
+    expect(rails.length).toBe(4)
+    for (const r of rails) expect(r.position.y).toBe(0.05 + 0.001)
+  })
+
+  test('光のにじみは、付けている間だけ部屋の照明に合わせて暗くなる', async () => {
+    const { shell } = await makeShell('high')
+    const L = await load<LabLightMod>('../world/labLight.ts')
+    const W = await load<WashMod>('../world/materials/wallWash.ts')
+    const washes = meshesOf(shell.object).filter((x) => (x.material as THREE.MeshBasicMaterial).map?.image && (x.material as THREE.Material).blending === THREE.AdditiveBlending && x.renderOrder === 4)
+    expect(washes.length).toBeGreaterThan(0)
+    const wallWash = washes.find((x) => (x.material as THREE.MeshBasicMaterial).color.equals(W.WASH_COLOR))!
+    const color = (wallWash.material as THREE.MeshBasicMaterial).color
+    const detach = shell.attach()
+    L.setLabLight(0)
+    expect(color.r).toBeCloseTo(W.WASH_COLOR.r * 0.3, 12)
+    detach()
+    L.setLabLight(1)
+    expect(color.r).toBeCloseTo(W.WASH_COLOR.r * 0.3, 12)
+  })
+
+  test('毎コマ: 床を隠して映り込みを撮ってから、見学エントランスの扉を進める（注目点が扉の前なら開く）', async () => {
+    const { shell } = await makeShell('high')
+    const D = await load<DoorMod>(`${LAB}/shell/entranceDoor.ts`)
+    const P = await load<PlanMod>(`${LAB_CORE}/plan.ts`)
+    const H = await load<TownHostMod>('../world/townHost.ts')
+    const prevFocus = H.townFocus()
+    H.setTownFocus({ position: new THREE.Vector3(D.DOOR_CENTER.x, 0, D.DOOR_CENTER.z - 0.5), outside: false, walking: false, moveDir: new THREE.Vector3(0, 0, 1), ride: { car: null, inside: false, seat: { z: 0, side: 1 } } })
+    expect(D.DOOR_CENTER).toEqual({ x: P.ENTRANCE_DOOR.x, z: P.ROOM.south })
+    D.entranceDoor.open = 0
+    D.entranceDoor.lastNear = -100
+
+    const seen: { floorVisible: boolean; open: number }[] = []
+    const scene = new THREE.Scene()
+    scene.add(shell.object)
+    const camera = new THREE.PerspectiveCamera()
+    camera.position.set(0, 1.6, 4)
+    camera.lookAt(0, 0.5, 0)
+    scene.updateMatrixWorld()
+    const renderer = fakeRenderer((s) => {
+      if (s === scene) seen.push({ floorVisible: shell.floor.mesh.visible, open: D.entranceDoor.open })
+    })
+    shell.update(0.05, { time: 1, camera, renderer, scene })
+    // 場面を 1 回撮る（床を隠して）。そのあとぼかしを 5 回描き、最後に撮る先を戻す
+    expect(seen).toEqual([{ floorVisible: false, open: 0 }])
+    expect(shell.floor.mesh.visible).toBe(true)
+    expect(renderer.targets.at(-1)).toBeNull()
+    expect(D.entranceDoor.open).toBeCloseTo(0.05 / P.ENTRANCE_DOOR.openSeconds, 12)
+    // 扉の組（西・東）は外へ逆向きに回る
+    const leaves = shell.object.children[3].children[0].children[1].children
+    expect(leaves.length).toBe(2)
+    expect(leaves[0].rotation.y).toBeLessThan(0)
+    expect(leaves[1].rotation.y).toBeCloseTo(-leaves[0].rotation.y, 15)
+    H.setTownFocus(prevFocus)
+  })
+
+  test('扉の値: sakurami-cho/core/site.ts の DOOR は plan.ts の ENTRANCE_DOOR と同じ物', async () => {
+    const P = await load<PlanMod>(`${LAB_CORE}/plan.ts`)
+    const S = await load<SiteMod>('../core/site.ts')
+    expect(S.DOOR).toBe(P.ENTRANCE_DOOR)
+    expect(P.ENTRANCE_DOOR).toMatchObject({ sensor: 2.0, openSeconds: 1.1, closeSeconds: 1.6, openAngle: 1.45 })
+  })
+
+  test('dispose は殻の物（床の素材など）を捨て、共有の素材とガラスは捨てない', async () => {
+    const { shell, mats } = await makeShell('high')
+    const disposed = new Set<unknown>()
+    const watch = (x: THREE.EventDispatcher<{ dispose: object }>) => x.addEventListener('dispose', () => disposed.add(x))
+    watch(mats.blackMetal as never)
+    watch(shell.floor.mesh.material as never)
+    const glass = meshesOf(shell.object).find((x) => (x.material as THREE.Material).name === 'exteriorGlass')!
+    watch(glass.material as never)
+    shell.dispose()
+    expect(disposed.has(shell.floor.mesh.material)).toBe(true)
+    expect(disposed.has(mats.blackMetal)).toBe(false)
+    expect(disposed.has(glass.material)).toBe(false)
+  })
+})
