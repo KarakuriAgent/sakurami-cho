@@ -24,21 +24,21 @@ export function TownNotice() {
       </div>
       {status === 'missing' && (
         <p>
-          <code>{where}manifest.json</code> を読めませんでした。地図のパッケージの <code>assets/{TOWN_DATA.dir}/</code>（git に入っています）があるか確かめてください。
+          <code>{where}manifest.json</code> を読めませんでした。町の地図データ <code>assets/{TOWN_DATA.dir}/</code> は git に入っているので、clone が途中で止まっていないか・消していないかを確かめてください（<code>git status</code>）。
         </p>
       )}
       {status === 'outdated' && (
         <p>
-          地図データの形の版は {townState.message || '?'}、地図のパッケージが読む版は {TOWN_DATA.format} です。地図データを書き出し直してください。
+          地図データの形の版は {townState.message || '?'}、地図のパッケージが読む版は {TOWN_DATA.format} です。道具で書き出し直した地図データとコードの版がずれています。git に入っている地図データに戻すか（<code>git checkout -- assets/{TOWN_DATA.dir}</code>）、今のコードの道具で書き出し直してください。
         </p>
       )}
       {status === 'error' && (
         <p>
-          <code>{where}</code> の地図データを読む途中で失敗しました{townState.message ? `（${townState.message}）` : ''}。書き出し直すか、読み込み直してください。
+          <code>{where}</code> の地図データを読む途中で失敗しました{townState.message ? `（${townState.message}）` : ''}。ページを読み込み直してください。続くときは、地図データが git の物から変わっていないかを確かめてください（<code>git status</code>）。
         </p>
       )}
       <p className="hint">
-        書き出し直すのは地図のパッケージの道具 <code>tools/sync-town.mjs</code>（kanon-lab の根なら <code>pnpm sync:town</code>）。そのあと、ページを読み込み直してください。
+        町の地図データは git に入っているので、ふつうは書き出し直しません（書き出す道具 <code>tools/sync-town.mjs</code> は docs/tools.md）。直したら、ページを読み込み直してください。
         町が無いあいだも、ラボの中とまわりは歩けます（行き先とワープはラボだけ）
       </p>
     </section>

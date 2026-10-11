@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "地図のパッケージ sakurami-cho の例のアプリ（任意の VRM で町じゅうを動き回る。kanon-lab のコードを読まずに動くことが、分け方の受け入れの確かめ。docs/design/map-split.md §8）",
+  "description": "地図のパッケージ sakurami-cho の例のアプリ（任意の VRM で町じゅうを動き回る。パッケージを入口の index（公開の口）だけで読む）",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

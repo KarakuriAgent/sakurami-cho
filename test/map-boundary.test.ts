@@ -38,6 +38,9 @@
  *     （kanonStand・kanonSeat・stopKanon・KANON_TOWN_SRC と、8-5c で替えた町がついて行く人の中の名前 kanonIn・kanonLight・byKanon・KANON_CORNERS・
  *     _lastKanon）を使わず、使う人に見せる字（コメントの外の文字列）に kanon-lab の名前・命令（kanon.place など）・
  *     命令の引数・pnpm sync:town・「花音が」を書かない（道具の pnpm sync:town の案内は見ない）。コメントの「花音」と設定資料のデータ（「花音の部屋」など）は残す
+ *   - 使う人に見える所（README・docs/*.md・LICENSE・package.json と、例のアプリの README・package.json・コードのコメントの外（文字列と JSX の字）・
+ *     index.html）にも、kanon-lab の名前・命令・命令の引数・「花音が」を書かない（8-8。このリポジトリだけを見る人向け。pnpm sync:town はこのリポジトリの
+ *     script なので見ない）。コードのコメントは作った時の記録として残す
  *   - 入口の index（core・world・character）は選んだ名前を export するだけ（export * もコードも書かない。段 6）。出す名前（公開の口）は決めた一覧
  *     PUBLIC_API だけで、docs/usage.md の「公開の口」の表にどれも書く（足す・消すときは、一覧・設計書 §10・その表を一緒に直す。6-7）
  *   - ライセンス（8-5）: LICENSE は 2 つのライセンスの案内（全部が MIT と読まれないように）、LICENSE-CODE は MIT（株式会社0235）、
@@ -427,6 +430,25 @@ function kanonTraces(file: string, text: string, words = true): string[] {
   return [...new Set(out)]
 }
 
+/**
+ * 使う人に見える所に書かない kanon-lab の言葉（8-8）: kanon-lab の名前（大文字小文字・間の - や空白を問わない）・命令（kanon.place など）・命令の引数
+ * （ignore_hours）と引数の書き方（route=・via=）・「花音が」。pnpm sync:town はこのリポジトリの script（docs/tools.md）なので数えない
+ */
+const VISIBLE_TRACE_WORDS = /kanon[- _]?lab|\bkanon\.[a-z_]+|\bignore_hours\b|\b(?:route|via)=|花音が/gi
+
+/**
+ * 使う人に見える所のファイル 1 つの kanon-lab の言葉（「ファイル: 字」）。コード（.ts・.tsx・.mjs・.js）はコメント（/* … *\/・JSX の {/* … *\/}・行の // …）の
+ * 外を全部（文字列も JSX の字も）、HTML は <!-- … --> の外、ほか（Markdown・JSON・LICENSE）は全部を見る
+ */
+function visibleTraces(file: string, text: string): string[] {
+  const body = /\.(?:tsx?|mjs|js)$/.test(file)
+    ? text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1')
+    : file.endsWith('.html')
+      ? text.replace(/<!--[\s\S]*?-->/g, '')
+      : text
+  return [...new Set([...body.matchAll(VISIBLE_TRACE_WORDS)].map((m) => `${file}: ${m[0]}`))]
+}
+
 /* -------------------------------------------------------------------------- */
 /* 例のアプリ（examples/town-walker）                                            */
 /* -------------------------------------------------------------------------- */
@@ -573,6 +595,13 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     const traces = [...files.flatMap((f) => kanonTraces(f, read(f), entryOf(f) !== 'tools')), ...['README.md', ...docFiles(), 'package.json'].flatMap((f) => kanonTraces(f, read(f), false))]
     // 観覧車・旅程の理由の字（8-2b で「種類と値」にした）も、地図の既定の字は中立の言葉（kanon-lab の字は kanon-lab の src/kanon/reasons.ts が作る）
     expect(traces).toEqual([])
+  })
+
+  test('使う人に見える所に kanon-lab の言葉が無い（8-8）: README・docs/*.md・LICENSE・package.json と、例のアプリの README・package.json・コードのコメントの外（文字列と JSX の字）・index.html', () => {
+    const files = ['README.md', ...docFiles(), 'LICENSE', 'package.json', `${EXAMPLE_DIR}/README.md`, `${EXAMPLE_DIR}/package.json`, ...exampleFiles()]
+    // 見る物がある（資料・町の地図データの案内・例のアプリの説明）
+    expect(files).toEqual(expect.arrayContaining([USAGE_DOC, 'docs/tools.md', `${EXAMPLE_DIR}/src/ui/TownNotice.tsx`, `${EXAMPLE_DIR}/src/App.tsx`, `${EXAMPLE_DIR}/index.html`]))
+    expect(files.flatMap((f) => visibleTraces(f, read(f)))).toEqual([])
   })
 
   test('観覧車の口は wheel… の名前（8-2b）。前の名前（boardProblem など）が、地図・例のアプリ・テストのコードと README・docs/*.md に残っていない（kanon-lab の側は kanon-lab の見張り）', () => {
@@ -992,6 +1021,23 @@ describe('見張りの仕組みそのもの', () => {
     // 道具（words = false）は字を見ない。頭と名前は見る
     expect(kanonTraces('t.mjs', "console.error('先に pnpm sync:town で書き出してください')\nconst src = process.env.KANON_TOWN_SRC", false)).toEqual(['t.mjs: KANON_TOWN_SRC（名前）'])
     expect(kanonTraces('ok.ts', "console.info(`[sakurami-cho] 町を組み立てました`)\nconst label = '花音の部屋の作業机'")).toEqual([])
+  })
+
+  test('使う人に見える所の kanon-lab の言葉を、コメントの外（文字列・JSX の字）と資料の全部で数える（8-8）', () => {
+    const tsx = [
+      '// kanon-lab の案内を写した（コメントは数えない）',
+      '/** kanon.place で置く（コメントは数えない） */',
+      '      {/* kanon-lab と同じ霧（JSX のコメントも数えない） */}',
+      '      <p>書き出し直すのは道具（kanon-lab の根なら <code>pnpm sync:town</code>）</p>',
+      "const a = 'https://example.com/x' // URL の // は文字列の中。このコメントは数えない: kanon-lab",
+      'const b = `花音が乗っています`',
+      "const c = 'route=auto'",
+      '      <p>書き出し直すのは <code>pnpm sync:town</code>（このリポジトリの script はよい）</p>',
+    ].join('\n')
+    expect(visibleTraces('x.tsx', tsx)).toEqual(['x.tsx: kanon-lab', 'x.tsx: 花音が', 'x.tsx: route='])
+    expect(visibleTraces('i.html', '<!-- kanon-lab と同じ -->\n<title>town-walker</title>')).toEqual([])
+    expect(visibleTraces('README.md', '使う側の例: KANON LAB\nガイドライン（https://kanon.0235.co.jp/guidelines/ ）')).toEqual(['README.md: KANON LAB'])
+    expect(visibleTraces('package.json', '{ "description": "Kanon_Lab のコードを読まない" }')).toEqual(['package.json: Kanon_Lab'])
   })
 
   test('道具が使う側の置き場所に頼る所を、わけごとに取り違えない', () => {
