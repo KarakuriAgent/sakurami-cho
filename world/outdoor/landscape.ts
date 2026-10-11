@@ -47,7 +47,7 @@ import { townDoorOpeners, townFocus, townOptions, type TownFrame } from '../town
  *
  * 床の映り込みのパスには入れず（layers.ts）、外が見える窓がカメラの視野に無いときは、まるごと描かない。
  * 時刻の見た目は outdoor（world/environment/daylight.ts）を共有 uniform に写して、シェーダーで計算する。
- * データが無いときは空だけ（画面とコンソールに `pnpm sync:town` の案内。ui/TownNotice.tsx）。
+ * データが無いときは空と、ラボの外観・まわりのセットとその影だけ（画面とコンソールに `pnpm sync:town` の案内。ui/TownNotice.tsx）。
  *
  * three の形（5-5。前の Landscape.tsx）: landscape() で根の群（子は空の球・星・町の群）をモジュールに 1 つだけ作る（作り直さず、捨てない。
  * 町の形・外の光・空と同じ）。使う側は、根を場面に置き、attach(camera)（ふだんのカメラに遠景のレイヤーを足す）→ start()（?debug の道具・
@@ -407,6 +407,11 @@ let shadowSeen = 0
 const _local = new THREE.Vector2()
 /** 町のデータが無いときの、ラボの外観とセット（決めた面と作り直した小道だけ） */
 let fallbackSite: LabSite | null = null
+/**
+ * 町のデータが無いときの影の地図（ラボの外観とセットの太陽の影。町があるときと同じ仕組みで、地図に入るのがラボの外観とセットだけになる）。
+ * セットのシェーダーは町の影の地図を読むので、無いと描けない（深さのテクスチャでない物を比較の sampler で読む誤りになる）
+ */
+let fallbackShadows: TownShadows | null = null
 const _dir = new THREE.Vector3()
 const _view = new THREE.Vector2()
 const _center = new THREE.Vector2()
@@ -452,28 +457,32 @@ function updateLandscape(root: THREE.Group, townGroup: THREE.Group, f: TownFrame
   }
   syncOutdoorUniforms()
   const t = townCache
-  // 町のデータが無い・形が違う: ラボの外観とセットだけ作る（地形の高さは仮）
+  // 町のデータが無い・形が違う: ラボの外観とセットと、その影の地図だけ作る（地形の高さは仮）
   if (!t && !fallbackSite && (townData.status === 'missing' || townData.status === 'outdated' || townData.status === 'error')) {
     createTownTextures(null, gl.capabilities.getMaxAnisotropy())
     fallbackSite = createLabSite(gl.capabilities.getMaxAnisotropy(), null)
     townGroup.add(fallbackSite.group)
+    const quality = townQualityConfig()
+    fallbackShadows = new TownShadows(quality.shadowSize, quality.shadowNear, quality.shadowFar, quality.shadowNearMax, quality.localShadow)
   }
   fallbackSite?.update()
-  if (!t) return
+  const shadows = t?.shadows ?? fallbackShadows
+  if (!shadows) return
   // 太陽の影の地図（太陽が少し動いたとき・カメラが動いたときだけ描き直す）
-  t.shadows.ensureInit(gl)
+  shadows.ensureInit(gl)
   if (root.visible) {
     camera.getWorldDirection(_dir)
     _view.set(_dir.x, _dir.z)
     if (_view.lengthSq() < 1e-6) _view.set(0, 1)
     _view.normalize()
     _center.set(camera.position.x, camera.position.z)
-    t.shadows.update(gl, townGroup, _center, _view, outdoor.sunDir)
+    shadows.update(gl, townGroup, _center, _view, outdoor.sunDir)
     // 花音のまわりの細かい影（外にいるときだけ。花音・KB-001・ラボの外観とセット）
     const k = townFocus().position
     _local.set(k.x, k.z)
-    t.shadows.updateLocal(gl, insideLab(k.x, k.z, -0.3) ? null : _local, outdoor.sunDir, k.y)
+    shadows.updateLocal(gl, insideLab(k.x, k.z, -0.3) ? null : _local, outdoor.sunDir, k.y)
   }
+  if (!t) return
   t.labSite.update()
   t.named?.update()
   {
