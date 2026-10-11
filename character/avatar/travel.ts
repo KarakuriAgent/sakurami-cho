@@ -37,7 +37,8 @@ import type { Character, CharacterMotion } from './character'
  *      町の道の経路の始め（出る所を道の上へつないだ点）へは、出る所（今いる所・ゾーンの出入口の町の点）からまっすぐ歩く（間が町の歩ける所なら）
  *      丘ノ上ケーブルの区間（ride）は、駅の入口からホームの扉の前まで歩き、来た便に乗り、着いた駅のホームから出口まで歩く（character/ride/cableRide.ts。
  *      待つ・乗っている間の時間の扱いは wait・rideTime）。緑電（段 3 で乗れるようにする）と、地下の駅自由通路（見えない区間）は、今はカット
- *      （次の乗り場・出口から続ける。町の時刻をその分進める）
+ *      （次の乗り場・出口から続ける。町の時刻をその分進める。道のりがカットで終わるときは、カットの終わり（地下の道を抜けた所・飛ばした歩く所の
+ *      終わり）へ置く）
  *   3. 行き先のゾーンの出入口から、立ち寄り先まで歩く（着いたら locomotion の「着いて向きを合わせる」へ渡す）。町の行き先は、町の道の経路の終わり
  *      （行き先の点を道の上へつないだ点）か降りた乗り場の外から、行き先の点まで歩く（行き先の点が歩ける所でなければ、その手前の縁まで）
  *
@@ -104,6 +105,10 @@ interface CutSeg {
    * 道のりがこのカットで終わるときは、終わりの点へ置く
    */
   path?: Pt[]
+  /**
+   * 地下の道・ケーブルのとき、抜けた所（道の上の点。シーン）。次が歩く所なら、その始めと同じ。道のりがこのカットで終わるときは、ここへ置く
+   */
+  to?: [number, number]
 }
 
 export type RideVehicle = 'cable' | 'tram' | 'waterbus' | 'hover'
@@ -457,6 +462,8 @@ function townSegs(route: TownRoute, leg: number, names: string[]): Seg[] {
         out.push(cut)
       }
       cut.seconds += st.minutes * 60
+      const e = nav.edgePoints(st.edge, st.from, st.to)
+      cut.to = [e[e.length - 1][0], -e[e.length - 1][1]]
       const n = townWalk.edgeName(st.edge)
       if (n && names[names.length - 1] !== n && !n.startsWith('（')) names.push(n)
     } else {
@@ -956,8 +963,9 @@ function lastPoint(segs: Seg[]): [number, number] | null {
 }
 
 /**
- * 道のりの終わりの点（シーンの x, z）: 最後が歩く所ならその終わり、飛ばした歩く所のカットなら飛ばした所の終わり、乗り物の区間なら降りた乗り場の外。
- * わからなければ null（地下の道のカット）
+ * 道のりの終わりの点（シーンの x, z）: 最後が歩く所ならその終わり、飛ばした歩く所のカットなら飛ばした所の終わり、地下の道のカットなら抜けた所、
+ * 乗り物の区間なら降りた乗り場の外。
+ * わからなければ null
  */
 function planEnd(segs: Seg[]): [number, number] | null {
   const s = segs[segs.length - 1]
@@ -965,7 +973,7 @@ function planEnd(segs: Seg[]): [number, number] | null {
   if (s.kind === 'walk') return [s.pts[s.pts.length - 1].x, s.pts[s.pts.length - 1].z]
   if (s.kind === 'cut') {
     const p = s.path?.[s.path.length - 1]
-    return p ? [p.x, p.z] : null
+    return p ? [p.x, p.z] : (s.to ?? null)
   }
   return s.exitAt ?? null
 }
@@ -1393,16 +1401,18 @@ function setGround(m: CharacterMotion, y: number) {
   m.ground = y
 }
 
-/** 道のりの最後へすぐ置く（cut=none）。道のりの最後が乗り物の区間なら、降りた乗り場の外（planTravel の着いた所の向きと同じ点） */
+/**
+ * 道のりの最後へすぐ置く（cut=none）。道のりの最後が乗り物の区間なら降りた乗り場の外、地下の道のカットなら抜けた所（planTravel の着いた所の
+ * 向きと同じ点）
+ */
 function jumpToEnd(ch: Character, plan: TravelPlan) {
   const run = ch.travel
   const m = ch.motion
   const tail = plan.segs[plan.segs.length - 1]
-  const exit = tail && tail.kind === 'ride' && tail.exitAt ? tail.exitAt : null
-  const last = exit ?? lastPoint(plan.segs)
+  const last = planEnd(plan.segs) ?? lastPoint(plan.segs)
   if (!last) return
   const lines: { x: number; z: number }[][] = plan.segs.filter((s): s is WalkSeg => s.kind === 'walk').map((s) => s.pts)
-  if (exit) lines.push([{ x: exit[0], z: exit[1] }])
+  if (tail && tail.kind !== 'walk') lines.push([{ x: last[0], z: last[1] }])
   setGround(m, groundAlong(ch, lines, m.position.y))
   m.position.x = last[0]
   m.position.z = last[1]
@@ -1470,7 +1480,14 @@ function advanceSeg(ch: Character) {
     const c = run.segs[run.seg] as CutSeg
     addTime(ch, run, c.seconds)
     setLeg(run, c.leg)
-    if (c.path?.length) skipped.push(c.path)
+    // カットの終わり（飛ばした歩く所の終わりか、地下の道・ケーブルを抜けた所）と、その向きを決める 1 つ前の点
+    let end: { x: number; z: number } | null = null
+    let prev = { x: m.position.x, z: m.position.z }
+    if (c.path?.length) {
+      skipped.push(c.path)
+      end = c.path[c.path.length - 1]
+      if (c.path.length >= 2) prev = c.path[c.path.length - 2]
+    } else if (c.to) end = { x: c.to[0], z: c.to[1] }
     // カットのたびに数える（until=leg は次の区間か、次に見せる所で完了する）
     run.cutSerial++
     run.seg++
@@ -1492,12 +1509,12 @@ function advanceSeg(ch: Character) {
       // 歩いている途中から続ける（止まらずに）
       run.speed = Math.min(p.v, TOWN_WALK_SPEED)
       ch.events.emit('place', null)
-    } else if (run.seg >= run.segs.length && skipped.length) {
-      // 道のりがカットで終わる（乗り物を降りた乗り場から出る所を飛ばした）: 飛ばした所の終わりへ置く
-      const line = skipped[skipped.length - 1]
-      const p = line[line.length - 1]
-      const q = line.length >= 2 ? line[line.length - 2] : { x: m.position.x, z: m.position.z }
-      setGround(m, groundAlong(ch, skipped, m.position.y))
+    } else if (end && run.seg >= run.segs.length) {
+      // 道のりがカットで終わる（乗り物を降りた乗り場から出る所を飛ばした・地下の駅自由通路を抜けて着く）: カットの終わりへ置く
+      const p = end
+      const q = prev
+      if (skipped.length) setGround(m, groundAlong(ch, skipped, m.position.y))
+      skipped.length = 0
       m.position.x = p.x
       m.position.z = p.z
       if (Math.hypot(p.x - q.x, p.z - q.z) > 1e-3) m.heading = Math.atan2(p.x - q.x, p.z - q.z)

@@ -5,6 +5,7 @@
  *   （前は経路の終わりで止まった。ひらき通りは行き先の北の歩道から 8.4m 南の、緑電の線路の通る道の真ん中）。行き先の点が歩ける所でなければ
  *   （小野寺時計店は店の中の点）、まっすぐ向かって歩ける所の縁の手前まで。どの時間の扱いでも同じ所
  * - 出る所: 今いる所（町の歩道・ソラノワの乗り場の前）から経路の始め（道の上へつないだ点）まで歩く（前は歩き出したコマにそこへ跳んだ）
+ * - 道のりが地下の駅自由通路（見えない区間。カット）で終わる（北口へ）: 通路を抜けた所（北口）へ置いて着く（前は通路の南の入口で着いた）
  *
  * 交通の運行（緑電・ケーブル・運河バス・ホバー）は描かずに作り（createTransit）、町の毎コマと同じ順（町の時計 → 交通の時計 → 運行 → 乗る仕組み →
  * 人を動かす）で 1/30 秒ずつ進める。交通の時計は 10:00 から。ほかのテストの表が混ざらないよう、まっさらな bun のプロセスで確かめる
@@ -159,8 +160,8 @@ for (const o of ['summit', 'kitaguchi', 'hiraki'])
     for (const via of ['auto', 'walk', 'tram'])
       for (const time of ['cut', 'fast', 'none']) if (ORIGINS[o] === null || o !== to) out.arrive.push(go(o, to, time, via))
 for (const time of ['cut', 'fast', 'none']) out.arrive.push(go('lab', 'hiraki', time, 'F'))
-// そのままの時間（短い道のり）: 停留所の前から歩道へ・北口から小野寺時計店へ
-out.real = [go('hirakiStop', 'hiraki', 'real', 'walk'), go('kitaguchi', 'onodera', 'real', 'walk')]
+// そのままの時間（短い道のり）: 停留所の前から歩道へ・北口から小野寺時計店へ・駅前広場の店から地下の通路で北口へ
+out.real = [go('hirakiStop', 'hiraki', 'real', 'walk'), go('kitaguchi', 'onodera', 'real', 'walk'), go('cafe', 'kitaguchi', 'real', 'walk')]
 
 // 2. 出る所: 歩き出してからのコマごとの位置の差（跳ばない）
 out.depart = [go('hiraki', 'onodera', 'real', 'walk', 600), go('soranowa', 'cafe-front', 'real', 'walk', 600)].map((r) => ({ o: r.o, to: r.to, jump: r.jump, error: r.error }))
@@ -212,6 +213,14 @@ describe('旅程（character/avatar/travel.ts）: 着く所と、町の時刻に
     const apart: string[] = []
     for (const [k, list] of by) for (const x of list) if (Math.hypot(x.x - list[0].x, x.z - list[0].z) > 0.05) apart.push(`${k} ${x.time}`)
     expect(apart).toEqual([])
+  })
+
+  test('道のりが地下の駅自由通路で終わる（北口へ）ときも、通路を抜けた北口に着く', () => {
+    const rows = [...(v.arrive as Row[]), ...(v.real as Row[])].filter((x) => !x.problem && x.segs.endsWith('cut:underground'))
+    // 頂上駅の前・ひらき通りから（歩く・いちばん早い・緑電）と、駅前広場の店から
+    expect(rows.length).toBeGreaterThanOrEqual(10)
+    expect(rows.filter((x) => x.time === 'real').length).toBe(1)
+    expect(rows.filter((x) => x.d > 0.3).map((x) => [x.o, x.to, x.time, x.via, x.d])).toEqual([])
   })
 
   test('出る所から経路の始めまで歩く（町の歩道・ソラノワの乗り場の前から、歩き出したコマに跳ばない）', () => {
