@@ -37,8 +37,8 @@ import type { Character, CharacterMotion } from './character'
  *      町の道の経路の始め（出る所を道の上へつないだ点）へは、出る所（今いる所・ゾーンの出入口の町の点）からまっすぐ歩く（間が町の歩ける所なら）
  *      丘ノ上ケーブルの区間（ride）は、駅の入口からホームの扉の前まで歩き、来た便に乗り、着いた駅のホームから出口まで歩く（character/ride/cableRide.ts。
  *      待つ・乗っている間の時間の扱いは wait・rideTime）。緑電（段 3 で乗れるようにする）と、地下の駅自由通路（見えない区間）は、今はカット
- *      （次の乗り場・出口から続ける。町の時刻をその分進める。道のりがカットで終わるときは、カットの終わり（地下の道を抜けた所・飛ばした歩く所の
- *      終わり）へ置く）
+ *      （次の乗り場・出口から続ける。町の時刻をその分進める。カットの次が歩く所でなければ（道のりの終わり・乗り物の区間）、カットの終わり
+ *      （地下の道を抜けた所・飛ばした歩く所の終わり）へ置く）
  *   3. 行き先のゾーンの出入口から、立ち寄り先まで歩く（着いたら locomotion の「着いて向きを合わせる」へ渡す）。町の行き先は、町の道の経路の終わり
  *      （行き先の点を道の上へつないだ点）か降りた乗り場の外から、行き先の点まで歩く（行き先の点が歩ける所でなければ、その手前の縁まで）
  *
@@ -106,7 +106,8 @@ interface CutSeg {
    */
   path?: Pt[]
   /**
-   * 地下の道・ケーブルのとき、抜けた所（道の上の点。シーン）。次が歩く所なら、その始めと同じ。道のりがこのカットで終わるときは、ここへ置く
+   * 地下の道・ケーブルのとき、抜けた所（道の上の点。シーン）。次が歩く所なら、その始めと同じ。道のりがこのカットで終わるとき・次が乗り物の区間のときは、
+   * ここへ置く
    */
   to?: [number, number]
 }
@@ -1509,8 +1510,10 @@ function advanceSeg(ch: Character) {
       // 歩いている途中から続ける（止まらずに）
       run.speed = Math.min(p.v, TOWN_WALK_SPEED)
       ch.events.emit('place', null)
-    } else if (end && run.seg >= run.segs.length) {
-      // 道のりがカットで終わる（乗り物を降りた乗り場から出る所を飛ばした・地下の駅自由通路を抜けて着く）: カットの終わりへ置く
+    } else if (end && (run.seg >= run.segs.length || run.segs[run.seg].kind === 'ride')) {
+      // 道のりがカットで終わる（乗り物を降りた乗り場から出る所を飛ばした・地下の駅自由通路を抜けて着く）・カットの次が乗り物の区間
+      // （乗り場へ向かう道の残りを飛ばした）: カットの終わりへ置く。乗り物の区間は、ここから乗り場の待つ所への道を作る
+      // （置かないと、飛ばす前にいた所から作り、飛ばした秒にその道の秒を重ねて町の時刻へ足していた）
       const p = end
       const q = prev
       if (skipped.length) setGround(m, groundAlong(ch, skipped, m.position.y))
@@ -1623,12 +1626,15 @@ export function driveTravel(ch: Character, t: number, dt: number): boolean {
       break
     }
     const prev = seg
+    const placed = m.placeSerial
     advanceSeg(ch)
     if (rideSeg(run)) {
-      // 乗り物の区間へ（ホームへの道は次のコマで作る）。歩いた区間の終わりに置く
-      const end = prev.pts[prev.pts.length - 1]
-      m.position.x = end.x
-      m.position.z = end.z
+      // 乗り物の区間へ（ホームへの道は次のコマで作る）。歩いた区間の終わりに置く（間のカットで、その終わりへ置き直したときはそのまま）
+      if (m.placeSerial === placed) {
+        const end = prev.pts[prev.pts.length - 1]
+        m.position.x = end.x
+        m.position.z = end.z
+      }
       return true
     }
     seg = walkSeg(run)

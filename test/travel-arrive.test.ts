@@ -6,6 +6,9 @@
  *   （小野寺時計店は店の中の点）、まっすぐ向かって歩ける所の縁の手前まで。どの時間の扱いでも同じ所
  * - 出る所: 今いる所（町の歩道・ソラノワの乗り場の前）から経路の始め（道の上へつないだ点）まで歩く（前は歩き出したコマにそこへ跳んだ）
  * - 道のりが地下の駅自由通路（見えない区間。カット）で終わる（北口へ）: 通路を抜けた所（北口）へ置いて着く（前は通路の南の入口で着いた）
+ * - カット（time=cut）で乗り物の区間の手前を途中から飛ばす: 飛ばした所の終わり（乗り場へ向かう道の終わり）へ置いてから、乗り場の待つ所への道を作る。
+ *   町の時刻に足す秒は、飛ばした所の秒と、そこから待つ所まで歩く秒（早送りで歩くときと同じ道）だけ（前は飛ばす前に見せた所から待つ所への道を作り、
+ *   飛ばした秒に重ねて足していた）
  *
  * 交通の運行（緑電・ケーブル・運河バス・ホバー）は描かずに作り（createTransit）、町の毎コマと同じ順（町の時計 → 交通の時計 → 運行 → 乗る仕組み →
  * 人を動かす）で 1/30 秒ずつ進める。交通の時計は 10:00 から。ほかのテストの表が混ざらないよう、まっさらな bun のプロセスで確かめる
@@ -166,6 +169,40 @@ out.real = [go('hirakiStop', 'hiraki', 'real', 'walk'), go('kitaguchi', 'onodera
 // 2. 出る所: 歩き出してからのコマごとの位置の差（跳ばない）
 out.depart = [go('hiraki', 'onodera', 'real', 'walk', 600), go('soranowa', 'cafe-front', 'real', 'walk', 600)].map((r) => ({ o: r.o, to: r.to, jump: r.jump, error: r.error }))
 
+// 3. カットで乗り物の区間の手前を飛ばす: 乗り物の区間に入ったときの所と、待つ所へ歩く秒（カットは足した秒、早送りは歩く所の名目の秒）
+out.rides = []
+for (const [o, to, via] of [['lab', 'hiraki', 'tram'], ['lab', 'hiraki', 'F'], ['lab', 'kitaguchi', 'tram'], ['summit', 'onodera', 'tram'], ['lab', 'cafe-front', 'auto']]) {
+  const rec = { o, to, via, cut: [], fast: [] }
+  for (const time of ['cut', 'fast']) {
+    const seen = new Set()
+    let cur = null
+    watch = () => {
+      const run = ch.travel
+      const s = run.segs[run.seg]
+      if (s && s.kind === 'ride' && s.state === 'pending' && !seen.has(s)) {
+        seen.add(s)
+        const p = run.segs[run.seg - 1]
+        const e = !p ? null : p.kind === 'walk' ? p.pts[p.pts.length - 1] : p.kind === 'cut' ? (p.path?.[p.path.length - 1] ?? (p.to ? { x: p.to[0], z: p.to[1] } : null)) : null
+        cur = { vehicle: s.vehicle, d: e ? r3(Math.hypot(ch.motion.position.x - e.x, ch.motion.position.z - e.z)) : null, added0: run.added, seg: s }
+        rec[time].push(cur)
+      } else if (cur && time === 'cut' && cur.approach === undefined && cur.seg.state !== 'pending') {
+        cur.approach = r3(run.added - cur.added0)
+      } else if (cur && time === 'fast' && cur.approach === undefined && s && s.kind === 'walk' && s.station === 'in') {
+        let sec = 0
+        for (let i = 1; i < s.pts.length; i++) sec += (s.pts[i].s - s.pts[i - 1].s) / s.pts[i - 1].v
+        cur.approach = r3(sec)
+      }
+    }
+    const r = go(o, to, time, via)
+    watch = null
+    for (const c of rec[time]) {
+      delete c.seg
+      delete c.added0
+    }
+    rec[time + 'End'] = { x: r.x, z: r.z, error: r.error }
+  }
+  out.rides.push(rec)
+}
 console.log(JSON.stringify(out))
 `
 
@@ -185,6 +222,12 @@ interface Row {
   aheadOnWay: boolean
   faceErr: number
 }
+interface RideRec {
+  vehicle: string
+  d: number | null
+  approach: number
+}
+
 describe('旅程（character/avatar/travel.ts）: 着く所と、町の時刻に足す秒', () => {
   const r = Bun.spawnSync([process.execPath, '--eval', PROBE], { cwd: PKG, stderr: 'pipe' })
   const v = (r.exitCode === 0 ? JSON.parse(r.stdout.toString().trim().split('\n').pop()!) : {}) as Record<string, unknown>
@@ -229,4 +272,20 @@ describe('旅程（character/avatar/travel.ts）: 着く所と、町の時刻に
     expect(rows.filter((x) => x.jump > 0.2)).toEqual([])
   })
 
+  test('カットで乗り物の区間の手前を飛ばすと、乗り場へ向かう道の終わりから待つ所へ歩き、足す秒は早送りで歩くときと同じ', () => {
+    const recs = v.rides as ({ o: string; to: string; via: string; cut: RideRec[]; fast: RideRec[]; cutEnd: { error: string | null }; fastEnd: { error: string | null } })[]
+    expect(recs.length).toBe(5)
+    const wrong: unknown[] = []
+    for (const x of recs) {
+      if (x.cutEnd.error || x.fastEnd.error || !x.cut.length || x.cut.length !== x.fast.length) wrong.push({ ...x })
+      x.cut.forEach((c, i) => {
+        const f = x.fast[i]
+        // 乗り物の区間に入ったとき、その前の歩く所（飛ばした所）の終わりにいる。待つ所へ歩く秒は早送りの歩く所と同じ（乗る両・扉の違いで数 m）
+        if (c.d === null || c.d > 0.05 || f.d === null || f.d > 0.05 || !(Math.abs(c.approach - f.approach) < 5)) wrong.push({ o: x.o, to: x.to, via: x.via, i, cut: c, fast: f })
+      })
+    }
+    expect(wrong).toEqual([])
+    // 飛ばす所のある乗り物の区間が、ケーブル・緑電とも入っている
+    expect(new Set(recs.flatMap((x) => x.cut.map((c) => c.vehicle)))).toEqual(new Set(['cable', 'tram']))
+  })
 })
