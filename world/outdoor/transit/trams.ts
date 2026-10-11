@@ -197,6 +197,44 @@ function despike(pts: readonly (readonly number[])[]): { pts: (readonly number[]
   return { pts: keep.map((i) => pts[i]), map }
 }
 
+/** 脇の道へ入って戻る所にある停留所の扱い: 走る線の角へ寄せる（at）か、止まらない（pass） */
+export type TramSpurStop = { at: number } | { pass: true }
+
+/**
+ * 設定資料の線で、脇の道へ入って戻る所にある停留所（系統の番号 → 停留所の名前 → 扱い）。名前は町のデータの停留所の名前（系統の停留所の並びと同じ）。
+ * 設定資料の 1 系統の線は、この 6 つへ行くとき脇の道へ入って戻る形に描かれている。地図は線の行って戻る所を除いてから走らせる（上の despike。
+ * 除いた所の停留所は、その付け根に止まる）ので、6 つの点は走る線から 58〜136m 離れ、前はホームの無い付け根で止まって扉を開けていた
+ * （ドーム西門・楠並木は、まるの森南と同じ付け根に落ちて並びから消えていた）。
+ *
+ * - at: 走る線の、脇の道の付け根の角へ寄せる。止まる所（車両の中心・ホームの真ん中）は、付け根（despike の map が返す線の上の長さ。角の真ん中）から
+ *   線に沿って at m（負 = 角の手前）。ホーム（スロープの下の端まで）が角で交わる道にかからない、角のすぐ手前（それぞれのわけは下）。
+ *   停留所の点は町のデータのまま（ホームと止まる所だけを寄せる）
+ * - pass: ホームを置かず、止まらない（扉を開けない）。停留所の点・名前は町のデータのまま残す。この 3 つは、順（一の掘割口 → まるの森南 → ドーム西門 → 楠並木 →
+ *   桜見駅前）を守ると、寄せられる先が停車場通の上しかなく、そこでは並びが走る順と逆・間が約 30m でホームが重なり、停留所の説明（円環道の南南西・
+ *   円環道の南西・楠並木）とも合わない。後で、設定資料の線どおり緑電が脇の道へ入って戻る形にするとき、脇の道に沿ってホームを置いて止まる
+ */
+export const TRAM_SPUR_STOPS: Readonly<Record<number, Readonly<Record<string, TramSpurStop>>>> = {
+  1: {
+    // 円環道の東の幹線の、町役場へ入る道との角（tram_stop.05）。線は東へ走る。町役場（角の北西）に近い、角の手前（西）に置く。
+    // ホームの東の端から、町役場へ入る道の縁まで約 7.5m
+    町役場前: { at: -30 },
+    // 円環道の西の、線が西へ曲がる角（tram_stop.07）。線は円環道を南へ走って、角で西の生活道路へ曲がる。円環道の上の、角の手前（北）に置く
+    // （角の先の生活道路は幅 8m で両側に建物が並び、ホームが入らない）。ホームの端から、西の幹線の口と、円環道を横切る生活道路の縁までそれぞれ約 7m
+    中央図書館前: { at: -38.5 },
+    // 港町通と停車場通の角（tram_stop.08。2 系統の港町通の停留所と同じ角）。線は港町通を南へ走って、角で停車場通を東へ曲がる。港町通の上の、
+    // 角の手前（北）に置く（角の先の停車場通は、角にかかる 2 系統の港町通のホームのすぐ東になり、ほかの系統の停留所と並ぶ）。
+    // ホームの端から、停車場通の縁と、港町通に交わる生活道路の縁までそれぞれ約 8m
+    一の掘割口: { at: -32.5 },
+    // 円環道の南南西（tram_stop.09）・円環道の南西（tram_stop.10）・楠並木（tram_stop.11）
+    まるの森南: { pass: true },
+    ドーム西門: { pass: true },
+    楠並木: { pass: true },
+  },
+}
+
+/** 系統の番号 no の、停留所 name の扱い（脇の道へ入って戻る所でなければ null） */
+const spurStop = (no: number, name: string): TramSpurStop | null => TRAM_SPUR_STOPS[no]?.[name] ?? null
+
 /** 系統ごとの運転の決まりを作る（1 回） */
 export function buildTramLines(lines: TransitTramLine[]): TramLine[] {
   return lines.map((data, li) => {
@@ -216,9 +254,18 @@ export function buildTramLines(lines: TransitTramLine[]): TramLine[] {
     const spec = LINE_SPEC[data.no] ?? { headway: 7 * 60, phase: 0 }
     const s0 = half + (spec.originShift ?? 0)
     const s1 = data.loop ? L + s0 : L - half
-    // 停留所（車両の中心で止まる。起点・終点は端から車両の半分）。名前も同じ並びで持つ（乗る仕組みが停留所の名前で引く）
-    const clamped = data.stops.map((s) => Math.min(Math.max(clean.map(s.d), s0), data.loop ? L : s1))
-    const kept = clamped.map((d, i) => ({ d, name: data.stops[i].name as string | null })).filter((_, i) => i === 0 || clamped[i] - clamped[i - 1] > 5)
+    // 停留所（車両の中心で止まる。起点・終点は端から車両の半分）。名前も同じ並びで持つ（乗る仕組みが停留所の名前で引く）。
+    // 脇の道へ入って戻る所の停留所は、角へ寄せるか、止まらない（TRAM_SPUR_STOPS）
+    const served = data.stops.filter((s) => {
+      const spur = spurStop(data.no, s.name)
+      return !(spur && 'pass' in spur)
+    })
+    const clamped = served.map((s) => {
+      const spur = spurStop(data.no, s.name)
+      const d = clean.map(s.d) + (spur && 'at' in spur ? spur.at : 0)
+      return Math.min(Math.max(d, s0), data.loop ? L : s1)
+    })
+    const kept = clamped.map((d, i) => ({ d, name: served[i].name as string | null })).filter((_, i) => i === 0 || clamped[i] - clamped[i - 1] > 5)
     if (data.loop) kept.push({ d: s1, name: data.stops[0]?.name ?? null })
     else if (kept[kept.length - 1].d < s1 - 5) kept.push({ d: s1, name: null })
     else kept[kept.length - 1].d = s1
@@ -405,7 +452,10 @@ export interface TramPlatform {
   prof: { a: number[]; z: number[] }
 }
 
-/** 停留所のホームの置き方（データの停留所の点を、いちばん近い系統の線へ投げる） */
+/**
+ * 停留所のホームの置き方（データの停留所の点を、いちばん近い系統の線へ投げる）。脇の道へ入って戻る所の停留所（TRAM_SPUR_STOPS）は、
+ * 角へ寄せる物は系統が止まる所に置き、止まらない物は置かない
+ */
 export function placeTramPlatforms(trams: TramLine[], tramStops: TransitTramStop[]) {
   const out: { name: string; lines: number[]; platforms: TramPlatform[] }[] = []
   const _a = pathPoint()
@@ -417,10 +467,20 @@ export function placeTramPlatforms(trams: TramLine[], tramStops: TransitTramStop
   for (const s of tramStops) {
     const line = trams.find((l) => l.data.no === s.lines[0])
     if (!line) continue
-    const pr = line.path.project(s.x, s.y)
-    if (pr.dist > 25) continue
-    // 停留所の位置 = 車両が止まる所（中心）。端の停留所は端から車両の半分
-    const d = Math.min(Math.max(pr.d, line.s0), line.data.loop ? line.path.length : line.s1)
+    const spur = spurStop(line.data.no, s.name)
+    if (spur && 'pass' in spur) continue
+    let d: number
+    if (spur) {
+      // 角へ寄せる停留所: 系統が止まる所（buildTramLines が付け根から寄せた所）
+      const stop = line.outStops.find((q) => q.name === s.name)
+      if (!stop) continue
+      d = stop.d
+    } else {
+      const pr = line.path.project(s.x, s.y)
+      if (pr.dist > 25) continue
+      // 停留所の位置 = 車両が止まる所（中心）。端の停留所は端から車両の半分
+      d = Math.min(Math.max(pr.d, line.s0), line.data.loop ? line.path.length : line.s1)
+    }
     const platforms: TramPlatform[] = []
     const offOut = trackOffset(line, d, 1)
     const offBack = trackOffset(line, d, -1)

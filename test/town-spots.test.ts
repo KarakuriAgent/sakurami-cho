@@ -113,11 +113,14 @@ describe('ワープ先（core/spots.ts・character/avatar/teleport.ts。6-5）',
     expect(before.filter((s) => s.kind === 'tram' || s.kind === 'waterbus')).toEqual([])
     const after = v.after as Spot[]
     const trams = after.filter((s) => s.kind === 'tram')
-    // データの停留所 40 のうち、1 系統（環状）の 6 つは点が線から 25m より遠く、ホームが無い（緑電も止まらない）ので入らない
+    // データの停留所 40 のうち、1 系統（環状）の脇の道へ入って戻る所の 3 つ（まるの森南・ドーム西門・楠並木）はホームが無い（緑電も止まらない）ので入らない。
+    // 同じ所の町役場前・中央図書館前・一の掘割口は、走る線の角へ寄せたホームに入る（world/outdoor/transit/trams.ts の TRAM_SPUR_STOPS）
     const [data, platforms] = v.tramStops as [number, number]
     expect(data).toBe(40)
     expect(trams.length).toBe(platforms)
-    expect(trams.length).toBe(34)
+    expect(trams.length).toBe(37)
+    for (const name of ['町役場前', '中央図書館前', '一の掘割口']) expect(trams.some((s) => s.id === `tram:${name}`)).toBe(true)
+    for (const name of ['まるの森南', 'ドーム西門', '楠並木']) expect(trams.some((s) => s.id === `tram:${name}`)).toBe(false)
     expect(after.length).toBe(before.length + trams.length)
     for (const key of ['id', 'label'] as const) expect(new Set(after.map((s) => s[key])).size).toBe(after.length)
     expect(after.filter((s) => ![s.x, s.z, s.heading].every(Number.isFinite))).toEqual([])
