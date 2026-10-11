@@ -2,6 +2,7 @@
   "name": "sakurami-cho",
   "private": true,
   "version": "0.1.0",
+  "packageManager": "pnpm@10.13.1",
   "type": "module",
   "description": "桜見町の地図（町・ラボ・キャラクターの共通の仕組み・R3F の薄い包み）。ビルドせず .ts のまま読ませる",
   "license": "MIT AND CC-BY-NC-4.0",
