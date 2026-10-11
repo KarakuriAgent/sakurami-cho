@@ -382,9 +382,10 @@ canvas {
   font: inherit;
 }
 
-/* 町の地図データの案内（上の真ん中。無い・形の版が合わない・読めないときだけ。6-6） */
+/* 町の地図データの案内（上の真ん中。無い・形の版が合わない・読めないときだけ。6-6）。読み込み中の進み具合（walk/index.html の .loading。z-index 10）より上に出す */
 .town-notice {
   position: absolute;
+  z-index: 11;
   top: 12px;
   left: 50%;
   width: min(320px, calc(100% - 24px));

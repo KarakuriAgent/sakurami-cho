@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { PALETTE } from 'sakurami-cho/world'
 import { LabAtmosphere, RideDriver, TownClock, TownExposure, TownRoot, TownView } from 'sakurami-cho/react'
 import { sceneHook, walkerState } from '../debug'
+import { loadingLabBuilt, loadingReady } from '../loading'
 import { town, townState, walker } from '../town'
 import { Controls } from './Controls'
 import { FollowCam } from './FollowCam'
@@ -57,9 +58,14 @@ function Render() {
   return null
 }
 
-/** 準備の合図（町の地図データを読み終えて（か、無いと分かって）から 30 コマ描いたら。?debug の __walker.ready と html の data-walker-ready） */
+/**
+ * 準備の合図（町の地図データを読み終えて（か、無いと分かって）から 30 コマ描いたら。?debug の __walker.ready と html の data-walker-ready）。
+ * 読み込み中の進み具合（../loading）にも、ラボを作り終えた（これが付いてから 2 コマ目。1 コマ目を描くときに素材のシェーダーを組み立てるので、それを含める）・
+ * 準備ができた（進み具合を消す）を知らせる
+ */
 function ReadySignal() {
   const settled = useRef(0)
+  const drawn = useRef(0)
   const gl = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
   useEffect(() => {
@@ -72,10 +78,12 @@ function ReadySignal() {
   }, [gl, scene])
   useFrame(() => {
     walkerState.frames++
+    if (++drawn.current === 2) loadingLabBuilt()
     if (walkerState.ready || townState.status === 'idle' || townState.status === 'loading') return
     if (++settled.current >= 30) {
       walkerState.ready = true
       document.documentElement.dataset.walkerReady = '1'
+      loadingReady()
     }
   })
   return null

@@ -3,13 +3,15 @@ import './town'
 // 町の時刻（?time・?date）を描き始める前に入れる
 import './clock'
 import './debug'
+// 読み込み中の進み具合（walk/index.html の #loading を引き継ぐ。スクリプトの段はここで済み）
+import { loadingFonts, loadingRender } from './loading'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { FONTS } from 'sakurami-cho/world'
 import App from './App'
 
 /**
- * ラボの看板・画面（Canvas に描くラベル）が正しいフォントで描かれるよう、Web フォント（index.html で読む）の読み込みを待ってから描き始める
+ * ラボの看板・画面（Canvas に描くラベル）が正しいフォントで描かれるよう、Web フォント（walk/index.html で読む）の読み込みを待ってから描き始める
  * （最大 3 秒。オフラインでも起動はする）。
  *
  * Web フォントは字の範囲（unicode-range）ごとに分かれて届き、Canvas に字を描いても、その範囲は読み込まれない（読み込む前の字は代わりのフォントで描かれ、
@@ -30,16 +32,22 @@ const LAB_GLYPHS =
 const FONT_GLYPHS = [...new Set(ASCII + LAB_GLYPHS)].join('')
 
 async function waitForFonts() {
-  if (!('fonts' in document)) return
+  if (!('fonts' in document)) return loadingFonts(0, 0)
   // Orbitron は 500・700・900 を読む（ラボは太さを書かない字（400）も描き、いちばん近い 500 で描かれる）
   const loads = [`900 32px ${FONTS.display}`, `700 32px ${FONTS.display}`, `500 32px ${FONTS.display}`, `32px ${FONTS.mono}`, `400 32px ${FONTS.jp}`, `700 32px ${FONTS.jp}`].map((f) =>
     document.fonts.load(f, FONT_GLYPHS),
   )
-  const timeout = new Promise((resolve) => setTimeout(resolve, 3000))
-  await Promise.race([Promise.allSettled(loads), timeout])
+  // 進み具合のフォントの段（読み終えた・読めなかった数）
+  let settled = 0
+  loadingFonts(0, loads.length)
+  const tick = () => loadingFonts(++settled, loads.length)
+  for (const l of loads) l.then(tick, tick)
+  const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 3000))
+  if ((await Promise.race([Promise.allSettled(loads), timeout])) === 'timeout') loadingFonts(settled, loads.length, true)
 }
 
 waitForFonts().finally(() => {
+  loadingRender()
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <App />

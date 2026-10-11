@@ -4,7 +4,8 @@
 ワープで町じゅうを動き回り、町の時刻と画質を変えられる。
 
 パッケージを入口の index（`sakurami-cho/core`・`world`・`character`・`react`）だけで読む（使っている口はリポジトリの根の [docs/usage.md](../../docs/usage.md) の「公開の口」）。
-ライセンスは根の README の「ライセンス」（例のアプリのコードは MIT）。
+ライセンスは根の README の「ライセンス」（例のアプリのコードは MIT）。デモは https://sakurami-cho.0235.app/ （Cloudflare Workers の静的なページ。
+設定はリポジトリの根の `wrangler.jsonc`）。
 
 ## 動かし方
 
@@ -12,15 +13,42 @@
 
 ```bash
 pnpm install
-pnpm example:dev     # 開発（http://localhost:5174/）
+pnpm example:dev     # 開発（入口は http://localhost:5174/、アプリは http://localhost:5174/walk/）
 pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 ```
 
 この置き場所で `pnpm dev`・`pnpm build`・`pnpm preview`（ビルドを見る。http://localhost:4173/）でもよい。
 
+ページは 2 つ（Vite の複数ページ。`vite.config.ts` の `build.rolldownOptions.input`）:
+
+- 入口 `/`（`index.html`）: 題・できること・「入る」のボタン 2 つ（高い画質 `/walk/`・軽い画質 `/walk/?quality=low&town=low`）・始める前の目安・操作・
+  VRM の扱い・リポジトリとライセンスの案内。素の HTML と CSS だけで、アプリのスクリプト・three・React・Web フォントを読まない（読むのは HTML 約 9KB と
+  `landing/` の画 2 枚、合わせて約 230KB）。画は共有のカード（`og:image`・`twitter:image`）にも使い、ビルドで `https://sakurami-cho.0235.app/` を頭に付ける
+- アプリ `/walk/`（`walk/index.html`）: 町を歩くアプリ。URL の引数（下の「URL の引数」）はこのページに付ける。アセットの根（Vite の base）は `/` のままなので、
+  `/walk/` のページからも町の地図データ・テクスチャ・`.vrma` は `/town/…`・`/textures/…`・`/models/…` で読む
+
 - アセット（町の地図データ・テクスチャ・待機と歩きの `.vrma`）は、Vite の `publicDir` をリポジトリの根の `assets/` に向けて出す（写さない。`vite.config.ts`）。
   どれも git に入っているので、取り込み（`pnpm sync:town` など）は要らない
-- 準備（町の地図データを読み、ラボを作る）には、PC によって 10〜50 秒ほどかかる。ラボの看板の字は、Web フォント（Google Fonts）を読み込んでから描く（最大 3 秒待つ）
+- 準備（町の地図データを読み、ラボを作る）には、PC と回線によって 10〜50 秒ほどかかる（最初に読むのは合わせて約 40MB）。ラボの看板の字は、Web フォント（Google Fonts）を
+  読み込んでから描く（最大 3 秒待つ）。準備の間は、画面の真ん中に段ごとの進み具合を出す（下の「読み込み中の進み具合」）
+
+## 読み込み中の進み具合
+
+`/walk/` を開くと、準備ができるまで画面の真ん中に段ごとの棒を出し、準備ができたら消す（`src/loading.ts`。初めの形は `walk/index.html` の `#loading` で、
+スクリプトが届くまではそこのインラインの JS が経過の秒を数える）。地図のパッケージは変えず、今ある物から数える:
+
+| 段 | 数の取り方 |
+|---|---|
+| スクリプト | アプリのスクリプトが動き出したら済み（大きさは Resource Timing の `.js` の合計）。届くまでは往き来する帯 |
+| フォント | `src/main.tsx` の `document.fonts.load` の 6 つのうち読み終えた数（3 秒で打ち切り） |
+| テクスチャ | Resource Timing で `textures/` の下を読み終えた数 / `assets/textures/` の下の画像の数（ビルドのときに数える。ラボ 12 枚・町 5 枚） |
+| ラボを作る | 描き始めてから、ラボのテクスチャを読んでラボを作り、最初のコマを描き終えるまで（数の無い帯） |
+| 町の地図データ | 地図の `onStatus` の `loading` から、Resource Timing で `town/` の下を読み終えたバイト / `manifest.json` の `stats.bytes`（約 25MB） |
+| 町を組み立てる | 町の地図データを読み終えてから、`onStatus` が `ready` になるまで（数の無い帯） |
+
+数えられるのは読み終えたファイルだけなので、大きなファイル（地面の画像 7.6MB など）を読んでいる間は数が止まる（棒には光を流して、動いていると分かるようにする）。
+止まったら、その段を赤くして理由を出す: スクリプトを読めない・動かせない（インラインの JS）、町の地図データが無い・形の版が合わない・読めない（その段に出し、
+組み立ては省いてラボだけで始める。くわしくは上の真ん中の案内）、捕まえられなかった誤り（そのとき進んでいた段に出す）。誤りがあったときは、準備ができても 4 秒見せてから消す。
 
 ## 画面
 
@@ -31,6 +59,7 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 | 右上「行き先」 | 札「行き先の一覧」（旅程）と「ワープ」。町の時刻・今の移動・結果・出来事（たためる） |
 | 下の真ん中 | 操作の説明と、クリックで歩けなかった理由 |
 | 上の真ん中 | 町の地図データが無い・形の版が合わない・読めないときの案内（閉じられる） |
+| 真ん中 | 読み込み中の進み具合（準備ができたら消える。上の「読み込み中の進み具合」） |
 
 ## 操作
 
@@ -73,6 +102,8 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 
 ## URL の引数
 
+アプリのページ `/walk/` に付ける（例: `/walk/?time=17:30&debug`）。
+
 | 引数 | 中身 |
 |---|---|
 | `?time=17:30`・`?date=2026-10-03` | 町の時刻・日付を止めて始める（日本時間。時刻のつまみで動かせる） |
@@ -100,7 +131,10 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 
 | ファイル | 中身 |
 |---|---|
+| `index.html`・`landing/` | 入口のページ（`/`）と、その画 2 枚（夕方のラボの前・ラボの前から見下ろす町） |
+| `walk/index.html` | アプリのページ（`/walk/`）。読み込み中の進み具合の初めの形と見た目・スクリプトが届くまでのインラインの JS |
 | `src/main.tsx` | 町を作り（`./town`）、時刻を入れ、フォントを待ってから React を描き始める |
+| `src/loading.ts` | 読み込み中の進み具合（段ごとの数を入れ、準備ができたら消す） |
 | `src/town.ts` | 町（`createTown`）と歩く人（`createCharacter`）を作る所（ここ 1 か所）。乗り物・旅程・WASD の動かし方・町の注目点・時計を進めてよい人 |
 | `src/vrm.ts` | VRM を読む・入れ替える・片付ける（`blob:` の URL の取り消しも） |
 | `src/walk.ts`・`src/input/` | WASD・クリックで歩く（キーとクリックの入力） |

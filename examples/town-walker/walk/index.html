@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- アプリのページ（/walk/。入口は根の index.html）。アセットの根は Vite の base（/）のままなので、町の地図データなどは /town/… から読む -->
+    <!-- アイコンは置かない（/favicon.ico を取りに行かないように） -->
+    <link rel="icon" href="data:," />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#020409" />
+    <title>桜見町を歩く | town-walker</title>
+    <!-- 読み込み中の進み具合（下の #loading）の見た目。アプリの CSS（src/index.css）より先に効くように、ここに書く -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #020409;
+        color: #cfe9f5;
+      }
+
+      .loading {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        background: radial-gradient(ellipse at 50% 38%, #142036 0, #070b16 55%, #020409 100%);
+        color: #cfe9f5;
+        font-family: system-ui, -apple-system, 'Hiragino Sans', 'Noto Sans JP', 'Noto Sans CJK JP', 'Yu Gothic UI', Meiryo, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
+        transition: opacity 0.6s ease;
+      }
+
+      .loading[data-state='done'] {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .loading-card {
+        width: min(480px, 100%);
+        padding: 20px 22px 14px;
+        border: 1px solid rgba(111, 230, 255, 0.25);
+        border-radius: 10px;
+        background: rgba(2, 4, 9, 0.78);
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+      }
+
+      .loading-title {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0.04em;
+      }
+
+      .loading-sub {
+        margin: 2px 0 14px;
+        font-size: 12px;
+        opacity: 0.7;
+      }
+
+      .loading-steps {
+        display: grid;
+        gap: 9px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-areas: 'name detail' 'bar bar';
+        column-gap: 10px;
+        row-gap: 3px;
+        transition: opacity 0.3s;
+      }
+
+      .step[data-state='wait'],
+      .step[data-state='skip'] {
+        opacity: 0.45;
+      }
+
+      .step-name {
+        grid-area: name;
+      }
+
+      .step-detail {
+        grid-area: detail;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        opacity: 0.85;
+      }
+
+      .step-bar {
+        position: relative;
+        grid-area: bar;
+        height: 7px;
+        border-radius: 4px;
+        overflow: hidden;
+        background: rgba(207, 233, 245, 0.12);
+      }
+
+      /* 進んでいる段は、数が動かない間（大きなファイルを読んでいる間。数えられるのは読み終えたファイルだけ）も動いていると分かるよう、光を流す */
+      .step[data-state='active'] .step-bar::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent 0, rgba(207, 233, 245, 0.16) 50%, transparent 100%);
+        background-size: 40% 100%;
+        background-repeat: no-repeat;
+        animation: loading-sheen 1.8s linear infinite;
+      }
+
+      @keyframes loading-sheen {
+        from {
+          background-position: -40% 0;
+        }
+        to {
+          background-position: 140% 0;
+        }
+      }
+
+      .step-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 0;
+        border-radius: 4px;
+        background: #6fe6ff;
+        transition: width 0.25s ease-out;
+      }
+
+      /* 数の分からない間（スクリプト・ラボを作る・町を組み立てる）は、往き来する帯 */
+      .step[data-state='active'][data-indeterminate] .step-fill {
+        width: 32% !important;
+        animation: loading-sweep 1.3s ease-in-out infinite alternate;
+      }
+
+      @keyframes loading-sweep {
+        from {
+          left: 0;
+        }
+        to {
+          left: 68%;
+        }
+      }
+
+      .step[data-state='done'] .step-fill {
+        width: 100% !important;
+        background: #a8f0c6;
+      }
+
+      .step[data-state='fail'] .step-fill {
+        width: 100% !important;
+        background: #ffb4a8;
+      }
+
+      .step[data-state='fail'] .step-detail {
+        color: #ffb4a8;
+        opacity: 1;
+      }
+
+      .loading-note {
+        margin: 12px 0 0;
+        padding: 6px 10px;
+        border: 1px solid rgba(255, 180, 168, 0.5);
+        border-radius: 6px;
+        color: #ffd6cf;
+        font-size: 12px;
+      }
+
+      .loading-time {
+        margin: 10px 0 0;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        opacity: 0.55;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .step[data-state='active'][data-indeterminate] .step-fill {
+          left: 34%;
+          animation: none;
+        }
+
+        .step[data-state='active'] .step-bar::after {
+          animation: none;
+        }
+      }
+    </style>
+    <!-- アプリのスクリプトが届くまでの間（React はまだ動かない）: 経過の秒を数え、スクリプトを読めない・動かせないときは「スクリプト」の段に出す。
+         スクリプトが動き出したら src/loading.ts が引き継ぐ（taken） -->
+    <script>
+      ;(function () {
+        var boot = (window.__walkerBoot = { t0: Date.now(), taken: false, done: false })
+        function stop(detail, note) {
+          if (boot.taken) return
+          var row = document.querySelector('[data-step="script"]')
+          if (row) {
+            row.setAttribute('data-state', 'fail')
+            row.querySelector('.step-detail').textContent = detail
+          }
+          var p = document.querySelector('.loading-note')
+          if (p) {
+            p.hidden = false
+            p.textContent = note
+          }
+        }
+        addEventListener(
+          'error',
+          function (e) {
+            var t = e.target
+            if (t && t.tagName === 'SCRIPT') stop('読めませんでした', 'アプリのスクリプトを読めませんでした。回線を確かめて、ページを読み込み直してください。')
+            else if (t === window) stop('動かせませんでした', 'アプリのスクリプトを動かせませんでした（' + (e.message || '?') + '）。新しいブラウザで開き直してください。')
+          },
+          true,
+        )
+        var tick = setInterval(function () {
+          var p = document.querySelector('.loading-time')
+          if (boot.done) return clearInterval(tick)
+          if (p) p.textContent = '経過 ' + Math.floor((Date.now() - boot.t0) / 1000) + ' 秒'
+        }, 1000)
+      })()
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- 読み込み中の進み具合（段ごとの棒）。初めの形はここに書き、スクリプトが動き出したら src/loading.ts が数を入れ、準備ができたら消す -->
+    <div id="loading" class="loading" data-state="loading" aria-busy="true">
+      <div class="loading-card">
+        <h1 class="loading-title">桜見町を読み込んでいます</h1>
+        <p class="loading-sub">最初は 10〜50 秒ほどかかります（PC と回線による）</p>
+        <ul class="loading-steps">
+          <li class="step" data-step="script" data-state="active" data-indeterminate>
+            <span class="step-name">スクリプト</span><span class="step-detail">読んでいます</span><span class="step-bar"><span class="step-fill"></span></span>
+          </li>
+          <li class="step" data-step="fonts" data-state="wait">
+            <span class="step-name">フォント</span><span class="step-detail"></span><span class="step-bar"><span class="step-fill"></span></span>
+          </li>
+          <li class="step" data-step="textures" data-state="wait">
+            <span class="step-name">テクスチャ</span><span class="step-detail"></span><span class="step-bar"><span class="step-fill"></span></span>
+          </li>
+          <li class="step" data-step="lab" data-state="wait">
+            <span class="step-name">ラボを作る</span><span class="step-detail"></span><span class="step-bar"><span class="step-fill"></span></span>
+          </li>
+          <li class="step" data-step="townData" data-state="wait">
+            <span class="step-name">町の地図データ</span><span class="step-detail"></span><span class="step-bar"><span class="step-fill"></span></span>
+          </li>
+          <li class="step" data-step="build" data-state="wait">
+            <span class="step-name">町を組み立てる</span><span class="step-detail"></span><span class="step-bar"><span class="step-fill"></span></span>
+          </li>
+        </ul>
+        <p class="loading-note" hidden></p>
+        <p class="loading-time">経過 0 秒</p>
+      </div>
+    </div>
+    <!-- ラボの看板・画面（Canvas に描くラベル）が使うフォント（地図のパッケージの world の FONTS）。src/main.tsx が読み込みを待ってから描き始める。
+         上の進み具合を先に出せるよう、ここ（進み具合のあと）で読む（スクリプトはこの CSS を読み終えてから動く） -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap"
+    />
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

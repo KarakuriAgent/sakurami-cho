@@ -46,5 +46,5 @@ pnpm sync:anim     # sync-anim --root . --out assets（素材の置き場は .ca
 pnpm check:walk    # check-walk --root . --assets assets
 pnpm test          # bun test test/（地図のテストと境目の見張り test/map-boundary.test.ts）
 pnpm typecheck     # tsc -p tsconfig.json（入口）と tsc -p test/tsconfig.json（テスト）
-pnpm example:dev   # 例のアプリ（pnpm --filter town-walker dev。example:build はビルド）
+pnpm example:dev   # 例のアプリ（pnpm --filter town-walker dev。入口は http://localhost:5174/、アプリは /walk/。example:build はビルド）
 ```

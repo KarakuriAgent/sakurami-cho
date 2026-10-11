@@ -9,11 +9,13 @@
 
 ## 例のアプリを動かす
 
+デモ: https://sakurami-cho.0235.app/ （入口のページから「入る」で開く。PC のブラウザ向け）
+
 clone したリポジトリの根で（Node 24・pnpm 10・Bun 1.3）:
 
 ```bash
 pnpm install
-pnpm example:dev     # 開発（http://localhost:5174/。ビルドは pnpm example:build で、出力は examples/town-walker/dist/）
+pnpm example:dev     # 開発（入口は http://localhost:5174/、アプリは /walk/。ビルドは pnpm example:build で、出力は examples/town-walker/dist/）
 ```
 
 任意の VRM を読んで、WASD・クリック・行き先の一覧（旅程。乗り物にも乗る）・ワープで町じゅうを動き、町の時刻と画質を変えられる。

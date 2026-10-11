@@ -53,7 +53,7 @@ minor の版を上げる。
 
 ラボの看板・画面は Canvas に字を描く（`FONTS` の Orbitron・Share Tech Mono・Noto Sans JP が頭のフォント）。Web フォントは字の範囲（unicode-range）ごとに届き、
 Canvas に描いても範囲は読み込まれないので、使う側がフォントを読み込んで（`document.fonts.load(フォント, 描く字)`）から描き始める（一度だけ描くラベルは
-代わりのフォントのまま残る）。例のアプリは `index.html` で Google Fonts を読み、`src/main.tsx` がラボで描く字（ラボの字を変えたら数え直す）と
+代わりのフォントのまま残る）。例のアプリは `walk/index.html` で Google Fonts を読み、`src/main.tsx` がラボで描く字（ラボの字を変えたら数え直す）と
 Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のある建物・中のある建物の絵の字は、頭のフォントが OS の `"Noto Sans CJK JP"` なので待たない。
 
 ## 落とした VRM（blob:）
@@ -99,6 +99,8 @@ Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のあ
 - キャラクターの見た目（`createCharacterVisual`）の `assetBase` は別の引数（キャラクターは町の口を読まずに使えるように）。`.vrma` と VRM の `url` はその下からの相対パス
   （`character/avatar/visualConfig.ts` の `animations` は `models/animations/idle.vrma` など）。絶対の URL（`blob:`・`data:`・`http(s):`・`/` で始まる物）なら `assetBase` を付けない
 - パッケージは Vite の `import.meta.env` を読まない。Vite のアプリなら `import.meta.env.BASE_URL` を渡す
+- アセットの根はページの置き場所と別でよい。例のアプリは、アプリのページを `/walk/`（`walk/index.html`）に置き、Vite の base（アセットの根）は `/` のまま
+  （`/walk/` のページも `/town/…`・`/textures/…` を読む）
 
 ## アセット
 

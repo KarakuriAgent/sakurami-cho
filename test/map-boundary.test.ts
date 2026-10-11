@@ -52,7 +52,7 @@
  *   - パッケージを入口の index（sakurami-cho/core・world・character・react）だけで読む（深いパス・相対では読まない）。読む外のパッケージは
  *     自分の package.json に書いた物と node: だけ
  *   - kanon-lab を読まず、kanon-lab の置き場所（src/・shared/・server/・public/・@kanon-lab/*・花音の VRM と身ぶり）を書かない。相対のパスはパッケージの
- *     外へ出ない（アセットは publicDir でパッケージの assets/ を読む）。コードは src/ の下と vite.config.ts・index.html だけ
+ *     外へ出ない（アセットは publicDir でパッケージの assets/ を読む）。コードは src/ の下と vite.config.ts・index.html・walk/index.html だけ
  *   - package.json に kanon-lab を書かず、three などの範囲はパッケージの peer と同じ（同じ本当の置き場所に解ける）。パッケージの files（配る物）・
  *     tsconfig に入れない
  *   - パッケージ（入口・道具）は例のアプリを読まない
@@ -69,6 +69,9 @@
  *   - ワープの口（teleport・placeAtPoint・townSpots）を読むのは src/teleport.ts だけで、跳ぶ前に旅程を取り消し、跳んだら追うカメラを一度に置く（6-5）
  *   - 町の時刻と日付を変える口（town.setTime・setDate）を呼ぶのは src/clock.ts だけで、旅程の途中・乗っている間・ワープの暗転の間は変えない。画質は
  *     URL の引数から src/quality.ts が決めて町を作るときに渡す。町の地図データの状態は onStatus から聞き、案内は missing・outdated・error だけ（6-6）
+ *   - ページは 2 つ（vite.config.ts の build.rolldownOptions.input）: 入口 index.html（/）は素の HTML と CSS だけで、スクリプト・外の CSS・Web フォントを
+ *     読まない（画は landing/ の物だけ。「入る」は /walk/ と軽い画質の /walk/?quality=low&town=low）。アプリ walk/index.html（/walk/）は
+ *     src/main.tsx を 1 つ読み、読み込み中の進み具合（#loading の段）は src/loading.ts の段と同じ並び。アセットの根（base）は / のまま
  *
  * 許しの一覧は持たない（段 5 で 0 にした）。どうしても例外が要るときは、その見張りに一覧を足し、理由となくす段を書く。
  */
@@ -455,8 +458,8 @@ function visibleTraces(file: string, text: string): string[] {
 
 /** 例のアプリが読んでよいパッケージの口（入口の index だけ） */
 const EXAMPLE_ENTRIES = ['core', 'world', 'character', 'react'].map((e) => `${PKG_NAME}/${e}`)
-/** 例のアプリのコードの置き場所（src/ の下と、根の vite.config.ts・index.html だけ） */
-const EXAMPLE_ROOT_FILES = ['vite.config.ts', 'index.html'] as const
+/** 例のアプリのコードの置き場所（src/ の下と、根の vite.config.ts・index.html（入口のページ）・walk/index.html（アプリのページ）だけ） */
+const EXAMPLE_ROOT_FILES = ['vite.config.ts', 'index.html', 'walk/index.html'] as const
 
 /** 例のアプリのコードと HTML（node_modules・dist は見ない） */
 function exampleFiles(): string[] {
@@ -473,7 +476,7 @@ const packageNameOf = (spec: string) => spec.split('/').slice(0, spec.startsWith
  *   kanon-lab … 根からのパス（/src/… など）・kanon-lab のパス・kanon-lab のパッケージ（@kanon-lab/*）を読む
  *   書いていない依存 … 自分の package.json に書いていない外のパッケージを読む（kanon-lab の root にだけある postprocessing など）
  *   kanon-lab の置き場所 … 文に src/・shared/・server/・public/・@kanon-lab/・花音の VRM（kanon.vrm）・身ぶり（gesture-*.vrma）・声（audio/）を書く
- *     （index.html の自分の入口 /src/main.tsx のほか）
+ *     （walk/index.html の自分の入口 /src/main.tsx のほか）
  *   パッケージの外 … 文の相対のパス（'../…'）がパッケージの外を指す（publicDir の ../../assets はパッケージの中なのでよい）
  *   VRM のファイルの名前 … 文に VRM のファイルの名前（xxx.vrm。試しに使った VRM の試料など）を書く（VRM は使う人が選んだ・落としたファイルで読む。
  *     accept=".vrm" のような拡張子だけはよい。kanon.vrm は上の kanon-lab の置き場所で数える。6-2）
@@ -597,10 +600,10 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     expect(traces).toEqual([])
   })
 
-  test('使う人に見える所に kanon-lab の言葉が無い（8-8）: README・docs/*.md・LICENSE・package.json と、例のアプリの README・package.json・コードのコメントの外（文字列と JSX の字）・index.html', () => {
+  test('使う人に見える所に kanon-lab の言葉が無い（8-8）: README・docs/*.md・LICENSE・package.json と、例のアプリの README・package.json・コードのコメントの外（文字列と JSX の字）・入口とアプリの HTML', () => {
     const files = ['README.md', ...docFiles(), 'LICENSE', 'package.json', `${EXAMPLE_DIR}/README.md`, `${EXAMPLE_DIR}/package.json`, ...exampleFiles()]
     // 見る物がある（資料・町の地図データの案内・例のアプリの説明）
-    expect(files).toEqual(expect.arrayContaining([USAGE_DOC, 'docs/tools.md', `${EXAMPLE_DIR}/src/ui/TownNotice.tsx`, `${EXAMPLE_DIR}/src/App.tsx`, `${EXAMPLE_DIR}/index.html`]))
+    expect(files).toEqual(expect.arrayContaining([USAGE_DOC, 'docs/tools.md', `${EXAMPLE_DIR}/src/ui/TownNotice.tsx`, `${EXAMPLE_DIR}/src/App.tsx`, `${EXAMPLE_DIR}/index.html`, `${EXAMPLE_DIR}/walk/index.html`, `${EXAMPLE_DIR}/src/loading.ts`]))
     expect(files.flatMap((f) => visibleTraces(f, read(f)))).toEqual([])
   })
 
@@ -778,9 +781,9 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
     return new Set([...Object.keys((p.dependencies ?? {}) as object), ...Object.keys((p.devDependencies ?? {}) as object)])
   }
 
-  test('見張る物がある。コードは src/ の下と vite.config.ts・index.html だけ', () => {
+  test('見張る物がある。コードは src/ の下と vite.config.ts・index.html・walk/index.html だけ', () => {
     const files = exampleFiles()
-    const parts = ['index.html', 'vite.config.ts', 'src/main.tsx', 'src/town.ts', 'src/App.tsx', 'src/debug.ts', 'src/scene/Scene.tsx']
+    const parts = ['index.html', 'walk/index.html', 'vite.config.ts', 'src/main.tsx', 'src/town.ts', 'src/App.tsx', 'src/debug.ts', 'src/scene/Scene.tsx']
     // 6-2: VRM・歩く人・追うカメラ・VRM のつまみ
     parts.push('src/vrm.ts', 'src/scene/Walker.tsx', 'src/scene/FollowCam.tsx', 'src/ui/VrmPanel.tsx')
     // 6-3: WASD・クリックで歩く
@@ -791,6 +794,8 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
     parts.push('src/teleport.ts', 'src/ui/WarpList.tsx', 'src/ui/WarpFade.tsx')
     // 6-6: 時刻のつまみ・画質・町の地図データの案内
     parts.push('src/clock.ts', 'src/quality.ts', 'src/ui/TownPanel.tsx', 'src/ui/TownNotice.tsx')
+    // 入口のページと読み込み中の進み具合
+    parts.push('src/loading.ts')
     expect(files).toEqual(expect.arrayContaining(parts.map((f) => `${EXAMPLE_DIR}/${f}`)))
     expect(files.filter((f) => !f.startsWith(`${EXAMPLE_DIR}/src/`) && !(EXAMPLE_ROOT_FILES as readonly string[]).includes(f.slice(EXAMPLE_DIR.length + 1)))).toEqual([])
     // examples/ の下は例のアプリだけ（ほかの例を足したら、ここと EXAMPLE_DIR を一覧にする）
@@ -882,6 +887,52 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
     expect(notice).toMatch(/status !== 'missing' && status !== 'outdated' && status !== 'error'/)
     expect([...new Set([...notice.matchAll(/'(idle|loading|ready|missing|outdated|error)'/g)].map((m) => m[1]))].sort()).toEqual(['error', 'missing', 'outdated'])
     expect(exampleFiles().filter((f) => /\.vrma\b/.test(codeOf(read(f))))).toEqual([])
+  })
+
+  test('ページは 2 つ: 入口 index.html（/）は素の HTML と CSS だけ（スクリプト・外の CSS・Web フォントを読まない。画は landing/ の物）、アプリ walk/index.html（/walk/）は src/main.tsx を 1 つ読み、進み具合の段は src/loading.ts と同じ並び。base は / のまま', () => {
+    const vite = codeOf(read(`${EXAMPLE_DIR}/vite.config.ts`))
+    expect(vite).toMatch(
+      /rolldownOptions: \{\s*input: \{\s*index: fileURLToPath\(new URL\('\.\/index\.html', import\.meta\.url\)\),\s*walk: fileURLToPath\(new URL\('\.\/walk\/index\.html', import\.meta\.url\)\),\s*\},/,
+    )
+    // アセットの根は / のまま（/walk/ のページも町の地図データを /town/… から読む。画質を変えて読み込み直す URL も今のページ /walk/ のまま）
+    expect(vite).not.toMatch(/\bbase\s*:/)
+    expect(codeOf(read(`${EXAMPLE_DIR}/src/quality.ts`))).toMatch(/const url = new URL\(location\.href\)/)
+
+    // 入口: スクリプト（src・module）・外の CSS・Web フォントを読まない。読む物は landing/ の画だけ（共有の画像も）。数十 KB まで
+    const landingRaw = read(`${EXAMPLE_DIR}/index.html`)
+    expect(Buffer.byteLength(landingRaw)).toBeLessThan(30_000)
+    const landing = landingRaw.replace(/<!--[\s\S]*?-->/g, '')
+    expect(landing).not.toMatch(/<script\b[^>]*\b(?:src=|type="module")/)
+    expect(landing).not.toMatch(/rel="(?:stylesheet|preload|modulepreload|prefetch|preconnect)"|@import|@font-face|fonts\.googleapis|\/src\//)
+    const local = [...landing.matchAll(/\b(?:src|srcset)="([^"]+)"|<meta (?:property="og:image"|name="twitter:image") content="([^"]+)"/g)].map((m) => m[1] ?? m[2]!)
+    expect(local.length).toBeGreaterThanOrEqual(3)
+    expect(local.filter((u) => !u.startsWith('./landing/'))).toEqual([])
+    for (const u of new Set(local)) {
+      const f = `${EXAMPLE_DIR}/${u.slice(2)}`
+      expect(existsSync(join(ROOT, f))).toBe(true)
+      // 画は 1 枚 200KB まで
+      expect(statSync(join(ROOT, f)).size).toBeLessThan(200_000)
+    }
+    // 「入る」2 つ・共有のカード・リポジトリ・ライセンスの案内
+    expect(landing).toContain('href="/walk/"')
+    expect(landing).toContain('href="/walk/?quality=low&amp;town=low"')
+    for (const m of ['property="og:title"', 'property="og:description"', 'property="og:url" content="https://sakurami-cho.0235.app/"', 'name="twitter:card" content="summary_large_image"']) expect(landing).toContain(m)
+    for (const w of ['https://github.com/kanon-claire-thompson/sakurami-cho', 'CC BY-NC 4.0', 'MIT', 'https://kanon.0235.co.jp/guidelines/']) expect(landing).toContain(w)
+
+    // アプリ: src/main.tsx を 1 つ読み、#root と進み具合（#loading）がある
+    const walk = read(`${EXAMPLE_DIR}/walk/index.html`).replace(/<!--[\s\S]*?-->/g, '')
+    expect([...walk.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map((m) => m[1])).toEqual(['/src/main.tsx'])
+    expect(walk).toMatch(/<div id="root"><\/div>/)
+    expect(walk).toMatch(/<div id="loading" /)
+    // 進み具合の段は src/loading.ts の STEP_LABELS と同じ名前・並び・字
+    const loading = codeOf(read(`${EXAMPLE_DIR}/src/loading.ts`))
+    const labels = [...(loading.match(/const STEP_LABELS: Record<StepId, string> = \{([^}]*)\}/)?.[1] ?? '').matchAll(/(\w+): '([^']+)'/g)].map((m) => `${m[1]} ${m[2]}`)
+    expect(labels.length).toBe(6)
+    const rows = [...walk.matchAll(/data-step="(\w+)"[^>]*>\s*<span class="step-name">([^<]+)<\/span>/g)].map((m) => `${m[1]} ${m[2]}`)
+    expect(rows).toEqual(labels)
+    // 引き継ぐ所: main.tsx が読み（フォントの段・描き始め）、準備の合図（scene/Scene.tsx）が消す
+    expect(codeOf(read(`${EXAMPLE_DIR}/src/main.tsx`))).toMatch(/import \{ loadingFonts, loadingRender \} from '\.\/loading'/)
+    expect(codeOf(read(`${EXAMPLE_DIR}/src/scene/Scene.tsx`))).toMatch(/walkerState\.ready = true[\s\S]{0,120}loadingReady\(\)/)
   })
 
   test('package.json: 名前・private・パッケージは workspace:*、kanon-lab を書かない、three などの範囲はパッケージと同じ。scripts は dev・build・preview', () => {

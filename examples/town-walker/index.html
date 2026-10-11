@@ -2,21 +2,342 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
+    <!-- 入口のページ（/）。素の HTML と CSS だけで、アプリのスクリプト・three・React・Web フォントは読まない（アプリは walk/index.html の /walk/）。
+         画は landing/ の 2 枚（ビルドで assets/ へ名前に hash を付けて出す）。共有の画像は vite.config.ts が絶対の URL にする -->
     <!-- アイコンは置かない（/favicon.ico を取りに行かないように） -->
     <link rel="icon" href="data:," />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#020409" />
-    <title>town-walker | 桜見町の地図の例のアプリ</title>
-    <!-- ラボの看板・画面（Canvas に描くラベル）が使うフォント（地図のパッケージの world の FONTS）。src/main.tsx が読み込みを待ってから描き始める -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap"
-    />
+    <meta name="theme-color" content="#171230" />
+    <title>桜見町を歩く | sakurami-cho の例のアプリ</title>
+    <meta name="description" content="架空の港町「桜見町」を、ブラウザの 3D で歩く。好きな VRM を読み込んで、町じゅうを歩き、乗り物に乗り、時刻を変えられる。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="sakurami-cho" />
+    <meta property="og:title" content="桜見町を歩く" />
+    <meta property="og:description" content="架空の港町「桜見町」を、ブラウザの 3D で歩く。好きな VRM を読み込んで、町じゅうを歩き、乗り物に乗り、時刻を変えられる。" />
+    <meta property="og:url" content="https://sakurami-cho.0235.app/" />
+    <meta property="og:image" content="./landing/evening-lab.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="夕方の桜見町。丘の上のラボと天文台" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="桜見町を歩く" />
+    <meta name="twitter:description" content="架空の港町「桜見町」を、ブラウザの 3D で歩く。好きな VRM を読み込んで、町じゅうを歩き、乗り物に乗り、時刻を変えられる。" />
+    <meta name="twitter:image" content="./landing/evening-lab.jpg" />
+    <style>
+      :root {
+        --bg: #0e0b1a;
+        --sky-top: #2b2150;
+        --sky-mid: #171230;
+        --text: #f1e9f3;
+        --muted: #bdb1cb;
+        --line: rgba(241, 233, 243, 0.14);
+        --card: rgba(255, 255, 255, 0.045);
+        --accent: #f4b66e;
+        --accent-ink: #2a1708;
+        --accent2: #e795ab;
+        --link: #f7c995;
+        color-scheme: dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--bg);
+        -webkit-text-size-adjust: 100%;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: linear-gradient(180deg, var(--sky-top) 0, var(--sky-mid) 420px, var(--bg) 1100px) no-repeat, var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Noto Sans CJK JP', 'Yu Gothic UI', Meiryo, sans-serif;
+        font-size: 16px;
+        line-height: 1.75;
+        overflow-wrap: anywhere;
+      }
+
+      main {
+        width: min(960px, 100%);
+        margin: 0 auto;
+        padding: 28px 16px 48px;
+      }
+
+      a {
+        color: var(--link);
+        text-underline-offset: 3px;
+      }
+
+      a:hover {
+        color: #ffe0b8;
+      }
+
+      a:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+
+      img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      /* 上: 題と画 */
+      .eyebrow {
+        margin: 0 0 4px;
+        color: var(--accent2);
+        font-size: 13px;
+        letter-spacing: 0.12em;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(30px, 6vw, 46px);
+        line-height: 1.25;
+        letter-spacing: 0.04em;
+      }
+
+      .lead {
+        max-width: 40em;
+        margin: 10px 0 20px;
+        color: var(--muted);
+      }
+
+      .hero {
+        margin: 0 0 22px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        background: #241b3d;
+        aspect-ratio: 1200 / 630;
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+      }
+
+      /* 入るボタン */
+      .enter {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 0 0 10px;
+      }
+
+      .button {
+        display: inline-flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 220px;
+        padding: 12px 22px;
+        border: 1px solid var(--accent);
+        border-radius: 10px;
+        color: var(--text);
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1.4;
+        text-decoration: none;
+      }
+
+      .button small {
+        font-size: 13px;
+        font-weight: 400;
+        opacity: 0.85;
+      }
+
+      .button.primary {
+        background: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      .button.primary:hover {
+        background: #ffc88a;
+        color: var(--accent-ink);
+      }
+
+      .button.secondary {
+        background: rgba(244, 182, 110, 0.08);
+      }
+
+      .button.secondary:hover {
+        background: rgba(244, 182, 110, 0.18);
+        color: var(--text);
+      }
+
+      .note {
+        margin: 0 0 32px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      /* 本文 */
+      section {
+        margin: 0 0 30px;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--line);
+        font-size: 20px;
+        letter-spacing: 0.04em;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 1.3em;
+      }
+
+      li + li {
+        margin-top: 4px;
+      }
+
+      .cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        align-items: start;
+      }
+
+      .card {
+        padding: 14px 18px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--card);
+      }
+
+      .card h2 {
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+
+      figure {
+        margin: 0;
+      }
+
+      .view {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        background: #241b3d;
+        aspect-ratio: 1200 / 630;
+      }
+
+      figcaption {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      kbd {
+        display: inline-block;
+        min-width: 1.6em;
+        padding: 0 5px;
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.06);
+        font-family: inherit;
+        font-size: 0.88em;
+        line-height: 1.5;
+        text-align: center;
+      }
+
+      footer {
+        margin-top: 36px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      footer p {
+        margin: 0 0 6px;
+      }
+
+      @media (max-width: 720px) {
+        main {
+          padding-top: 20px;
+        }
+
+        .cols {
+          grid-template-columns: 1fr;
+        }
+
+        .button {
+          flex: 1 1 100%;
+          min-width: 0;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <main>
+      <p class="eyebrow">sakurami-cho の例のアプリ</p>
+      <h1>桜見町を歩く</h1>
+      <p class="lead">架空の港町「桜見町」を、ブラウザの 3D で歩く。好きな VRM を読み込んで、丘の上のラボから港まで、町じゅうを歩き回れる。</p>
+
+      <figure class="hero">
+        <img src="./landing/evening-lab.jpg" width="1200" height="630" alt="夕方の桜見町。丘の上のラボと、奥の天文台" fetchpriority="high" />
+      </figure>
+
+      <div class="enter">
+        <a class="button primary" href="/walk/">入る<small>高い画質（影・床の映り込みも描く）</small></a>
+        <a class="button secondary" href="/walk/?quality=low&amp;town=low">軽い画質で入る<small>ノート PC・内蔵の GPU 向け</small></a>
+      </div>
+      <p class="note">PC のブラウザで開くのがおすすめ（WebGL2 が要る）。最初の読み込みは約 40MB で、準備に 10〜50 秒ほどかかる（PC と回線による）。読み込み中は、段ごとの進み具合を出す。</p>
+
+      <div class="cols">
+        <section>
+          <h2>できること</h2>
+          <ul>
+            <li>好きな VRM（0.x・1.0）を読み込んで、町じゅうを歩く。VRM が無くても、仮の体で歩ける</li>
+            <li>行き先の一覧から選ぶと、町の道を歩き、ケーブルカー・路面電車（緑電）・運河バス・ホバーにも乗って向かう。観覧車ソラノワにも乗れる</li>
+            <li>ワープで、作り込んだ建物・駅・乗り場など 63 か所へ一瞬で移る</li>
+            <li>町の時刻を 0:00〜23:59 で選ぶと、太陽・空・町の灯り・交通がその時刻になる。進める速さも変えられる</li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>操作</h2>
+          <ul>
+            <li>歩く: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> か矢印のキー（<kbd>Shift</kbd> で走る）。地面をクリックしても、そこへ歩く</li>
+            <li>カメラ: ドラッグで回す・ホイールで寄る</li>
+            <li>VRM: 左上の「VRM を選ぶ」か、画面へ <code>.vrm</code> のファイルを落とす</li>
+            <li>右上の「行き先」: 行き先の一覧とワープ。左の「時刻」: 町の時刻と画質</li>
+          </ul>
+        </section>
+      </div>
+
+      <section>
+        <figure>
+          <div class="view">
+            <img src="./landing/town-view.jpg" width="1200" height="630" alt="丘の上のラボの前から見下ろす、夕暮れの桜見町と海" loading="lazy" decoding="async" />
+          </div>
+          <figcaption>丘の上のラボの前から見下ろす、夕暮れの町と海。町の灯りは時刻につれてともる</figcaption>
+        </figure>
+      </section>
+
+      <div class="cols">
+        <section>
+          <h2>VRM について</h2>
+          <p>読み込んだ VRM は、このページの中（ブラウザの中）だけで使い、どこへも送らない。ページを閉じれば残らない。</p>
+        </section>
+        <section>
+          <h2>ソース</h2>
+          <p>
+            町の地図データ・仕組み・この例のアプリのコードは GitHub にある:
+            <a href="https://github.com/kanon-claire-thompson/sakurami-cho">kanon-claire-thompson/sakurami-cho</a>。
+            地図のパッケージとして、自分のアプリにも入れられる。
+          </p>
+        </section>
+      </div>
+
+      <footer>
+        <p>町の地図データと設定資料（をコードの形で書いた物）は CC BY-NC 4.0、コードは MIT（詳しくはリポジトリの README の「ライセンス」）。</p>
+        <p>キャラクターの扱いは株式会社0235 の<a href="https://kanon.0235.co.jp/guidelines/">ガイドライン</a>に従う。</p>
+        <p>© 2026 株式会社0235</p>
+      </footer>
+    </main>
   </body>
 </html>
