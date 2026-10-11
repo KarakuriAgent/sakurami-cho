@@ -3,14 +3,12 @@
 `sakurami-cho`（桜見町の地図）だけで町とラボを出す例のアプリ。好きな VRM を読み込んで、WASD・クリック・行き先の一覧（旅程。乗り物にも乗る）・
 ワープで町じゅうを動き回り、町の時刻と画質を変えられる。
 
-パッケージを入口の index（`sakurami-cho/core`・`world`・`character`・`react`）だけで読み、使う側（kanon-lab）のコードは読まない
-（kanon-lab のコードを読まずに動くことが、分け方の受け入れの確かめ。設計は kanon-lab の設計書 `docs/design/map-split.md` §8（このリポジトリには無い）。
-使っている口はパッケージの README の「公開の口」）。CI（GitHub Actions）が push のたびにビルドする。ライセンスはパッケージの README の「ライセンス」
-（例のアプリのコードは MIT）。
+パッケージを入口の index（`sakurami-cho/core`・`world`・`character`・`react`）だけで読む（使っている口はリポジトリの根の README の「公開の口」）。
+ライセンスは根の README の「ライセンス」（例のアプリのコードは MIT）。
 
 ## 動かし方
 
-地図のリポジトリ（https://github.com/KarakuriAgent/sakurami-cho ）の根で（kanon-lab の中に置いてある間は、kanon-lab のリポジトリの根でも同じ命令）:
+リポジトリの根で:
 
 ```bash
 pnpm install
@@ -20,7 +18,7 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 
 この置き場所で `pnpm dev`・`pnpm build`・`pnpm preview`（ビルドを見る。http://localhost:4173/）でもよい。
 
-- アセット（町の地図データ・テクスチャ・待機と歩きの `.vrma`）は、Vite の `publicDir` を地図のパッケージの `assets/` に向けて出す（写さない。`vite.config.ts`）。
+- アセット（町の地図データ・テクスチャ・待機と歩きの `.vrma`）は、Vite の `publicDir` をリポジトリの根の `assets/` に向けて出す（写さない。`vite.config.ts`）。
   どれも git に入っているので、取り込み（`pnpm sync:town` など）は要らない
 - 準備（町の地図データを読み、ラボを作る）には、PC によって 10〜50 秒ほどかかる。ラボの看板の字は、Web フォント（Google Fonts）を読み込んでから描く（最大 3 秒待つ）
 
@@ -54,7 +52,7 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 - 左上の「VRM を選ぶ」か、画面のどこかへ `.vrm` を落とす（VRM 0.x・1.0）。ファイルはページの中だけで読み（`blob:` の URL）、どこへも送らない
 - 「身長を合わせる」なら設定の身長（cm。既定 165）に合わせ、外すと VRM の元の大きさ。設定の身長を変えると、合わせているときだけ読み直す
 - 入れ替えると、前の VRM を片付けてから新しいファイルを読む（読めなければ仮の体。前の VRM には戻らない）。「外す」で仮の体（高さ 1.6m のカプセル）に戻る
-- 名前が `.vrm` でないファイルは読まずに断る。待機・歩きの動きは地図のパッケージの `.vrma`（身ぶりは無い）
+- 名前が `.vrm` でないファイルは読まずに断る。待機・歩きの動きはパッケージの `.vrma`（身ぶりは無い）
 
 ## ワープ
 
@@ -73,7 +71,7 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 「時刻」の下の「画質」: ラボと光・町を「高い」「低い」から選ぶと、`?quality`・`?town` を付けてページを読み込み直す（町は 1 ページに 1 回しか作れないため）。
 止めた時刻と日付は引き継ぎ、VRM と歩く人の位置は初めに戻る。
 
-## URL の引数（kanon-lab と同じ名前）
+## URL の引数
 
 | 引数 | 中身 |
 |---|---|
@@ -82,7 +80,7 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は dist/）
 | `?town=low\|high` | 町の画質の段（省けば `?quality=low` なら low、ほかは high。撮影用の `film`・`final` も URL では選べる） |
 | `?debug` | 地図のデバッグの道具と、確かめ用の `window.__walker`（下） |
 
-町の地図データ（パッケージの `assets/town/`）が無い・形の版が合わない・読めないときは、上に案内を出す（画面は止めない。ラボの中とまわりは歩け、行き先とワープはラボだけ）。
+町の地図データ（リポジトリの根の `assets/town/`）が無い・形の版が合わない・読めないときは、上に案内を出す（画面は止めない。ラボの中とまわりは歩け、行き先とワープはラボだけ）。
 
 ## 確かめ用の口（?debug の window.__walker）
 

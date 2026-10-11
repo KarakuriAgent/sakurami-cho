@@ -1,15 +1,18 @@
 # sakurami-cho（桜見町の地図）
 
-町（桜見町）・ラボ・キャラクターの共通の仕組み・R3F の薄い包みと、その地図データを作る道具・アセット。
-リポジトリは https://github.com/KarakuriAgent/sakurami-cho （版 0.1.0。花音の配信のアプリ kanon-lab の地図を切り出した物）。
-ライセンスはコードが MIT、地図データ・設定資料をコードの形で書いた物が CC BY-NC 4.0（下の「ライセンス」）。
+架空の港町「桜見町」を、ブラウザの 3D（three.js）で歩ける形にした地図のパッケージ。町の地図データとアセット、町・ラボ・キャラクター
+（VRM）を動かす仕組み、React Three Fiber（R3F）の薄い包み、地図データを書き出す道具が入っている。
+好きな VRM を読み込んで町じゅうを歩き回れる例のアプリ（`examples/town-walker`）も付いている。
+
+- 版は 0.1.0。npm には出していない（下の「入れ方」）
+- ライセンスはコードが MIT、町の地図データと設定資料をコードの形で書いた物が CC BY-NC 4.0（下の「ライセンス」）
 
 ビルドせず `.ts` のまま読ませる（`exports` の深いパス `sakurami-cho/core/…`・`world/…`・`character/…` と、入口の index。react は入口の index だけ）。
-コードのコメントの `docs/design/*.md`・`§…`（`map-split.md`・`town.md` など）は、作った時の kanon-lab の設計書を指す（このリポジトリには無い）。
+使う側は Vite など、`.ts` をそのまま読めるバンドラーで読む。
 
-## 入れ方・動かし方
+## 入れ方
 
-npm には出していない。使う側は git の依存（タグ）で入れる:
+使う側の依存に、git のタグで入れる:
 
 ```bash
 pnpm add github:KarakuriAgent/sakurami-cho#v0.1.0   # package.json は "sakurami-cho": "github:KarakuriAgent/sakurami-cho#v0.1.0"
@@ -18,17 +21,19 @@ pnpm add github:KarakuriAgent/sakurami-cho#v0.1.0   # package.json は "sakurami
 入るのは `files` の物（`core`・`world`・`character`・`react`・`tools`・`assets`・README・LICENSE・LICENSE-DATA）。例のアプリとテストは入らない。
 three・three-vrm・three-vrm-animation は peer の依存（React・R3F・drei は `sakurami-cho/react` を使うときだけ）なので、使う側が同じ範囲で入れる。
 
-このリポジトリを clone して、例のアプリ・テスト・道具を動かす（Node 24・pnpm 10・Bun 1.3）:
+## 動かし方
+
+clone したリポジトリの根で、例のアプリ・テスト・道具を動かす（Node 24・pnpm 10・Bun 1.3）:
 
 ```bash
-git clone https://github.com/KarakuriAgent/sakurami-cho.git
-cd sakurami-cho
 pnpm install
 pnpm example:dev     # 例のアプリ（http://localhost:5174/。下の「例のアプリ」）
 pnpm test            # テスト（bun test test/。境目の見張り test/map-boundary.test.ts も）
 pnpm typecheck       # 型の確かめ（入口とテスト）
 pnpm check:walk      # 町の歩く道のグラフの確かめ（下の「道具」）
 ```
+
+CI（GitHub Actions）が push と pull request のたびに、型の確かめ・テスト・例のアプリのビルド・`check:walk` を流す。
 
 ## 中身
 
@@ -44,15 +49,17 @@ pnpm check:walk      # 町の歩く道のグラフの確かめ（下の「道具
 | `test/` | テスト（Bun）と境目の見張り `map-boundary.test.ts`（配る物には入れない） |
 | `LICENSE`・`LICENSE-DATA` | MIT と CC BY-NC 4.0 の全文（下の「ライセンス」） |
 
-依存の向きは core ← world ← character ← react の一方向。パッケージは使う側（kanon-lab）のファイルを読まない。
+依存の向きは core ← world ← character ← react の一方向。パッケージは使う側のファイルを読まない（使う側の物は、下の「公開の口」の差し込み口と表の差し替えで渡す）。
 
 ## 公開の口
 
 使う側は入口の index（`sakurami-cho/core`・`world`・`character`・`react`）から読む。core・world・character の index は、選んだ名前だけを出す
 （`export *` はしない。名前がぶつからないように・出す名前が公開の口になるので）。出すのは、例のアプリ（下の「例のアプリ」）が使う物と、地図の表・
-差し込み口を差し替える・読む口、それらの引数・返り値・欄の型（段 6 の終わり 6-7 に決めた。kanon-lab の `docs/design/map-split.md` §10。
-この表と index の一致は `test/map-boundary.test.ts` が見る。足す・消すときは、index・この表・見張りの一覧 `PUBLIC_API` を一緒に直す）。
-深いパス（`sakurami-cho/core/…`・`world/…`・`character/…`）も読めるが、名前・形は変わることがある（kanon-lab は評価の順を変えないため深いパスで読む）。
+差し込み口を差し替える・読む口、それらの引数・返り値・欄の型（この表と index の一致は `test/map-boundary.test.ts` が見る。足す・消すときは、
+index・この表・見張りの一覧 `PUBLIC_API` を一緒に直す）。
+
+深いパス（`sakurami-cho/core/…`・`world/…`・`character/…`）も読めるが、公開の口ではない。名前・形・置き場所は変わることがあり、ファイルを動かしたら
+minor の版を上げる。
 
 | 入口 | 名前 | 中身 |
 |---|---|---|
@@ -66,15 +73,15 @@ pnpm check:walk      # 町の歩く道のグラフの確かめ（下の「道具
 | world | `createTown`・型 `Town`・`TownCreateOptions`・`TownStatus`・`TownClock`・`TownFocus`・`TownFrame`・`TownEventMap` | 町の口（1 ページに 1 つ。下の「使い方」）と、その引数・読み込みの状態・時計・注目点・毎コマの段（`begin`・`update`・`view` の引数）・出来事 |
 | world | `PALETTE`・`FONTS` | 背景と霧の色・ラボの看板と画面のフォント（下の「フォント」） |
 | world | `configureLab` | ラボの差し込み口（什器の入力の値・差し込み口の中身・画面の描き方） |
-| world | `createFollowCamera`・型 `FollowCamera`・`FollowCameraOptions`・`FollowTarget` | 人を追うカメラ（下の「段 6 で足した部品」） |
+| world | `createFollowCamera`・型 `FollowCamera`・`FollowCameraOptions`・`FollowTarget` | 人を追うカメラ（下の「カメラ・直接の操作・ワープ」） |
 | character | `createCharacter`・型 `Character`・`CharacterOptions`・`CharacterSpawnPoint`・`CharacterDriver` | キャラクター（1 人ずつのインスタンス）と、毎コマ動かす所（`ch.drivers.motion`・`travel`）の型 |
-| character | `createCharacterVisual`・型 `CharacterVisual`・`CharacterVisualOptions`・`CharacterVisualStatus`・`CharacterVisualClip`・`VISUAL_DEFAULTS`・型 `VisualConfig` | 見た目（VRM と待機・歩き・身ぶりの `.vrma`）と既定の値。`CharacterVisual` の `start()`・`stop()`・`update()`・片付ける `dispose()`（8-3） |
+| character | `createCharacterVisual`・型 `CharacterVisual`・`CharacterVisualOptions`・`CharacterVisualStatus`・`CharacterVisualClip`・`VISUAL_DEFAULTS`・型 `VisualConfig` | 見た目（VRM と待機・歩き・身ぶりの `.vrma`）と既定の値。`CharacterVisual` の `start()`・`stop()`・`update()`・片付ける `dispose()` |
 | character | `updateLocomotion`・`placeAt`・`goTo`・`stopWalking`・`configureNav`・型 `NavConfig` | 歩きを毎コマ進める・立ち寄り先へ置く・歩かせる・止める・ラボのまわりの通り道（点と障害物）を差し替える |
 | character | `driveRides`・`setWarpPermit`・型 `RideTime`・`wheelBoardProblem`・`beginWheelBoarding`・`cancelWheelBoarding`・`requestWheelAlight`・`advanceWheelTo`・`WHEEL_EXIT_OPEN_DEG`・型 `WheelProblem`・`wheelProblemText` | 乗り物に乗っている間に人を動かす標準の順・町の時計を早送り・カットで進めてよい人・観覧車ソラノワに乗る・降りる。乗れない理由は種類（`code`）と値で返し、`wheelProblemText` が地図の既定の字を作る（使う側は種類ごとに自分の字にしてよい） |
 | character | `startTravel`・`driveTravel`・`cancelTravel`・`traveling`・`travelState`・型 `TravelRequest`・`TravelPlan`・`TravelTime`・`TravelCut`・`TravelRouteId`・型 `TravelProblem`・`isTravelProblem`・`travelProblemText` | 町の中の移動（旅程: ゾーンを出て町の道を歩き、乗り物にも乗る）を始める・毎コマ進める・取り消す・様子。作れない理由は種類（`code`）と値で返し（`isTravelProblem` で分ける）、`travelProblemText` が地図の既定の字を作る |
-| character | `setDirectInput`・`driveDirect`・`walkToPoint`・`pickGround`・`canStand`・`stopDirect`・`directState` | 人を直接動かす（WASD・クリック。下の「段 6 で足した部品」） |
-| character | `townSpots`・`teleport`・`placeAtPoint`・型 `TownSpot` | ワープ（下の「段 6 で足した部品」） |
-| react | `TownClock`・`TownRoot`・`TownView`・`TownExposure`・`LabAtmosphere`・`LabSlot`・`CharacterView`・`RideDriver`・`useLab` などの hooks | R3F の薄い包み（5-8 からの形のまま。`export *`。kanon-lab もここから読む） |
+| character | `setDirectInput`・`driveDirect`・`walkToPoint`・`pickGround`・`canStand`・`stopDirect`・`directState` | 人を直接動かす（WASD・クリック。下の「カメラ・直接の操作・ワープ」） |
+| character | `townSpots`・`teleport`・`placeAtPoint`・型 `TownSpot` | ワープ（下の「カメラ・直接の操作・ワープ」） |
+| react | `TownClock`・`TownRoot`・`TownView`・`TownExposure`・`LabAtmosphere`・`LabSlot`・`CharacterView`・`RideDriver`・`useLab` などの hooks | R3F の薄い包み（`export *`） |
 
 ## 使い方（例のアプリの形）
 
@@ -103,7 +110,7 @@ town.on('outsideness', (k) => walker.setRimBlend(k))
 
 ラボの看板・画面は Canvas に字を描く（`FONTS` の Orbitron・Share Tech Mono・Noto Sans JP が頭のフォント）。Web フォントは字の範囲（unicode-range）ごとに届き、
 Canvas に描いても範囲は読み込まれないので、使う側がフォントを読み込んで（`document.fonts.load(フォント, 描く字)`）から描き始める（一度だけ描くラベルは
-代わりのフォントのまま残る）。例のアプリは `index.html` で Google Fonts を読み、`src/main.tsx` がラボの字（6-6 に数えた物。ラボの字を変えたら数え直す）と
+代わりのフォントのまま残る）。例のアプリは `index.html` で Google Fonts を読み、`src/main.tsx` がラボで描く字（ラボの字を変えたら数え直す）と
 Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のある建物・中のある建物の絵の字は、頭のフォントが OS の `"Noto Sans CJK JP"` なので待たない。
 
 ### 落とした VRM（blob:）
@@ -113,9 +120,9 @@ Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のあ
 （`stop()` をして、読んだ VRM の形・素材・テクスチャを片付け（`VRMUtils.deepDispose`）、縁の光の素材の一覧 `ch.rim.tuned` から外す。読み込みの途中なら、
 あとで届いた VRM もすぐ片付ける）、前の `blob:` の URL を取り消す（例のアプリの `src/vrm.ts`）。
 
-## 段 6 で足した部品
+## カメラ・直接の操作・ワープ
 
-例のアプリのために足した部品（どれも入口の決まりの中の新しいファイル。kanon-lab は読まない。段 6 の間の決まりで、段 8 で見直す）:
+例のアプリのように、使う人が町を自由に動き回るための部品:
 
 | 部品 | 中身 |
 |---|---|
@@ -127,9 +134,9 @@ Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のあ
 
 ## 例のアプリ（examples/town-walker）
 
-このパッケージだけで町とラボを出す例のアプリ（pnpm workspace の `town-walker`。React（R3F）でパッケージを入口の index だけで読み、使う側（kanon-lab）のコードは読まない。
-アセットは Vite の `publicDir` でこのパッケージの `assets/` を出す）。任意の VRM を読んで、WASD・クリック・行き先の一覧（旅程。乗り物にも乗る）・ワープで町じゅうを動き、
-町の時刻と画質を変えられる。このリポジトリの根で（kanon-lab の中に置いてある間は、kanon-lab のリポジトリの根でも同じ命令）:
+このパッケージだけで町とラボを出す例のアプリ（pnpm workspace の `town-walker`。React（R3F）でパッケージを入口の index だけで読む。
+アセットは Vite の `publicDir` でこのリポジトリの `assets/` を出す）。任意の VRM を読んで、WASD・クリック・行き先の一覧（旅程。乗り物にも乗る）・ワープで町じゅうを動き、
+町の時刻と画質を変えられる。リポジトリの根で:
 
 ```bash
 pnpm install
@@ -137,8 +144,7 @@ pnpm example:dev     # 開発（http://localhost:5174/）
 pnpm example:build   # ビルド（tsc -b && vite build。出力は examples/town-walker/dist/）
 ```
 
-操作・URL の引数・`?debug` の口は [examples/town-walker/README.md](examples/town-walker/README.md)。CI（GitHub Actions）が push のたびに、
-型の確かめ・テスト・例のアプリのビルド・`check:walk` を流す。
+操作・URL の引数・`?debug` の口は [examples/town-walker/README.md](examples/town-walker/README.md)。
 
 ## データの形の版（今は 10）
 
@@ -163,22 +169,22 @@ pnpm example:build   # ビルド（tsc -b && vite build。出力は examples/tow
   （置き場は初めて使うときに 1 回決めて覚える。描き始める前に 1 回渡す）
 - キャラクターの見た目（`createCharacterVisual`）の `assetBase` は別の引数（キャラクターは町の口を読まずに使えるように）。`.vrma` と VRM の `url` はその下からの相対パス
   （`character/avatar/visualConfig.ts` の `animations` は `models/animations/idle.vrma` など）。絶対の URL（`blob:`・`data:`・`http(s):`・`/` で始まる物）なら `assetBase` を付けない
-- パッケージは Vite の `import.meta.env` を読まない。Vite のアプリなら `import.meta.env.BASE_URL` を渡す（kanon-lab の `src/townBinding.ts`）
+- パッケージは Vite の `import.meta.env` を読まない。Vite のアプリなら `import.meta.env.BASE_URL` を渡す
 
 ## アセット
 
-`assets/` はアセットの根と同じ並び。使う側が自分の public の根と同じ URL で出す（kanon-lab は `vite.config.ts` の `mapAssets` が、開発では `public/` に無い物を
-ここから出し、ビルドでは出力へ写す。Vite のほかのアプリなら `publicDir` をここに向けてもよい）。
+`assets/` はアセットの根と同じ並び。使う側が自分の public の根と同じ URL で出す（Vite のアプリなら、例のアプリのように `publicDir` をここに向けるか、
+開発ではここから出してビルドでは出力へ写す）。
 
 どれも git に入れてある（このリポジトリだけで町が出るように）。書き出す物（`town/`・`models/animations/`）は、道具で書き出し直したら差としてコミットする。
 
 | 置き場 | git | 作り方 |
 |---|---|---|
 | `assets/textures/` | 入れる | CC0 の PBR テクスチャ（Poly Haven・ambientCG）。出典は [assets/textures/CREDITS.md](assets/textures/CREDITS.md) |
-| `assets/town/` | 入れる | `tools/sync-town.mjs` が町の地図データ（setting-book/town）から書き出す（151 ファイル・約 25MB） |
+| `assets/town/` | 入れる | `tools/sync-town.mjs` が、設定資料の町の地図データ（このリポジトリには入れていない元のデータ）から書き出す（151 ファイル・約 25MB） |
 | `assets/models/animations/` | 入れる | `tools/sync-anim.mjs` が自由に使える素材から作る（キャラクターの見た目が既定で使う待機 `idle.vrma`・歩き `walk.vrma` の 2 つ）。出典は [assets/models/animations/CREDITS.md](assets/models/animations/CREDITS.md) |
 
-パッケージに置くのは、パッケージのコードが既定で使う物と、例のアプリで使う物まで（使う側のキャラクターに固有の物は、使う側の public に置く）。
+ここに置くのは、パッケージのコードが既定で使う物と、例のアプリで使う物まで（使う側のキャラクターに固有の物は、使う側の public に置く）。
 
 `.vrma` の素材（`tools/anim/convert.mjs` の `SOURCES`）: 待機は StayStill（MIT ライセンス。Copyright (c) 2026 Eneko Atxa Landa。作った `.vrma` の
 glTF の `asset.copyright` にも著作権の表示を入れる）、歩きは Quaternius の Universal Animation Library の Standard 版（CC0）。
@@ -197,6 +203,7 @@ glTF の `asset.copyright` にも著作権の表示を入れる）、歩きは Q
 | `tools/check-walk.mjs` | bun（`core/` の経路探索と道順を読む） | `--assets <アセットの根>`（必ず。`<アセットの根>/town/walk.json` を確かめる）・`--root <根>` |
 
 `tools/town/*.mjs` は sync-town の部品（PNG・幾何と塗り・地形・建物・街区の自動の建物・地面の色・木と灯り・構造物・交通・歩く道のグラフ・タイル）。`tools/args.mjs` は引数を読む所。
+町の地図データの元は公開していないので、ふつうは sync-town を動かさずに、git に入っている `assets/town/` をそのまま使う。
 
 素材から `.vrma` を作る変換 `tools/anim/convert.mjs` は、使う側の道具からも名前で読める（`exports` の `./tools/anim`。道具そのものの `sync-*.mjs` は出さない）:
 
@@ -214,7 +221,7 @@ await convertAnimations({
 
 作る物の形（`clip`・`loop`・`gesture`）と置き換えの決まりは `tools/anim/convert.mjs` のコメント。作った `.vrma` の出典（素材とライセンス）は、書き出した所に使う側が書く。
 
-このパッケージの `package.json` の script（パッケージの置き場所で `pnpm <名前>`。kanon-lab の中なら `pnpm --filter sakurami-cho <名前>`）:
+`package.json` の script（リポジトリの根で `pnpm <名前>`）:
 
 ```bash
 pnpm sync:town --src <町の地図データのフォルダ>   # sync-town --root . --out assets（読み元は --src か環境変数 SAKURAMI_TOWN_SRC）
@@ -225,13 +232,7 @@ pnpm typecheck     # tsc -p tsconfig.json（入口）と tsc -p test/tsconfig.js
 pnpm example:dev   # 例のアプリ（pnpm --filter town-walker dev。example:build はビルド）
 ```
 
-kanon-lab での呼び方（kanon-lab の `package.json`）:
-
-```bash
-pnpm sync:town     # sync-town --root . --src ../kanon/setting-book/town --out packages/sakurami-cho/assets
-pnpm sync:anim     # sync-anim --root . --out packages/sakurami-cho/assets（続けて kanon-lab の身ぶり pnpm sync:gestures も。身ぶりの表は kanon-lab の scripts/sync-gestures.mjs）
-pnpm check:walk    # check-walk --root . --assets packages/sakurami-cho/assets
-```
+コードのコメントにある `docs/design/*.md`・`§…` は、作った時の設計メモを指す（このリポジトリには入れていない）。
 
 ## ライセンス
 
