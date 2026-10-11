@@ -24,7 +24,7 @@ pnpm example:dev     # 開発（http://localhost:5174/。ビルドは pnpm examp
 使う側の依存に、git のタグで入れる（`<タグ>` はこのリポジトリのタグ）:
 
 ```bash
-pnpm add github:KarakuriAgent/sakurami-cho#<タグ>   # package.json は "sakurami-cho": "github:KarakuriAgent/sakurami-cho#<タグ>"
+pnpm add github:kanon-claire-thompson/sakurami-cho#<タグ>   # package.json は "sakurami-cho": "github:kanon-claire-thompson/sakurami-cho#<タグ>"
 ```
 
 three・three-vrm・three-vrm-animation は peer の依存（React・R3F・drei は `sakurami-cho/react` を使うときだけ）なので、使う側が同じ範囲で入れる。
