@@ -24,6 +24,7 @@ import { createPropMaterials, propMeshes, shopFrontLamps } from './town/props'
 import { LAMP, buildLampTable, lampTableSteps, lampUniforms, setLampFade, updateLampUniforms, type Lamp } from './town/lamps'
 import { lampsFromNamed, lampsFromTiles } from './town/lampSources'
 import { createTransit } from './transit/transit'
+import { onTramPlatform, setupTramNet } from './transit/trams'
 import { boatLandings, buildLandings, landingSurfaces } from './transit/landings'
 import { labShrubs } from './town/landmarks'
 import { createNamedTown } from './named/createNamed'
@@ -104,8 +105,9 @@ function createTown(anisotropy: number) {
     siteGroundUniforms.uUnpave.value.set(cx, -cy, r, 0)
     siteGroundUniforms.uKeep.value.set(LOOKOUT.center[0], LOOKOUT.center[1], LOOKOUT.radius)
   }
-  // 地形（名前のある建物の入口の前を均してから）
+  // 地形（名前のある建物の入口の前と、緑電の停留所のホームのまわりを均してから。緑電の線路の高さは均す前の地形から決める）
   setNamedPads(townData.named)
+  setupTramNet(infra.transit)
   const groundMat = createGroundMaterial()
   groundMat.uniforms.uGroundDetail.value = quality.groundDetail
   const terrain = new THREE.Mesh(buildTerrainGeometry(terrainOptions(quality.terrainBearingStep, quality.terrainRadius)), groundMat)
@@ -164,7 +166,7 @@ function createTown(anisotropy: number) {
         const z = -y
         if (insideLab(x, z, 3) || (x > -11 && x < 11 && z > -15 && z < 11)) return false
         if (Math.abs(x) < 400 && Math.abs(z) < 400 && (designedY(x, z) !== null || site.pathAt(x, z, 0.6))) return false
-        return !interiors.grassBlocked(x, z)
+        return !interiors.grassBlocked(x, z) && !onTramPlatform(x, y, 0.5)
       },
     },
     OUTDOOR_LAYER,

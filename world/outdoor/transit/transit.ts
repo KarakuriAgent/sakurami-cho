@@ -15,8 +15,7 @@ import { CABLE_CAR, CableLine, cableTrack } from './cable'
 import { transitClock } from './clock'
 import { LaneFleet } from './lanes'
 import { HoverView } from './hover'
-import { buildTramLines, placeTramPlatforms, tramPlatformSurfaces, TramFleet, tramNet } from './trams'
-import { townWalk } from '../../walk/townWalk'
+import { TramFleet, tramNet } from './trams'
 import { TramDetail } from './tramCar'
 import { TrainFleet } from './trains'
 import { buildTransitInfraSteps, railBallast, transitLights, type InfraContext } from './transitInfra'
@@ -64,14 +63,11 @@ export function createTransit(infra: TownInfra, tiles: TownTile[], skipLight: In
   lc[6].set('#26a69a')
   lc[7].set('#c4402c')
 
-  const trams = buildTramLines(t.trams)
+  // 系統の運転・停留所のホーム（歩ける面とまわりの地形の均し）は、地形の格子を作る前に作ってある（landscape.ts の setupTramNet）
+  const trams = tramNet.lines
   const tramFleet = new TramFleet(trams, shapes, material, new TramDetail(3))
   // 乗る仕組み（character/ride/tramRide.ts）・カメラ・音が使う
-  tramNet.lines = trams
-  tramNet.stops = placeTramPlatforms(trams, t.tramStops)
   tramNet.fleet = tramFleet
-  // 停留所のホームは歩ける面（花音が乗り降りする。world/walk/townWalk.ts）
-  townWalk.setExtraSurfaces('tramPlatforms', tramPlatformSurfaces(tramNet.stops.flatMap((st) => st.platforms)))
   const trainFleet = t.rail ? new TrainFleet(t.rail, shapes, material) : null
   const cable = infra.cable ? new CableLine(infra.cable, shapes, material, CABLE_BUILT_SLOPE) : null
   cableTrack.line = cable

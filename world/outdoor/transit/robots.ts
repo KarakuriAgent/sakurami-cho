@@ -12,7 +12,7 @@ import { boatNet } from './boats'
 import { cableTrack } from './cable'
 import { CABLE_RUN, CABLE_TRIPS, cableTrip, tripStart } from '../../../core/transit/cableRun'
 import { LANDING, landingPoint, topA, type BoatLanding } from './landings'
-import { TRAM_PLATFORM, tramNet, type TramPlatform } from './trams'
+import { TRAM_PLATFORM, tramNet, tramPlatformTop, type TramPlatform } from './trams'
 
 /**
  * 駅員ロボ「えきもり」（町営交通の案内ロボット。docs/design/town.md §20・§7 の 199）: 丘ノ上ケーブルの 3 駅のホーム・緑電の主な停留所のホーム・
@@ -388,7 +388,7 @@ function buildSpots(landings: BoatLanding[]): RobotSpot[] {
       const b = 0.55
       const x = pf.x + pf.dx * a + nx * b
       const y = pf.y + pf.dy * a + ny * b
-      push({ id: `robot.tram.${st.name}.${k}`, kind: 'tram', key: st.name, label: `緑電 ${st.name}`, x, y: pf.z + TRAM_PLATFORM.height - LAB, z: -y, heading: headingOf(-nx, -ny), look: headingOf(pf.dx, pf.dy), band: 1 })
+      push({ id: `robot.tram.${st.name}.${k}`, kind: 'tram', key: st.name, label: `緑電 ${st.name}`, x, y: tramPlatformTop(pf, a) - LAB, z: -y, heading: headingOf(-nx, -ny), look: headingOf(pf.dx, pf.dy), band: 1 })
     })
   }
   // 運河バスの乗り場: 石段の上の陸の側の敷石（札の柱の陸の側）。上の踊り場と水の方を向く

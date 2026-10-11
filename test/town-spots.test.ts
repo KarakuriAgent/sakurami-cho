@@ -3,7 +3,7 @@
  * （character/avatar/teleport.ts の townSpots・teleport・placeAtPoint）の基本。DOM なし。
  *
  * - 名前の表の立ち寄り先が地図の表にあり、外の立ち寄り先で、ゾーンが立つ所の点のゾーンと合う。ホバーの乗り場がある。ワープ先の名前・字が重ならない
- * - 町の地図データを読む前のワープ先は名前の表の分だけで、緑電の停留所（地図データから。ホームを置く所は transit の組み立てと同じ関数）を足すと、
+ * - 町の地図データを読む前のワープ先は名前の表の分だけで、緑電の停留所（地図データから。ホームを置く所は町の組み立てと同じ関数）を足すと、
  *   ホームのある停留所ごとに 1 つ増える
  * - 跳ぶと、立つ所・ゾーン・向きのとおりに置かれ、置き直した回数が増えて 'place' が出る。旅程の早送りの倍率と歩幅は戻る
  *
@@ -23,7 +23,7 @@ const { TOWN_PLACES } = await import(P + '/core/places.ts')
 const { HOVER_DOCKS } = await import(P + '/core/hoverDocks.ts')
 const { zoneOfPoint } = await import(P + '/core/interiors.ts')
 const { townWalk } = await import(P + '/world/walk/townWalk.ts')
-const { buildTramLines, placeTramPlatforms, tramNet, tramPlatformSurfaces } = await import(P + '/world/outdoor/transit/trams.ts')
+const { setupTramNet, tramNet } = await import(P + '/world/outdoor/transit/trams.ts')
 const { createCharacter } = await import(P + '/character/avatar/createCharacter.ts')
 const T = await import(P + '/character/avatar/teleport.ts')
 const { canStand } = await import(P + '/character/avatar/direct.ts')
@@ -39,10 +39,8 @@ out.places = PLACE_SPOTS.map((s) => {
 out.hover = HOVER_SPOTS.map((s) => ({ dock: s.dock, have: !!HOVER_DOCKS[s.dock] }))
 const brief = (list) => list.map((s) => ({ id: s.id, kind: s.kind, label: s.label, place: s.place, zone: s.zone, x: s.x, z: s.z, heading: s.heading, refY: s.refY }))
 out.before = brief(T.townSpots())
-// 緑電の停留所のホーム（world/outdoor/transit/transit.ts の組み立てと同じ関数。車両・形は作らない）
-tramNet.lines = buildTramLines(infra.transit.trams)
-tramNet.stops = placeTramPlatforms(tramNet.lines, infra.transit.tramStops)
-townWalk.setExtraSurfaces('tramPlatforms', tramPlatformSurfaces(tramNet.stops.flatMap((st) => st.platforms)))
+// 緑電の停留所のホーム（町の組み立て world/outdoor/landscape.ts と同じ関数 setupTramNet。車両・形は作らない）
+setupTramNet(infra.transit)
 const spots = T.townSpots()
 out.after = brief(spots)
 out.tramStops = [infra.transit.tramStops.length, tramNet.stops.length]

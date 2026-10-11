@@ -9,7 +9,7 @@ import { SignBuilder, signAtlas } from '../named/signs'
 import { buildLandingGeometry, landingLights, type BoatLanding } from './landings'
 import { TM, WireBatch } from './transitMaterial'
 import { Path, RAIL_STRUCT, pathPoint, type PathPoint, type TownTransit } from './transitData'
-import { placeTramPlatforms, TRAM_PLATFORM, trackOffset, type TramLine, type TramPlatform } from './trams'
+import { placeTramPlatforms, TRAM_PLATFORM, trackOffset, tramPlatformBase, tramPlatformTop, type TramLine, type TramPlatform } from './trams'
 import type { TrainFleet } from './trains'
 import type { CableLine } from './cable'
 import { WIRE_HEIGHT } from './vehicles'
@@ -120,71 +120,112 @@ function stopPlacements(ctx: InfraContext) {
   return v
 }
 
-/** 停留所の形（ホーム・屋根・ベンチ・標識・いまどこ表示）。標識の名前は看板のアトラスに描く */
+type V3 = [number, number, number]
+
+/**
+ * 停留所の形（ホーム・屋根・ベンチ・標識・いまどこ表示）。標識の名前は看板のアトラスに描く。
+ * ホームの面とスロープは線路の標高に沿い（坂の停留所で、車両の床と同じ傾き。trams.ts の tramPlatformBase）、下は両わきの地面より 0.4m 下まで
+ * （谷の側で浮かない）。屋根・ベンチ・いまどこ表示・標識は水平で、高さは真ん中（標識は柱の所）の線路から。柱と脚はホームの面から伸ばす
+ */
 function buildStop(g: GeoBuilder, glass: GeoBuilder, signs: SignBuilder, pf: Platform, name: string, lines: number[]) {
   const L = TRAM_PLATFORM.length
   const W = TRAM_PLATFORM.width
+  const H = TRAM_PLATFORM.height
   const ux = pf.dx
   const uy = pf.dy
   // 局所: a = 線に沿って、b = 線路から外へ（ホームの外側）
   const nx = -uy * pf.side
   const ny = ux * pf.side
-  const P = (a: number, b: number, h: number) => S(pf.x + ux * a + nx * b, pf.y + uy * a + ny * b, pf.z + h)
-  const box = (a0: number, a1: number, b0: number, b1: number, h0: number, h1: number, color: string, mat: number, aux = 0) => {
-    const c = [(a0 + a1) / 2, (b0 + b1) / 2]
-    const center = P(c[0], c[1], (h0 + h1) / 2)
-    const yaw = Math.atan2(ux, -uy)
-    // GeoBuilder の箱は y 軸まわりの回転。局所 x = b 方向にそろえる
-    g.box(center, [Math.abs(b1 - b0), h1 - h0, Math.abs(a1 - a0)], color, mat, aux, yaw + (pf.side > 0 ? 0 : 0))
+  const base = (a: number) => tramPlatformBase(pf, a)
+  const zc = base(0)
+  const X = (a: number, b: number) => pf.x + ux * a + nx * b
+  const Y = (a: number, b: number) => pf.y + uy * a + ny * b
+  /** 局所の点（標高 z） */
+  const Pz = (a: number, b: number, z: number) => S(X(a, b), Y(a, b), z)
+  const yaw = Math.atan2(ux, -uy)
+  /** 水平な箱（標高 z0〜z1）。GeoBuilder の箱は y 軸まわりの回転。局所 x = b 方向にそろえる */
+  const boxZ = (a0: number, a1: number, b0: number, b1: number, z0: number, z1: number, color: string, mat: number, aux = 0) => {
+    g.box(Pz((a0 + a1) / 2, (b0 + b1) / 2, (z0 + z1) / 2), [Math.abs(b1 - b0), z1 - z0, Math.abs(a1 - a0)], color, mat, aux, yaw)
   }
-  // ホーム（縁石の御影石・点字ブロックの黄色い帯・コンクリート）
-  const g0 = terrainHeight(pf.x, pf.y) - pf.z
-  box(-L / 2, L / 2, -W / 2, W / 2, Math.min(g0, 0) - 0.4, 0.3, '#b9b4aa', TM.concrete, 1.2)
-  box(-L / 2, L / 2, -W / 2 + 0.25, -W / 2 + 0.55, 0.3, 0.315, '#d8b41e', TM.paint, 0.2)
-  box(-L / 2, L / 2, -W / 2, -W / 2 + 0.2, 0.3, 0.31, '#d6d2c8', TM.stone)
-  // 端のスロープ
+  /** 水平な箱（高さは真ん中の線路から h0〜h1） */
+  const box = (a0: number, a1: number, b0: number, b1: number, h0: number, h1: number, color: string, mat: number, aux = 0) => boxZ(a0, a1, b0, b1, zc + h0, zc + h1, color, mat, aux)
+  /** 外向き o（平面の向きと上。局所でなく町の向き）に表を向けた四角 */
+  const face = (p: V3[], o: V3, color: string, mat: number, aux = 0) => {
+    // 対角線の外積（p0 → p2 と p1 → p3）。表から見て反時計回りなら外を向く
+    const d1 = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]]
+    const d2 = [p[3][0] - p[1][0], p[3][1] - p[1][1], p[3][2] - p[1][2]]
+    const n = [d1[1] * d2[2] - d1[2] * d2[1], d1[2] * d2[0] - d1[0] * d2[2], d1[0] * d2[1] - d1[1] * d2[0]]
+    const so = S(o[0], o[1], o[2] + LAB)
+    if (n[0] * so[0] + n[1] * so[1] + n[2] * so[2] < 0) p = [p[3], p[2], p[1], p[0]]
+    g.quad(p[0], p[1], p[2], p[3], color, mat, aux)
+  }
+  /** ホームに沿う板（a0〜a1・b0〜b1、上 top(a)・下 bot(a) の標高）: 上と両わき、ends の端 */
+  const prism = (a0: number, a1: number, b0: number, b1: number, top: (a: number) => number, bot: (a: number) => number, color: string, mat: number, aux: number, ends: [boolean, boolean]) => {
+    const as = [a0]
+    for (let a = Math.floor(a0 + 1e-6) + 1; a < a1 - 1e-6; a++) as.push(a)
+    as.push(a1)
+    for (let i = 1; i < as.length; i++) {
+      const a = as[i - 1]
+      const c = as[i]
+      face([Pz(a, b0, top(a)), Pz(c, b0, top(c)), Pz(c, b1, top(c)), Pz(a, b1, top(a))], [0, 0, 1], color, mat, aux)
+      face([Pz(a, b1, bot(a)), Pz(c, b1, bot(c)), Pz(c, b1, top(c)), Pz(a, b1, top(a))], [nx, ny, 0], color, mat, aux)
+      face([Pz(a, b0, bot(a)), Pz(c, b0, bot(c)), Pz(c, b0, top(c)), Pz(a, b0, top(a))], [-nx, -ny, 0], color, mat, aux)
+    }
+    if (ends[0]) face([Pz(a0, b0, bot(a0)), Pz(a0, b1, bot(a0)), Pz(a0, b1, top(a0)), Pz(a0, b0, top(a0))], [-ux, -uy, 0], color, mat, aux)
+    if (ends[1]) face([Pz(a1, b0, bot(a1)), Pz(a1, b1, bot(a1)), Pz(a1, b1, top(a1)), Pz(a1, b0, top(a1))], [ux, uy, 0], color, mat, aux)
+  }
+  // ホーム（縁石の御影石・点字ブロックの黄色い帯・コンクリート）と端のスロープ。下は線路と両わきの地面の低い方の 0.4m 下
+  const bottom = (a: number) => Math.min(base(a), terrainHeight(X(a, -W / 2), Y(a, -W / 2)), terrainHeight(X(a, W / 2), Y(a, W / 2))) - 0.4
+  const top = (a: number) => tramPlatformTop(pf, a)
+  prism(-L / 2, L / 2, -W / 2, W / 2, top, bottom, '#b9b4aa', TM.concrete, 1.2, [false, false])
   for (const s of [1, -1]) {
     const a0 = (s * L) / 2
-    const a1 = a0 + s * 3
-    g.quad(P(a1, -W / 2, 0), P(a1, W / 2, 0), P(a0, W / 2, 0.3), P(a0, -W / 2, 0.3), '#aaa59b', TM.concrete, 0)
+    const a1 = a0 + s * TRAM_PLATFORM.ramp
+    prism(Math.min(a0, a1), Math.max(a0, a1), -W / 2, W / 2, top, bottom, '#aaa59b', TM.concrete, 0, s > 0 ? [false, true] : [true, false])
   }
-  // 屋根（8m。緑の鉄骨・ガラスの背の壁・クリームの縁）
+  prism(-L / 2, L / 2, -W / 2 + 0.25, -W / 2 + 0.55, (a) => base(a) + H + 0.015, (a) => base(a) + H, '#d8b41e', TM.paint, 0.2, [true, true])
+  prism(-L / 2, L / 2, -W / 2, -W / 2 + 0.2, (a) => base(a) + H + 0.01, (a) => base(a) + H, '#d6d2c8', TM.stone, 0, [true, true])
+  // 屋根（8m。緑の鉄骨・ガラスの背の壁・クリームの縁）。柱はホームの面から屋根まで
   const r0 = -5
   const r1 = 5
   for (const a of [r0 + 0.3, 0, r1 - 0.3]) {
-    box(a - 0.06, a + 0.06, W / 2 - 0.45, W / 2 - 0.33, 0.3, 2.75, '#1f5a3e', TM.paint, 0.6)
+    boxZ(a - 0.06, a + 0.06, W / 2 - 0.45, W / 2 - 0.33, base(a) + H, zc + 2.75, '#1f5a3e', TM.paint, 0.6)
   }
   box(r0, r1, -W / 2 + 0.15, W / 2 - 0.1, 2.75, 2.88, '#1f5a3e', TM.paint, 0.6)
   box(r0, r1, -W / 2 + 0.15, -W / 2 + 0.25, 2.62, 2.9, '#e9dfc4', TM.paint, 0.6)
   box(r0, r1, -W / 2 + 0.3, W / 2 - 0.2, 2.6, 2.62, '#fff2dc', TM.lamp, 1.6)
-  // ガラスの背の壁（透けるガラス。両面）と、下の縁
+  // ガラスの背の壁（透けるガラス。両面）と、下の縁（ホームの面に沿う）・上の縁
+  const ga = r0 + 0.4
+  const gb = r1 - 0.4
   for (const s of [1, -1]) {
     const b = W / 2 - 0.36 + s * 0.012
-    if (s > 0) glass.quad(P(r0 + 0.4, b, 0.45), P(r1 - 0.4, b, 0.45), P(r1 - 0.4, b, 2.5), P(r0 + 0.4, b, 2.5), '#ffffff', TM.glass, 1)
-    else glass.quad(P(r1 - 0.4, b, 0.45), P(r0 + 0.4, b, 0.45), P(r0 + 0.4, b, 2.5), P(r1 - 0.4, b, 2.5), '#ffffff', TM.glass, 1)
+    const q = [Pz(ga, b, base(ga) + 0.45), Pz(gb, b, base(gb) + 0.45), Pz(gb, b, zc + 2.5), Pz(ga, b, zc + 2.5)]
+    if (s > 0) glass.quad(q[0], q[1], q[2], q[3], '#ffffff', TM.glass, 1)
+    else glass.quad(q[1], q[0], q[3], q[2], '#ffffff', TM.glass, 1)
   }
-  box(r0 + 0.3, r1 - 0.3, W / 2 - 0.4, W / 2 - 0.32, 0.3, 0.45, '#1f5a3e', TM.paint, 0.6)
+  prism(r0 + 0.3, r1 - 0.3, W / 2 - 0.4, W / 2 - 0.32, (a) => base(a) + 0.45, (a) => base(a) + H, '#1f5a3e', TM.paint, 0.6, [true, true])
   box(r0 + 0.3, r1 - 0.3, W / 2 - 0.4, W / 2 - 0.32, 2.5, 2.6, '#1f5a3e', TM.paint, 0.6)
-  // ベンチ（木の座面）
+  // ベンチ（木の座面）。脚はホームの面から
   box(-3, 3, W / 2 - 0.85, W / 2 - 0.45, 0.72, 0.78, '#7a5232', TM.wood, 0.5)
-  for (const a of [-2.6, 2.6]) box(a - 0.05, a + 0.05, W / 2 - 0.8, W / 2 - 0.5, 0.3, 0.72, '#2b2b2b', TM.dark, 0.4)
+  for (const a of [-2.6, 2.6]) boxZ(a - 0.05, a + 0.05, W / 2 - 0.8, W / 2 - 0.5, base(a) + H, zc + 0.72, '#2b2b2b', TM.dark, 0.4)
   // いまどこ表示（屋根の下に吊る）
   box(-0.75, 0.75, -0.05, 0.05, 2.15, 2.5, '#151515', TM.dark, 0.5)
   for (const s of [1, -1]) {
     const b = s * 0.052
-    const q = [P(-0.7, b, 2.18), P(0.7, b, 2.18), P(0.7, b, 2.47), P(-0.7, b, 2.47)]
+    const q = [Pz(-0.7, b, zc + 2.18), Pz(0.7, b, zc + 2.18), Pz(0.7, b, zc + 2.47), Pz(-0.7, b, zc + 2.47)]
     if (s > 0) g.quad(q[0], q[1], q[2], q[3], '#111', TM.sign, -0.7)
     else g.quad(q[1], q[0], q[3], q[2], '#111', TM.sign, -0.7)
   }
-  // 停留所の名前の標識（柱と板。系統の色の四角）
+  // 停留所の名前の標識（柱と板。系統の色の四角）。高さは柱の所の線路から
   const sa = r1 + 2.2
-  box(sa - 0.05, sa + 0.05, 0.6, 0.7, 0.3, 2.9, '#2b2b2b', TM.dark, 0.5)
-  box(sa - 0.55, sa + 0.55, 0.6, 0.7, 2.2, 2.85, '#f4f1ea', TM.paint, 0.4)
-  lines.forEach((no, i) => box(sa - 0.5 + i * 0.22, sa - 0.32 + i * 0.22, 0.58, 0.72, 2.22, 2.36, '#ffffff', TM.line, no))
+  const zs = base(sa)
+  boxZ(sa - 0.05, sa + 0.05, 0.6, 0.7, zs + H, zs + 2.9, '#2b2b2b', TM.dark, 0.5)
+  boxZ(sa - 0.55, sa + 0.55, 0.6, 0.7, zs + 2.2, zs + 2.85, '#f4f1ea', TM.paint, 0.4)
+  lines.forEach((no, i) => boxZ(sa - 0.5 + i * 0.22, sa - 0.32 + i * 0.22, 0.58, 0.72, zs + 2.22, zs + 2.36, '#ffffff', TM.line, no))
   const r = signAtlas.region({ text: name, sub: `緑電 ${lines.join('・')}系統`, fg: '#1d3b2c', bg: '#f4f1ea', font: 'sans', bold: true, w: 1.1, h: 0.45 })
   for (const s of [1, -1]) {
     const b = s > 0 ? 0.705 : 0.595
-    const pts = [P(sa - 0.53 * s, b, 2.38), P(sa + 0.53 * s, b, 2.38), P(sa + 0.53 * s, b, 2.83), P(sa - 0.53 * s, b, 2.83)]
+    const pts = [Pz(sa - 0.53 * s, b, zs + 2.38), Pz(sa + 0.53 * s, b, zs + 2.38), Pz(sa + 0.53 * s, b, zs + 2.83), Pz(sa - 0.53 * s, b, zs + 2.83)]
     signs.quad(pts[0], pts[1], pts[2], pts[3], r, 1)
   }
 }

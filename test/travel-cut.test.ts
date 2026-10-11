@@ -37,7 +37,7 @@ const { buildKit } = await import(P + '/world/outdoor/named/kits/index.ts')
 const { namedInteriorParts } = await import(P + '/world/outdoor/named/interiorParts.ts')
 const { interiors } = await import(P + '/world/outdoor/interior/interiors.ts')
 const { INTERIOR_ZONES, INTERIOR_ZONE_IDS } = await import(P + '/core/interiors.ts')
-const { buildTramLines, placeTramPlatforms, tramNet, tramPlatformSurfaces } = await import(P + '/world/outdoor/transit/trams.ts')
+const { setupTramNet } = await import(P + '/world/outdoor/transit/trams.ts')
 const { transitClock } = await import(P + '/world/outdoor/transit/clock.ts')
 const { createCharacter } = await import(P + '/character/avatar/createCharacter.ts')
 const { updateLocomotion, placeAt } = await import(P + '/character/avatar/locomotion.ts')
@@ -65,9 +65,7 @@ for (const rec of named.buildings) {
   if (kit.interior) namedInteriorParts.kits.set(rec.id, kit)
 }
 interiors.init(named, (x, z, step) => townWalk.groundY(x, z, 0, step))
-tramNet.lines = buildTramLines(infra.transit.trams)
-tramNet.stops = placeTramPlatforms(tramNet.lines, infra.transit.tramStops)
-townWalk.setExtraSurfaces('tramPlatforms', tramPlatformSurfaces(tramNet.stops.flatMap((st) => st.platforms)))
+setupTramNet(infra.transit)
 // 交通の時計は 10:00（ケーブル・緑電が動いている。道順 F が作れる）
 transitClock.sec = transitClock.serviceSec = 10 * 3600
 

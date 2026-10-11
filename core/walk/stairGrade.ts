@@ -12,7 +12,7 @@ import { STAIR_SIDE, stairRiseAt, stairSideOn, stairSmoothZ, type StairIndex } f
 const holder: { index: StairIndex | null; extra: ((x: number, y: number, h: number) => number) | null } = { index: null, extra: null }
 
 /**
- * ほかに地形を下げる所（運河バスの川岸の乗り場の石段の下など。交通が入れる）。町の石段のあとに、下げるだけの関数を通す。
+ * ほかに地形を下げる所（緑電の停留所のホームのまわり。交通が入れる。world/outdoor/transit/trams.ts の setupTramNet）。町の石段のあとに、下げるだけの関数を通す。
  * 地形の格子を作る前に入れる（Landscape の createTown）
  */
 export function setExtraGrade(fn: ((x: number, y: number, h: number) => number) | null) {

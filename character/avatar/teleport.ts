@@ -7,7 +7,7 @@ import { interiors } from '../../world/outdoor/interior/interiors'
 import { site } from '../../world/outdoor/site/siteModel'
 import { townSolids } from '../../world/walk/townSolids'
 import { boatLandings, LANDING, landingPoint, topA } from '../../world/outdoor/transit/landings'
-import { TRAM_PLATFORM, tramNet, type TramPlatform } from '../../world/outdoor/transit/trams'
+import { TRAM_PLATFORM, tramNet, tramPlatformTop, type TramPlatform } from '../../world/outdoor/transit/trams'
 import { terrainHeight } from '../../world/outdoor/town/terrain'
 import { cancelWarp } from '../ride/warp'
 import { stopDirect } from './direct'
@@ -49,8 +49,8 @@ export interface TownSpot {
 /** 緑電の停留所のワープ先: ホームの + の端から内へ（m。仮） */
 const TRAM_SPOT_FROM_END = 4
 /**
- * 緑電のホームの上の点のうち、地形がホームの面よりこの高さ（m）を越えて上にある所（坂の土手に置かれて地形に埋まっているホーム。楓坂二丁目・楓坂上・
- * 見晴らし台口・丘ノ上貝塚の 1 つめのホーム）と、町の当たり（ホームにかかる木など）の中には立たせない（6-7。仮）。
+ * 緑電のホームの上の点のうち、地形がホームの面よりこの高さ（m）を越えて上にある所と、町の当たり（ホームにかかる木など）の中には立たせない（6-7。仮）。
+ * 坂の停留所のホームが土手に埋まっていたのは、ホームの面を線路に沿わせ、まわりの地形を下げて直した（world/outdoor/transit/trams.ts の tramPlatformGrade）。
  * + の端から TRAM_SPOT_FROM_END の点から − の端の方へ TRAM_SPOT_STEP ずつ、ホームを 1 つめから順に探す（どこもだめなら 1 つめのホームの初めの点）
  */
 const TRAM_BURIED = 0.1
@@ -85,7 +85,7 @@ export function townSpots(): TownSpot[] {
   // 立つ点は、地形に埋まっていない・町の当たりの中でない所（上の TRAM_BURIED。6-7）
   const end = TRAM_PLATFORM.length / 2 - TRAM_SPOT_FROM_END
   const free = (q: TramPlatform, a: number) => {
-    const top = q.z + TRAM_PLATFORM.height
+    const top = tramPlatformTop(q, a)
     const [x, z] = scene([q.x + q.dx * a, q.y + q.dy * a])
     return terrainHeight(q.x + q.dx * a, q.y + q.dy * a) <= top + TRAM_BURIED && !townSolids.blocker(x, top - SITE.labFloorElevation + 0.3, z, 0.2)
   }
@@ -104,7 +104,7 @@ export function townSpots(): TownSpot[] {
     const [x, z] = scene([pf.x + pf.dx * a, pf.y + pf.dy * a])
     // ホームの外の向き（線路から離れる向き）は (−dy, dx)·side。線路の方はその逆
     const heading = Math.atan2(pf.dy * pf.side, pf.dx * pf.side)
-    out.push({ id: `tram:${st.name}`, kind: 'tram', label: `${st.name}（${st.lines.join('・')} 系統）`, place: null, x, z, heading, refY: pf.z + TRAM_PLATFORM.height - SITE.labFloorElevation, zone: zoneOfPoint(x, z) })
+    out.push({ id: `tram:${st.name}`, kind: 'tram', label: `${st.name}（${st.lines.join('・')} 系統）`, place: null, x, z, heading, refY: tramPlatformTop(pf, a) - SITE.labFloorElevation, zone: zoneOfPoint(x, z) })
   }
   // 運河バスの乗り場: 石段の上の陸の側の敷石（乗り場の歩ける面。札の柱とえきもりの反対の端寄り。町の道を歩いて来る点（landingTown）は
   // 道の外の芝・岸の地面のことが多く、歩ける所でないため）。水の方を向く

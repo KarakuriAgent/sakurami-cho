@@ -4,7 +4,8 @@ import { townData } from '../town/townData'
 import { Fleet, placeMatrix } from './fleet'
 import { H, RunProfile, activeRuns, departures, type Headways } from '../../../core/transit/schedule'
 import { Path, pathPoint, type TransitTramLine, type TransitTramStop } from './transitData'
-import type { ExtraSurface } from '../../walk/townWalk'
+import { townWalk, type ExtraSurface } from '../../walk/townWalk'
+import { setExtraGrade } from '../../../core/walk/stairGrade'
 import type { TramDetail } from './tramCar'
 import { TRAM_GAP, TRAM_SECTION, type VehicleShapes } from './vehicles'
 
@@ -373,6 +374,10 @@ export function nextTramBoarding(line: TramLine, from: string, to: string, t: nu
 
 /** ホーム（長さ 32m・幅 2.6m・高さ 0.3m。端に 3m のスロープ） */
 export const TRAM_PLATFORM = { length: 32, width: 2.6, height: 0.3, ramp: 3 } as const
+/** ホームの真ん中からスロープの下の端まで（m） */
+export const TRAM_PLATFORM_REACH = TRAM_PLATFORM.length / 2 + TRAM_PLATFORM.ramp
+/** 線路の中心からホームの真ん中まで（線路の中心から車両の端 1.2m・すき間 0.15m・ホームの幅の半分） */
+const PLATFORM_OFFSET = 1.2 + 0.15 + TRAM_PLATFORM.width / 2
 
 export interface TramPlatform {
   /** 停留所の名前・系統 */
@@ -387,6 +392,17 @@ export interface TramPlatform {
   dy: number
   /** ホームが線路のどちら側か（+1 = 線の左） */
   side: number
+  /** ホームの真ん中から、線の中心まで（線路の側へ。m） */
+  toTrack: number
+  /** 沿う系統の番号と、ホームの真ん中の向かいの線の上の長さ */
+  no: number
+  d: number
+  /**
+   * 向かいの線路の標高（ホームに沿う長さ a（真ん中から +dx の向き）と、線の上の長さ d + a の所の線路の標高。−TRAM_PLATFORM_REACH〜TRAM_PLATFORM_REACH の
+   * 両端と、その間の線の細かい点）。ホームの面とスロープはこれに沿う（前は真ん中の線路の高さで平らにしていたので、坂の停留所では端で線路・車両の床と
+   * 1m 余り食い違い、坂の上の端が地形に埋まった）
+   */
+  prof: { a: number[]; z: number[] }
 }
 
 /** 停留所のホームの置き方（データの停留所の点を、いちばん近い系統の線へ投げる） */
@@ -394,8 +410,9 @@ export function placeTramPlatforms(trams: TramLine[], tramStops: TransitTramStop
   const out: { name: string; lines: number[]; platforms: TramPlatform[] }[] = []
   const _a = pathPoint()
   const at = (path: Path, d: number, off: number) => {
+    const prof = platformProfile(path, d)
     path.at(d, _a)
-    return { x: _a.x - _a.dy * off, y: _a.y + _a.dx * off, z: _a.z, dx: _a.dx, dy: _a.dy }
+    return { x: _a.x - _a.dy * off, y: _a.y + _a.dx * off, z: _a.z, dx: _a.dx, dy: _a.dy, prof }
   }
   for (const s of tramStops) {
     const line = trams.find((l) => l.data.no === s.lines[0])
@@ -411,8 +428,8 @@ export function placeTramPlatforms(trams: TramLine[], tramStops: TransitTramStop
     for (const dir of both ? [1, -1] : [1]) {
       const off = dir > 0 ? offOut : offBack
       const side = both ? dir : 1
-      const p = at(line.path, d, off + side * (1.2 + 0.15 + 1.3))
-      platforms.push({ name: s.name, lines: s.lines, ...p, side })
+      const lat = off + side * PLATFORM_OFFSET
+      platforms.push({ name: s.name, lines: s.lines, ...at(line.path, d, lat), side, toTrack: lat * side, no: line.data.no, d })
     }
     // 起点の停留所: 止まる位置をずらした系統（originShift）は、その位置にもホーム
     for (const no of s.lines) {
@@ -420,27 +437,209 @@ export function placeTramPlatforms(trams: TramLine[], tramStops: TransitTramStop
       if (!l || l.data.loop || l.data.stops[0]?.name !== s.name) continue
       if (l === line && Math.abs(l.s0 - d) < 10) continue
       const side = l.originRight ? -1 : 1
-      const p = at(l.path, l.s0, trackOffset(l, l.s0, 1) + side * (1.2 + 0.15 + 1.3))
+      const lat = trackOffset(l, l.s0, 1) + side * PLATFORM_OFFSET
+      const p = at(l.path, l.s0, lat)
       if (platforms.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 12)) continue
-      platforms.push({ name: s.name, lines: s.lines, ...p, side })
+      platforms.push({ name: s.name, lines: s.lines, ...p, side, toTrack: lat * side, no: l.data.no, d: l.s0 })
     }
     out.push({ name: s.name, lines: s.lines, platforms })
   }
   return out
 }
 
-/** ホームの歩ける面（上は線路の標高 + 0.3m、両端の 3m のスロープで線路の高さへ） */
-export function tramPlatformSurfaces(list: TramPlatform[]): ExtraSurface[] {
+/** 線の上の長さ d のまわりの線路の標高（TramPlatform の prof） */
+function platformProfile(path: Path, d: number) {
+  const R = TRAM_PLATFORM_REACH
+  const L = path.length
+  const p = pathPoint()
+  const pts: [number, number][] = [
+    [-R, path.at(d - R, p).z],
+    [R, path.at(d + R, p).z],
+  ]
+  for (const [i0, i1] of pathSpans(path, d - R, d + R)) {
+    for (let i = i0; i <= i1; i++) {
+      let a = path.s[i] - d
+      if (path.loop && a < -L / 2) a += L
+      else if (path.loop && a > L / 2) a -= L
+      if (a > -R && a < R) pts.push([a, path.z[i]])
+    }
+  }
+  pts.sort((u, v) => u[0] - v[0])
+  const out = { a: [] as number[], z: [] as number[] }
+  for (const [a, z] of pts) {
+    if (out.a.length && a - out.a[out.a.length - 1] < 1e-6) continue
+    out.a.push(a)
+    out.z.push(z)
+  }
+  return out
+}
+
+/** ホームに沿う長さ a（真ん中から +dx の向き）の所の、向かいの線路の標高 */
+export function tramPlatformBase(pf: TramPlatform, a: number) {
+  const { a: as, z } = pf.prof
+  if (a <= as[0]) return z[0]
+  const n = as.length - 1
+  if (a >= as[n]) return z[n]
+  let lo = 0
+  let hi = n
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (as[mid] <= a) lo = mid
+    else hi = mid
+  }
+  return z[lo] + ((z[hi] - z[lo]) * (a - as[lo])) / (as[hi] - as[lo])
+}
+
+/** ホームの歩ける面の標高（上は線路の標高 + 0.3m、両端の 3m のスロープで線路の高さへ） */
+export function tramPlatformTop(pf: TramPlatform, a: number) {
   const P = TRAM_PLATFORM
+  return tramPlatformBase(pf, a) + P.height * Math.min(1, Math.max(0, (TRAM_PLATFORM_REACH - Math.abs(a)) / P.ramp))
+}
+
+/** ホームの歩ける面 */
+export function tramPlatformSurfaces(list: TramPlatform[]): ExtraSurface[] {
   return list.map((pf) => ({
     x: pf.x,
     y: pf.y,
     ux: pf.dx,
     uy: pf.dy,
-    halfL: P.length / 2 + P.ramp,
-    halfW: P.width / 2,
-    z: (a: number) => pf.z + P.height * Math.min(1, Math.max(0, (P.length / 2 + P.ramp - Math.abs(a)) / P.ramp)),
+    halfL: TRAM_PLATFORM_REACH,
+    halfW: TRAM_PLATFORM.width / 2,
+    z: (a: number) => tramPlatformTop(pf, a),
   }))
+}
+
+/** ホームのまわりを下げた所から元の地面へ戻す勾配・ホームの外の平らな所の幅（m）・届く所（m）・索引の升（m） */
+const GRADE_SLOPE = 0.6
+const GRADE_BERM = 1.5
+const GRADE_REACH = 10
+const GRADE_CELL = 50
+
+/**
+ * ホームのまわりの地形を下げる関数（地形の格子・足元の高さの terrainHeight が、町の石段のあとに通す。core/walk/stairGrade.ts の setExtraGrade）。
+ * 坂の途中の停留所は線路が斜面を横切るので、山の側のホームと線路の間の地形が、ホームの面・線路より 1〜2m 上にあった。
+ * ホームの下は面の 15cm 下まで、ホームの外と端の先の GRADE_BERM m は面の 5cm 下まで、ホームと線路の間（線の中心の向こうまで）はいちばん近い線路の標高まで下げ、
+ * その外は勾配 GRADE_SLOPE で元の地面へ戻す（地形の格子は 1m より粗いので、ホームの縁のすぐ外から上げると、格子の三角形がホームの面の上に出た）。
+ * **下げるだけで上げない**（谷の側はホームの形が地面まで下りる。transitInfra.ts）。どの系統の線路の上（線の中心から RAIL_KEEP m）も線路の標高より
+ * 下げないので、線路の高さ（線路の標高と地形の高い方）は下げたあとに作り直しても変わらない
+ */
+export function tramPlatformGrade(list: TramPlatform[], lines: TramLine[]) {
+  const W2 = TRAM_PLATFORM.width / 2
+  interface Rail {
+    path: Path
+    /** ホームのまわりの線の細かい点の番号の区間 */
+    spans: [number, number][]
+  }
+  interface Pad {
+    pf: TramPlatform
+    /** ホームのまわりを通る線（沿う系統の線も） */
+    rails: Rail[]
+  }
+  const grid = new Map<number, Pad[]>()
+  const key = (gx: number, gy: number) => gx * 100003 + gy
+  for (const pf of list) {
+    const line = lines.find((l) => l.data.no === pf.no)
+    if (!line) continue
+    const reach = Math.hypot(TRAM_PLATFORM_REACH, pf.toTrack + W2) + GRADE_REACH
+    const own = { path: line.path, spans: pathSpans(line.path, pf.d - reach, pf.d + reach) }
+    const rails = lines.map((l) => (l === line ? own : { path: l.path, spans: nearSpans(l.path, pf.x, pf.y, reach + RAIL_KEEP) })).filter((r) => r.spans.length)
+    const pad: Pad = { pf, rails }
+    for (let gx = Math.floor((pf.x - reach) / GRADE_CELL); gx <= Math.floor((pf.x + reach) / GRADE_CELL); gx++)
+      for (let gy = Math.floor((pf.y - reach) / GRADE_CELL); gy <= Math.floor((pf.y + reach) / GRADE_CELL); gy++) {
+        const k = key(gx, gy)
+        const l = grid.get(k)
+        if (l) l.push(pad)
+        else grid.set(k, [pad])
+      }
+  }
+  return (x: number, y: number, h: number) => {
+    const near = grid.get(key(Math.floor(x / GRADE_CELL), Math.floor(y / GRADE_CELL)))
+    if (!near) return h
+    for (const { pf, rails } of near) {
+      // 局所: a = 線に沿って、b = 線路から外へ（ホームの外側が +）
+      const rx = x - pf.x
+      const ry = y - pf.y
+      const a = rx * pf.dx + ry * pf.dy
+      const b = (-rx * pf.dy + ry * pf.dx) * pf.side
+      const ca = Math.max(-TRAM_PLATFORM_REACH, Math.min(TRAM_PLATFORM_REACH, a))
+      const cb = Math.max(-pf.toTrack, Math.min(W2, b))
+      const out = Math.hypot(a - ca, b - cb)
+      if (out > GRADE_REACH) continue
+      if (cb >= -W2) {
+        const cap = tramPlatformTop(pf, ca) - (out > 0 ? 0.05 - Math.max(0, out - GRADE_BERM) * GRADE_SLOPE : 0.15)
+        if (cap >= h) continue
+        // 線路の上（曲がりの停留所で、まっすぐのホームの端が線路に寄る所）は線路の標高より下げない
+        let keep = -Infinity
+        for (const r of rails) {
+          const q = nearestRail(r, x, y)
+          if (q.dist <= RAIL_KEEP && q.z > keep) keep = q.z
+        }
+        h = Math.max(cap, Math.min(h, keep))
+      } else {
+        // ホームと線路の間とその外: いちばん近い線路（どの系統でも）の標高から
+        let best = Infinity
+        let z = 0
+        for (const r of rails) {
+          const q = nearestRail(r, x, y)
+          if (q.dist < best) {
+            best = q.dist
+            z = q.z
+          }
+        }
+        h = Math.min(h, z + out * GRADE_SLOPE)
+      }
+    }
+    return h
+  }
+}
+
+/** 線の中心から、線路（レールの外まで）とみなす幅（m） */
+const RAIL_KEEP = TRACK_HALF + 0.9
+
+/** 点 (cx, cy) から r m の中を通る、線の細かい点の番号の区間 */
+function nearSpans(path: Path, cx: number, cy: number, r: number) {
+  const spans: [number, number][] = []
+  let from = -1
+  for (let i = 0; i < path.s.length; i++) {
+    const inside = Math.hypot(path.x[i] - cx, path.y[i] - cy) <= r
+    if (inside && from < 0) from = Math.max(0, i - 1)
+    if (!inside && from >= 0) {
+      spans.push([from, i])
+      from = -1
+    }
+  }
+  if (from >= 0) spans.push([from, path.s.length - 1])
+  return spans
+}
+
+/** 線の長さ d0〜d1 の細かい点の番号の区間（環状の線は一周で折り返す。線の外は端まで） */
+function pathSpans(path: Path, d0: number, d1: number): [number, number][] {
+  const L = path.length
+  if (path.loop && d0 < 0) return [...pathSpans(path, d0 + L, L), ...pathSpans(path, 0, d1)]
+  if (path.loop && d1 > L) return [...pathSpans(path, d0, L), ...pathSpans(path, 0, d1 - L)]
+  return [[path.index(Math.max(0, d0)), Math.min(path.s.length - 1, path.index(Math.min(L, d1)) + 1)]]
+}
+
+/** 点 (x, y) にいちばん近い線の上の点（spans の細かい点の区間の中で）の標高と、そこまでの距離 */
+function nearestRail(rail: { path: Path; spans: [number, number][] }, x: number, y: number) {
+  const { path, spans } = rail
+  let best = Infinity
+  let z = 0
+  for (const [i0, i1] of spans) {
+    for (let i = i0 + 1; i <= i1; i++) {
+      const ax = path.x[i - 1]
+      const ay = path.y[i - 1]
+      const dx = path.x[i] - ax
+      const dy = path.y[i] - ay
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)))
+      const e = (ax + dx * t - x) ** 2 + (ay + dy * t - y) ** 2
+      if (e < best) {
+        best = e
+        z = path.z[i - 1] + (path.z[i] - path.z[i - 1]) * t
+      }
+    }
+  }
+  return { z, dist: Math.sqrt(best) }
 }
 
 /** 町のデータを読んだあとの緑電（乗る仕組み・カメラ・音が使う。無ければ空） */
@@ -448,6 +647,43 @@ export const tramNet = {
   lines: [] as TramLine[],
   stops: [] as { name: string; lines: number[]; platforms: TramPlatform[] }[],
   fleet: null as TramFleet | null,
+}
+
+/**
+ * 町のデータを読んだあと 1 回（地形の格子を作る前に。world/outdoor/landscape.ts）: 系統の運転とホームを作り、ホームを歩ける面にして、
+ * ホームのまわりの地形を下げる（tramPlatformGrade）。線路の高さは地形から決めるので、地形を下げる前に作る。緑電が無ければ空にする
+ */
+export function setupTramNet(transit: { trams: TransitTramLine[]; tramStops: TransitTramStop[] } | null | undefined) {
+  setExtraGrade(null)
+  tramNet.lines = transit ? buildTramLines(transit.trams) : []
+  tramNet.stops = transit ? placeTramPlatforms(tramNet.lines, transit.tramStops) : []
+  const platforms = tramNet.stops.flatMap((st) => st.platforms)
+  townWalk.setExtraSurfaces('tramPlatforms', tramPlatformSurfaces(platforms))
+  setExtraGrade(platforms.length ? tramPlatformGrade(platforms, tramNet.lines) : null)
+  platformGrid.clear()
+  for (const pf of platforms) {
+    const r = TRAM_PLATFORM_REACH + 2
+    for (let gx = Math.floor((pf.x - r) / GRADE_CELL); gx <= Math.floor((pf.x + r) / GRADE_CELL); gx++)
+      for (let gy = Math.floor((pf.y - r) / GRADE_CELL); gy <= Math.floor((pf.y + r) / GRADE_CELL); gy++) {
+        const k = gx * 100003 + gy
+        const l = platformGrid.get(k)
+        if (l) l.push(pf)
+        else platformGrid.set(k, [pf])
+      }
+  }
+  return tramNet.lines
+}
+
+const platformGrid = new Map<number, TramPlatform[]>()
+
+/** 点（平面座標）が停留所のホーム（スロープまで。margin m 広げて）の上か（草むらを生やさない。world/outdoor/landscape.ts） */
+export function onTramPlatform(x: number, y: number, margin = 0) {
+  for (const pf of platformGrid.get(Math.floor(x / GRADE_CELL) * 100003 + Math.floor(y / GRADE_CELL)) ?? []) {
+    const rx = x - pf.x
+    const ry = y - pf.y
+    if (Math.abs(rx * pf.dx + ry * pf.dy) <= TRAM_PLATFORM_REACH + margin && Math.abs(-rx * pf.dy + ry * pf.dx) <= TRAM_PLATFORM.width / 2 + margin) return true
+  }
+  return false
 }
 
 /** 系統の番号の運転 */
