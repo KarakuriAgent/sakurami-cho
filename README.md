@@ -4,7 +4,7 @@
 （VRM）を動かす仕組み、React Three Fiber（R3F）の薄い包み、地図データを書き出す道具が入っている。
 好きな VRM を読み込んで町じゅうを歩き回れる例のアプリ（`examples/town-walker`）も付いている。
 
-- 版は 0.1.0。npm には出していない（下の「入れ方」）
+- npm には出していない（下の「入れ方」）
 - ライセンスはコードが MIT、町の地図データと設定資料をコードの形で書いた物が CC BY-NC 4.0（下の「ライセンス」）
 
 ビルドせず `.ts` のまま読ませる（`exports` の深いパス `sakurami-cho/core/…`・`world/…`・`character/…` と、入口の index。react は入口の index だけ）。
@@ -12,10 +12,10 @@
 
 ## 入れ方
 
-使う側の依存に、git のタグで入れる:
+使う側の依存に、git のタグで入れる（`<タグ>` はこのリポジトリのタグ）:
 
 ```bash
-pnpm add github:KarakuriAgent/sakurami-cho#v0.1.0   # package.json は "sakurami-cho": "github:KarakuriAgent/sakurami-cho#v0.1.0"
+pnpm add github:KarakuriAgent/sakurami-cho#<タグ>   # package.json は "sakurami-cho": "github:KarakuriAgent/sakurami-cho#<タグ>"
 ```
 
 入るのは `files` の物（`core`・`world`・`character`・`react`・`tools`・`assets`・README・LICENSE・LICENSE-DATA）。例のアプリとテストは入らない。
