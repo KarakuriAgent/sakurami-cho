@@ -7,6 +7,7 @@
  *   （前は、トンプソン家のリビングへ高い所から来ると 1 階の上の屋根裏に立ち、上の階の立ち寄り先へは 1 階に立った）
  * - 道のりの最後: 区間ごとに見せる所を決めても（cut=leg）、道のりの最後の歩く所は短くても残す（乗り物を降りた乗り場の外から行き先までが
  *   短いとき、前は落としていて、乗り場で止まった）。道のりがカットで終わるときは、飛ばした所の終わりへ置く
+ *   （町の行き先へ着く所・地下の道で終わる道のり・乗り物の区間の手前のカットは test/travel-arrive.test.ts）
  *
  * 中のある建物の決まりは、外観の型（看板の絵の場所を決めるのに canvas を使う。ここでは絵を描かない代わりの物）から、ブラウザと同じ関数で作る
  * （部屋・通り道の点・面の数がブラウザと同じ）。乗り物に乗る所（車両の形が要る）はここでは動かさず、道のりの形だけを見る（乗って着く所は
@@ -189,12 +190,14 @@ describe('旅程のカット（character/avatar/travel.ts）: 置かれる所が
     expect(rows.filter((a) => typeof a.fast === 'string' && (a.leg !== a.fast || a.none !== a.fast))).toEqual([])
   })
 
-  test('町の行き先へ区間ごとのカット: 道のりの最後の歩く所は短くても残る（緑電を降りた乗り場の外から行き先まで 0.1m 足らずのときも）', () => {
+  test('町の行き先へ区間ごとのカット: 道のりの最後の歩く所は短くても残る（緑電を降りた乗り場の外から行き先までのときも）', () => {
     const tails = v.tails as { o: string; to: string; route: string; via: string; lastLeg: number; plan: unknown[]; run: unknown[] }[]
     expect(tails.length).toBeGreaterThanOrEqual(35)
     expect(tails.filter((x) => JSON.stringify(x.run) !== JSON.stringify(x.plan))).toEqual([])
-    // 緑電でひらき通りへ（降りてから行き先までが 0.5m より短い）
-    expect(tails.filter((x) => x.via === 'tram' && x.to === 'hiraki' && x.lastLeg < 0.5).length).toBeGreaterThanOrEqual(2)
+    // 緑電でひらき通りへ: 降りた乗り場の外から、行き先の点（北の歩道。シーンの 777, 1417.4）まで歩く所で終わる
+    const tram = tails.filter((x) => x.via === 'tram' && x.to === 'hiraki')
+    expect(tram.length).toBeGreaterThanOrEqual(2)
+    expect(tram.filter((x) => x.plan[0] !== 'walk' || Math.hypot((x.plan[1] as number) - 777, (x.plan[2] as number) - 1417.4) > 0.3)).toEqual([])
   })
 
   test('道のりがカット（飛ばした歩く所）で終わるときは、飛ばした所の終わりへ置いて着く', () => {

@@ -37,7 +37,8 @@ import type { Character, CharacterMotion } from './character'
  *      丘ノ上ケーブルの区間（ride）は、駅の入口からホームの扉の前まで歩き、来た便に乗り、着いた駅のホームから出口まで歩く（character/ride/cableRide.ts。
  *      待つ・乗っている間の時間の扱いは wait・rideTime）。緑電（段 3 で乗れるようにする）と、地下の駅自由通路（見えない区間）は、今はカット
  *      （次の乗り場・出口から続ける。町の時刻をその分進める）
- *   3. 行き先のゾーンの出入口から、立ち寄り先まで歩く（着いたら locomotion の「着いて向きを合わせる」へ渡す）
+ *   3. 行き先のゾーンの出入口から、立ち寄り先まで歩く（着いたら locomotion の「着いて向きを合わせる」へ渡す）。町の行き先は、町の道の経路の終わり
+ *      （行き先の点を道の上へつないだ点）か降りた乗り場の外から、行き先の点まで歩く（行き先の点が歩ける所でなければ、その手前の縁まで）
  *
  * 時間の扱い（time）: real = そのまま歩く / cut = 飛ばす（cut=none は一度に行き先へ、cut=leg は区間ごとに少しだけ歩いて次の区間へカット） /
  * fast = 早送り（歩く間の時間を倍にして、町の時刻・交通・空も一緒に進める）。カット・早送りで足した時間は町の時刻に残る（clockWarp）。
@@ -400,6 +401,13 @@ function concat(a: Pt[], b: Pt[]) {
   return out
 }
 
+/** a の続きに b を歩く（b の始めは a の終わりと同じ点）。つなぎ目から先は b の速さ（concat はつなぎ目の点に a の速さを残す） */
+function append(a: Pt[], b: Pt[]) {
+  const out = concat(a, b)
+  if (a.length && b.length) out[a.length - 1] = { ...out[a.length - 1], v: b[0].v }
+  return out
+}
+
 /** 出入口の、ゾーンの中の点（シーンの x, z） */
 function portalZonePoint(p: PortalDef): [number, number] {
   if (typeof p.zone === 'string') {
@@ -689,7 +697,13 @@ export function planTravel(ch: Character, req: TravelRequest): TravelPlan | Trav
   const fromZone: ZoneId = m.zone
   const toZone: ZoneId = stop ? stopZone(stop) : 'town'
   if (stop && fromZone === toZone && fromZone !== 'town') return { code: 'same-zone', stop, zone: fromZone }
-  if (place && fromZone === 'town' && Math.hypot(m.position.x - TRAVEL_PLACES[place].at[0], -m.position.z - TRAVEL_PLACES[place].at[1]) < 3) return { code: 'already-there', place }
+  if (place && fromZone === 'town') {
+    // 行き先の点か、町の道から歩いて着く所（行き先の点が歩ける所でないとき、その手前）のそば
+    const at = TRAVEL_PLACES[place].at
+    const end = routeEndAt(at)
+    const goal = end ? placeGoal([end[0], -end[1]], at) : null
+    if (Math.hypot(m.position.x - at[0], -m.position.z - at[1]) < 3 || (goal && Math.hypot(m.position.x - goal[0], m.position.z - goal[1]) < 1)) return { code: 'already-there', place }
+  }
 
   const segs: Seg[] = []
   const legs: LegInfo[] = []
@@ -852,17 +866,25 @@ export function planTravel(ch: Character, req: TravelRequest): TravelPlan | Trav
     return true
   }
 
-  // 乗り物の区間で終わる（ルート F の緑電・運河バスで町の行き先へ）: 降りた乗り場から歩いて出る所（スロープの下・石段の上）で、行き先の方を向いて止まる
+  // 乗り物の区間で終わる（ルート F の緑電・運河バスで町の行き先へ）: 降りた乗り場から歩いて出る所（スロープの下・石段の上）
   const tail = segs[segs.length - 1]
   if (tail && tail.kind === 'ride') {
     const at = typeof cur === 'number' ? townWalk.nav!.node(cur) : cur
     tail.exitAt = [at[0], -at[1]]
-    // 町の行き先が乗り場の外の点と違えば、そこまで歩く（停留所のスロープの下から歩道へ。§7 の 197）
-    if (place) {
-      const goal = clearOfProps(TRAVEL_PLACES[place].at)
-      if (Math.hypot(goal[0] - at[0], goal[1] - at[1]) > 0.3) {
-        const pts = scenePath([tail.exitAt, [goal[0], -goal[1]]], TOWN_WALK_SPEED)
-        segs.push({ kind: 'walk', leg: tail.leg, pts, length: pts[pts.length - 1].s })
+  }
+  // 町の行き先: 道のりの終わり（町の道の経路の終わり = 行き先の点を道の上へつないだ点か、降りた乗り場の外）から、行き先の点まで歩く
+  // （ひらき通りは道の真ん中から北の歩道へ。停留所のスロープの下から歩道へ。§7 の 197）。行き先の点が歩ける所でなければ、その手前の縁まで
+  if (place) {
+    const end = planEnd(segs)
+    if (end) {
+      const goal = placeGoal(end, TRAVEL_PLACES[place].at)
+      if (Math.hypot(goal[0] - end[0], goal[1] - end[1]) > 0.3) {
+        const pts = scenePath([end, goal], TOWN_WALK_SPEED)
+        const last = segs[segs.length - 1]
+        if (last.kind === 'walk') {
+          last.pts = append(last.pts, pts)
+          last.length = last.pts[last.pts.length - 1].s
+        } else segs.push({ kind: 'walk', leg: last.leg, pts, length: pts[pts.length - 1].s })
       }
     }
   }
@@ -885,9 +907,8 @@ export function planTravel(ch: Character, req: TravelRequest): TravelPlan | Trav
     if (all.length >= 2) segs.push({ kind: 'walk', leg, pts: all, length: all[all.length - 1].s })
   } else if (place) {
     const f = TRAVEL_PLACES[place].face
-    const lastSeg = segs[segs.length - 1]
-    const last = lastSeg && lastSeg.kind === 'ride' && lastSeg.exitAt ? lastSeg.exitAt : lastPoint(segs)
-    if (last) heading = Math.atan2(f[0] - last[0], -f[1] - last[1])
+    const last = planEnd(segs) ?? lastPoint(segs)
+    if (last && Math.hypot(f[0] - last[0], -f[1] - last[1]) > 0.5) heading = Math.atan2(f[0] - last[0], -f[1] - last[1])
   }
   if (!segs.length) return { code: 'empty-plan' }
   for (let i = 0; i < legs.length; i++) Object.assign(legs[i], legStats(segs, i))
@@ -914,6 +935,55 @@ function lastPoint(segs: Seg[]): [number, number] | null {
     if (s.kind === 'walk') return [s.pts[s.pts.length - 1].x, s.pts[s.pts.length - 1].z]
   }
   return null
+}
+
+/**
+ * 道のりの終わりの点（シーンの x, z）: 最後が歩く所ならその終わり、飛ばした歩く所のカットなら飛ばした所の終わり、乗り物の区間なら降りた乗り場の外。
+ * わからなければ null（地下の道のカット）
+ */
+function planEnd(segs: Seg[]): [number, number] | null {
+  const s = segs[segs.length - 1]
+  if (!s) return null
+  if (s.kind === 'walk') return [s.pts[s.pts.length - 1].x, s.pts[s.pts.length - 1].z]
+  if (s.kind === 'cut') {
+    const p = s.path?.[s.path.length - 1]
+    return p ? [p.x, p.z] : null
+  }
+  return s.exitAt ?? null
+}
+
+/** 町の点 p（平面座標）へ向かう町の道の経路が終わる所（townNav の route が目的地の点を道へつなぐのと同じ: 3m 内の節点か、いちばん近い道の上の点） */
+function routeEndAt(p: XY): XY | null {
+  const nav = townWalk.nav
+  if (!nav) return null
+  const n = nav.nearestNode(p[0], p[1])
+  if (n >= 0 && Math.hypot(nav.node(n)[0] - p[0], nav.node(n)[1] - p[1]) <= 3) return nav.node(n)
+  const s = nav.snap(p[0], p[1], 60)
+  return s ? [s.x, s.y] : null
+}
+
+/** 町の歩ける所（道・石段・橋の幅の中で縁から margin m 以上内側・広場・停留所のホームなどの歩ける面）か（シーンの x, z） */
+function onTownGround(x: number, z: number, margin = 0) {
+  return townWalk.onWalkway(x, z, margin) || townWalk.extraAt(x, -z) !== null
+}
+
+/**
+ * 町の行き先へ歩いて着く所（シーンの x, z）: 道のりの終わり from から、行き先の点 at（平面座標）へまっすぐ。行き先の点が町の歩ける所なら
+ * その点（街灯の柱・木の幹から離す）。歩ける所でなければ（小野寺時計店は店の中の点）、まっすぐ向かって歩ける所を出る手前（縁から 0.25m）まで
+ */
+function placeGoal(from: [number, number], at: XY): [number, number] {
+  if (onTownGround(at[0], -at[1])) {
+    const g = clearOfProps(at)
+    return [g[0], -g[1]]
+  }
+  const gx = at[0] - from[0]
+  const gz = -at[1] - from[1]
+  const n = Math.ceil(Math.hypot(gx, gz) / 0.25)
+  let k = 0
+  while (k < n && onTownGround(from[0] + (gx * (k + 1)) / n, from[1] + (gz * (k + 1)) / n, 0.25)) k++
+  if (k === 0) return from
+  const g = clearOfProps([from[0] + (gx * k) / n, -(from[1] + (gz * k) / n)])
+  return [g[0], -g[1]]
 }
 
 function zoneLabel(z: ZoneId) {

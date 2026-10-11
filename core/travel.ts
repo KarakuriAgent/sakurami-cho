@@ -62,7 +62,11 @@ function stationPortal(zone: CableStationZone): PortalDef {
   return { id: 'main', label: `${d.label}の入口`, town: stationPlan(d, d.portalOut[0], d.portalOut[1]), zone: [p[0], p[2]] }
 }
 
-/** 町の行き先（ゾーンの外。kanon.travel の to）。at = 町の平面座標（道へつなぐ）、face = 着いたら向く点 */
+/**
+ * 町の行き先（ゾーンの外。kanon.travel の to）。at = 町の平面座標、face = 着いたら向く点。町の道の経路は at を道の上へつないだ所で終わり、
+ * そこから at まで歩いて着く（at が町の歩ける所でなければ、at へまっすぐ向かって歩ける所の縁の手前まで。小野寺時計店の at は店の中の点なので、
+ * 店の入口の前の時計坂の縁）
+ */
 export const TRAVEL_PLACES = {
   onodera: { label: '小野寺時計店の前（灯町二丁目 時計坂。祖父母の店。ルート E）', at: WAYPOINTS.onodera.at, face: [-650.6, -1861.0] },
   // ひらき通りの停留所の北の歩道（行きのホームの西のスロープの下の外。ガラス張りの公開ラボの並ぶ北の側を向く。§7 の 197）
