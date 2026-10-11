@@ -3,7 +3,7 @@
 `sakurami-cho`（桜見町の地図）だけで町とラボを出す例のアプリ。好きな VRM を読み込んで、WASD・クリック・行き先の一覧（旅程。乗り物にも乗る）・
 ワープで町じゅうを動き回り、町の時刻と画質を変えられる。
 
-パッケージを入口の index（`sakurami-cho/core`・`world`・`character`・`react`）だけで読む（使っている口はリポジトリの根の README の「公開の口」）。
+パッケージを入口の index（`sakurami-cho/core`・`world`・`character`・`react`）だけで読む（使っている口はリポジトリの根の [docs/usage.md](../../docs/usage.md) の「公開の口」）。
 ライセンスは根の README の「ライセンス」（例のアプリのコードは MIT）。
 
 ## 動かし方

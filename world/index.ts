@@ -1,7 +1,7 @@
 /**
  * 入口 world（three: 町・ラボ・名前のある建物・中のある建物・公共交通・えきもり・町の音・町の口 createTown。docs/design/map-split.md §7）。
  *
- * 公開の口（段 6 の終わり 6-7 に決めた。docs/design/map-split.md §10・パッケージの README の「公開の口」）。選んだ名前だけを出す（export * はしない。
+ * 公開の口（段 6 の終わり 6-7 に決めた。docs/design/map-split.md §10・docs/usage.md の「公開の口」）。選んだ名前だけを出す（export * はしない。
  * 名前がぶつからないように・出す名前が公開の口になるので）。出すのは、例のアプリ（examples/town-walker）が使う物と、ラボの差し込み口（configureLab）、
  * 町の口の引数・毎コマの段・注目点・出来事の型。ここにはコードを書かない（export だけ）。
  * kanon-lab はここからは読まず、深いパス（sakurami-cho/world/…）で読む

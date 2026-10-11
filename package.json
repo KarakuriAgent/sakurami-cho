@@ -5,7 +5,7 @@
   "type": "module",
   "description": "桜見町の地図（町・ラボ・キャラクターの共通の仕組み・R3F の薄い包み）。ビルドせず .ts のまま読ませる",
   "license": "MIT AND CC-BY-NC-4.0",
-  "files": ["core", "world", "character", "react", "tools", "assets", "README.md", "LICENSE-DATA"],
+  "files": ["core", "world", "character", "react", "tools", "assets", "README.md", "LICENSE-CODE", "LICENSE-DATA"],
   "scripts": {
     "test": "bun test test/",
     "typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json",

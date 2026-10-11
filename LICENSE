@@ -1,21 +1,24 @@
-MIT License
+このリポジトリは、2 つのライセンスでできています。
 
-Copyright (c) 2026 株式会社0235
+- 町の地図データと、設定資料をコードの形で書いたファイル: CC BY-NC 4.0（LICENSE-DATA）
+  （非営利に限る。どのパスが当たるかは README.md の「ライセンス」の表）
+- それ以外のコード: MIT（LICENSE-CODE。Copyright (c) 2026 株式会社0235）
+- 他の人の素材: それぞれの出典（assets/textures/CREDITS.md・assets/models/animations/CREDITS.md）とファイルの頭の注記のライセンス
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+MIT のコードも、既定では CC BY-NC 4.0 の表を読んで動きます。表を自分の物に差し替えずに使うときは、CC BY-NC 4.0 の条件も掛かります。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+キャラクター（花音・クレア・トンプソン）の扱いは株式会社0235 のガイドライン（https://kanon.0235.co.jp/guidelines/ ）に従ってください。
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+---
+
+This repository is dual-licensed.
+
+- Town map data and setting materials written as code: CC BY-NC 4.0 (see LICENSE-DATA).
+  Non-commercial use only. The exact paths are listed in the "ライセンス" (License) table in README.md.
+- All other code: MIT (see LICENSE-CODE). Copyright (c) 2026 株式会社0235 (0235 Inc.)
+- Third-party assets: see their credits (assets/textures/CREDITS.md, assets/models/animations/CREDITS.md) and file headers.
+
+The MIT-licensed code reads the CC BY-NC 4.0 tables by default. If you use it without replacing those tables with your own,
+the CC BY-NC 4.0 terms apply as well.
+
+The characters (花音・クレア・トンプソン / Kanon Claire Thompson) are subject to 株式会社0235's guidelines: https://kanon.0235.co.jp/guidelines/

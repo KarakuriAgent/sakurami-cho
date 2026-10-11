@@ -31,7 +31,7 @@
  *     同じ本当の置き場所に解けること
  *   - パッケージの名前は sakurami-cho（段 8 の 8-1 で、前の @kanon のスコープの付いた名前から替えた）。前の名前の字を残さない
  *   - 町の名前は桜見町（8-5d で設定集に合わせて替えた）。前の町の名前（漢字・旧字・ローマ字。替わっていない桜木丘…・SAKURAGI-OKA などは除く）を、
- *     コード・道具・アセット（町の地図データ・タイルの見出し）・README・例のアプリ・テストに残さない
+ *     コード・道具・アセット（町の地図データ・タイルの見出し）・README と docs/*.md・例のアプリ・テストに残さない
  *   - 観覧車の口は wheel… の名前（8-2b。前の名前 boardProblem などを残さない）。地図が返す理由（観覧車の WheelProblem・旅程の TravelProblem）は
  *     種類と値で、地図の既定の字（wheelProblemText・travelProblemText）は中立の言葉
  *   - 地図の中に kanon-lab の気配を残さない（8-2a）: console の頭は [sakurami-cho]（前は [kanon-lab]）、kanon-lab の名前の付いた名前
@@ -39,9 +39,9 @@
  *     _lastKanon）を使わず、使う人に見せる字（コメントの外の文字列）に kanon-lab の名前・命令（kanon.place など）・
  *     命令の引数・pnpm sync:town・「花音が」を書かない（道具の pnpm sync:town の案内は見ない）。コメントの「花音」と設定資料のデータ（「花音の部屋」など）は残す
  *   - 入口の index（core・world・character）は選んだ名前を export するだけ（export * もコードも書かない。段 6）。出す名前（公開の口）は決めた一覧
- *     PUBLIC_API だけで、パッケージの README の「公開の口」の表にどれも書く（足す・消すときは、一覧・設計書 §10・README の表を一緒に直す。6-7）
- *   - ライセンス（8-5）: LICENSE は MIT（株式会社0235）、LICENSE-DATA は CC BY-NC 4.0 の legal code の全文そのまま。package.json の license は
- *     MIT AND CC-BY-NC-4.0 で、files に LICENSE-DATA（LICENSE は自動で入る）。README の「ライセンス」の表は CC_BY_NC_PATHS と同じで、どのパスもある。
+ *     PUBLIC_API だけで、docs/usage.md の「公開の口」の表にどれも書く（足す・消すときは、一覧・設計書 §10・その表を一緒に直す。6-7）
+ *   - ライセンス（8-5）: LICENSE は 2 つのライセンスの案内（全部が MIT と読まれないように）、LICENSE-CODE は MIT（株式会社0235）、
+ *     LICENSE-DATA は CC BY-NC 4.0 の legal code の全文そのまま。package.json の license は MIT AND CC-BY-NC-4.0 で、files に LICENSE-CODE・LICENSE-DATA（LICENSE は自動で入る）。README の「ライセンス」の表は CC_BY_NC_PATHS と同じで、どのパスもある。
  *     キャラクターの扱いのガイドラインの 1 行がある
  *
  * 例のアプリ（examples/town-walker。段 6。docs/design/map-split.md §8）は入口の外の、パッケージを使う側の 1 つで、上の入口ごとの
@@ -212,7 +212,7 @@ const TEST_DIR = 'test'
 const EXAMPLE_PARTS = ['world/followCamera.ts', 'character/ride/drive.ts', 'character/avatar/direct.ts', 'core/spots.ts', 'character/avatar/teleport.ts'] as const
 
 /**
- * 入口の index（core・world・character）の公開の口（6-7 に決めた。docs/design/map-split.md §10・パッケージの README の「公開の口」の表）。
+ * 入口の index（core・world・character）の公開の口（6-7 に決めた。docs/design/map-split.md §10・docs/usage.md の「公開の口」の表）。
  * 例のアプリが使う物と、地図の表・差し込み口を差し替える・読む口（立ち寄り先の表・ラボの置き場所の表とアンカー・ラボの差し込み口・通り道・見た目の既定の値）、
  * それらの引数・返り値・欄の型（型も名前で数える）。react の index は 5-8 からの形（export *）のままで、ここでは数えない
  */
@@ -264,9 +264,16 @@ function filesOfPattern(pattern: string): string[] {
   return filesUnder(dir, name).filter((f) => posix.dirname(f) === dir)
 }
 
-/** README の「## 名前」の節（次の ## まで。最後の節なら終わりまで） */
-function readmeSection(name: string): string {
-  const md = read('README.md')
+/** 組み込む人向けの資料（README から移した物）。公開の口の表は docs/usage.md の「## 公開の口」 */
+const USAGE_DOC = 'docs/usage.md'
+/** 資料（docs/*.md。配る物 files には入れない）。README と同じく、前の名前・kanon-lab の気配の見張りを掛ける */
+function docFiles(): string[] {
+  return filesUnder('docs', /\.md$/)
+}
+
+/** Markdown のファイルの「## 名前」の節（次の ## まで。最後の節なら終わりまで） */
+function mdSection(file: string, name: string): string {
+  const md = read(file)
   const i = md.indexOf(`\n## ${name}\n`)
   if (i < 0) return ''
   const rest = md.slice(i + 1)
@@ -531,7 +538,7 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     const text = /\.(?:tsx?|mjs|cjs|js|json|md|ya?ml|html|css|txt)$/
     const files = filesUnder('', text, ['node_modules', 'dist', '.git', '.cache'])
     // 見る物がある（場所を移したら、ここも直す）
-    expect(files).toEqual(expect.arrayContaining(['package.json', 'README.md', `${EXAMPLE_DIR}/package.json`, `${EXAMPLE_DIR}/README.md`, 'assets/textures/CREDITS.md', 'core/index.ts', SELF]))
+    expect(files).toEqual(expect.arrayContaining(['package.json', 'README.md', ...docFiles(), `${EXAMPLE_DIR}/package.json`, `${EXAMPLE_DIR}/README.md`, 'assets/textures/CREDITS.md', 'core/index.ts', SELF]))
     const forms = [OLD_PKG_NAME, OLD_PKG_NAME.replace('/', '\\/')]
     expect(files.filter((f) => forms.some((w) => read(f).includes(w)))).toEqual([])
   })
@@ -541,7 +548,7 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     const files = filesUnder('', text, ['node_modules', 'dist', '.git', '.cache'])
     // 見る物がある（名前を替えた所・書き出した町の地図データ。場所を移したら、ここも直す）
     expect(files).toEqual(
-      expect.arrayContaining(['README.md', 'core/routes.ts', 'tools/town/transit.mjs', 'world/outdoor/named/kits/index.ts', 'world/outdoor/named/kits/station.ts', 'world/outdoor/interior/pictures.ts', 'assets/town/named.json', 'assets/town/infra.json', 'assets/town/manifest.json', 'assets/town/walk.json', `${EXAMPLE_DIR}/src/main.tsx`, SELF]),
+      expect.arrayContaining(['README.md', ...docFiles(), 'core/routes.ts', 'tools/town/transit.mjs', 'world/outdoor/named/kits/index.ts', 'world/outdoor/named/kits/station.ts', 'world/outdoor/interior/pictures.ts', 'assets/town/named.json', 'assets/town/infra.json', 'assets/town/manifest.json', 'assets/town/walk.json', `${EXAMPLE_DIR}/src/main.tsx`, SELF]),
     )
     const hits = files.flatMap((f) => oldTownNames(read(f)).map((w) => `${f}: ${w}`))
     // タイル（gzip した入れ物）の見出しの JSON の名前（名前のある建物の id・名前）
@@ -561,16 +568,17 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     // 見る物がある（console の頭を替えたファイル・名前を替えたファイル）
     expect(files).toEqual(expect.arrayContaining(['core/clock.ts', 'world/outdoor/town/townData.ts', 'character/avatar/characterVisual.ts', 'core/soranowa.ts', 'tools/sync-town.mjs', 'world/outdoor/interior/interiors.ts', 'world/outdoor/outdoorLighting.ts']))
     expect(read('world/outdoor/town/townData.ts')).toContain(`${PKG_LOG_TAG} 町の地図データ`)
-    // 道具（tools/）の pnpm sync:town などの案内は見ない（使う側の script から呼ぶ。8-4 でパッケージにも script を置いた）。README・package.json は名前だけ
-    const traces = [...files.flatMap((f) => kanonTraces(f, read(f), entryOf(f) !== 'tools')), ...['README.md', 'package.json'].flatMap((f) => kanonTraces(f, read(f), false))]
+    // 道具（tools/）の pnpm sync:town などの案内は見ない（使う側の script から呼ぶ。8-4 でパッケージにも script を置いた）。README・docs/*.md・package.json は名前だけ
+    expect(docFiles()).toEqual(expect.arrayContaining([USAGE_DOC, 'docs/tools.md']))
+    const traces = [...files.flatMap((f) => kanonTraces(f, read(f), entryOf(f) !== 'tools')), ...['README.md', ...docFiles(), 'package.json'].flatMap((f) => kanonTraces(f, read(f), false))]
     // 観覧車・旅程の理由の字（8-2b で「種類と値」にした）も、地図の既定の字は中立の言葉（kanon-lab の字は kanon-lab の src/kanon/reasons.ts が作る）
     expect(traces).toEqual([])
   })
 
-  test('観覧車の口は wheel… の名前（8-2b）。前の名前（boardProblem など）が、地図・例のアプリ・テストのコードと README に残っていない（kanon-lab の側は kanon-lab の見張り）', () => {
-    const files = [...packageFiles(), ...exampleFiles(), ...testFiles().filter((f) => f !== SELF), 'README.md', `${EXAMPLE_DIR}/README.md`]
-    // 見る物がある（観覧車の口を呼ぶ所）
-    expect(files).toEqual(expect.arrayContaining(['character/ride/ride.ts', 'character/index.ts', `${EXAMPLE_DIR}/src/travel.ts`]))
+  test('観覧車の口は wheel… の名前（8-2b）。前の名前（boardProblem など）が、地図・例のアプリ・テストのコードと README・docs/*.md に残っていない（kanon-lab の側は kanon-lab の見張り）', () => {
+    const files = [...packageFiles(), ...exampleFiles(), ...testFiles().filter((f) => f !== SELF), 'README.md', ...docFiles(), `${EXAMPLE_DIR}/README.md`]
+    // 見る物がある（観覧車の口を呼ぶ所・公開の口の表）
+    expect(files).toEqual(expect.arrayContaining(['character/ride/ride.ts', 'character/index.ts', `${EXAMPLE_DIR}/src/travel.ts`, USAGE_DOC]))
     expect(read('character/ride/ride.ts')).toMatch(/export function wheelBoardProblem\(/)
     const old = new RegExp(`\\b(?:${OLD_WHEEL_NAMES.join('|')})\\b`, 'g')
     expect(files.flatMap((f) => [...read(f).matchAll(old)].map((m) => `${f}: ${m[0]}`))).toEqual([])
@@ -580,10 +588,10 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     expect(['core', 'world', 'character', 'react'].flatMap((e) => indexExtras(e, read(`${e}/index.ts`)))).toEqual([])
   })
 
-  test('入口の index（core・world・character）の公開の口は決めた名前だけ。パッケージの README の「公開の口」の表に、どの名前も書いてある（6-7）', () => {
+  test('入口の index（core・world・character）の公開の口は決めた名前だけ。docs/usage.md の「公開の口」の表に、どの名前も書いてある（6-7）', () => {
     for (const e of ['core', 'world', 'character'] as const) expect(indexNames(read(`${e}/index.ts`))).toEqual([...PUBLIC_API[e]].sort())
-    // 表は README の「## 公開の口」の節（次の ## まで）。名前は `名前` で書く
-    const section = /^## 公開の口\n([\s\S]*?)(?=^## )/m.exec(read('README.md'))?.[1] ?? ''
+    // 表は docs/usage.md の「## 公開の口」の節（次の ## まで）。名前は `名前` で書く
+    const section = mdSection(USAGE_DOC, '公開の口')
     expect(section.length).toBeGreaterThan(0)
     expect(Object.values(PUBLIC_API).flatMap((names) => names.filter((n) => !section.includes(`\`${n}\``)))).toEqual([])
   })
@@ -606,8 +614,8 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
       // 素材から .vrma を作る変換（使う側の道具が自分の .vrma を作るときに読む。6-0b）。道具そのもの（sync-*.mjs）は出さない
       './tools/anim': './tools/anim/convert.mjs',
     })
-    // 配る物（pnpm pack・publish・git の依存）。例のアプリ（examples/）とテスト（test/）は入れない（6-1・8-4）。LICENSE-DATA は自動では入らないので書く（8-5）
-    expect(pkg.files).toEqual(['core', 'world', 'character', 'react', 'tools', 'assets', 'README.md', 'LICENSE-DATA'])
+    // 配る物（pnpm pack・publish・git の依存）。例のアプリ（examples/）とテスト（test/）は入れない（6-1・8-4）。LICENSE-CODE・LICENSE-DATA は自動では入らないので書く（8-5）
+    expect(pkg.files).toEqual(['core', 'world', 'character', 'react', 'tools', 'assets', 'README.md', 'LICENSE-CODE', 'LICENSE-DATA'])
     const peers = pkg.peerDependencies as Record<string, string>
     const dev = pkg.devDependencies as Record<string, string>
     expect(Object.keys(peers).sort()).toEqual([...PKG_PEERS])
@@ -647,8 +655,12 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     for (const l of ['node_modules', 'dist', '*.local', '.cache/']) expect(ignore).toContain(l)
   })
 
-  test('ライセンス（8-5）: LICENSE は MIT（株式会社0235）、LICENSE-DATA は CC BY-NC 4.0 の legal code そのまま。package.json の license・version・files。README の「ライセンス」の表のパスが全部あり、ガイドラインの 1 行がある', () => {
-    const mit = read('LICENSE')
+  test('ライセンス（8-5）: LICENSE は 2 つのライセンスの案内、LICENSE-CODE は MIT（株式会社0235）、LICENSE-DATA は CC BY-NC 4.0 の legal code そのまま。package.json の license・version・files。README の「ライセンス」の表のパスが全部あり、ガイドラインの 1 行がある', () => {
+    // LICENSE は案内（MIT の全文を置かない。GitHub などが全部を MIT と見分けないように）。2 つのライセンスと置き場所・ガイドラインを書く
+    const guide = read('LICENSE')
+    expect(guide).not.toContain('Permission is hereby granted')
+    for (const w of ['CC BY-NC 4.0', 'LICENSE-DATA', 'MIT', 'LICENSE-CODE', '株式会社0235', 'README.md', 'https://kanon.0235.co.jp/guidelines/']) expect(guide).toContain(w)
+    const mit = read('LICENSE-CODE')
     expect(mit.startsWith('MIT License\n\nCopyright (c) 2026 株式会社0235\n\n')).toBe(true)
     for (const w of ['Permission is hereby granted, free of charge, to any person obtaining a copy', 'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND']) expect(mit).toContain(w)
     const data = readFileSync(join(ROOT, 'LICENSE-DATA'))
@@ -657,12 +669,12 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     const pkg = readJson('package.json')
     expect(pkg.license).toBe('MIT AND CC-BY-NC-4.0')
     expect(pkg.version).toBe('0.1.0')
-    expect(pkg.files).toContain('LICENSE-DATA')
+    for (const f of ['LICENSE-CODE', 'LICENSE-DATA']) expect(pkg.files).toContain(f)
     // README の「ライセンス」: 表のパス（| `パス` | の行）は決めた並びと同じで、どれも 1 つ以上のファイルに当たる
-    const section = readmeSection('ライセンス')
+    const section = mdSection('README.md', 'ライセンス')
     expect([...section.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1])).toEqual([...CC_BY_NC_PATHS])
     expect(CC_BY_NC_PATHS.filter((p) => filesOfPattern(p).length === 0)).toEqual([])
-    for (const w of ['CC BY-NC 4.0', '(LICENSE-DATA)', 'MIT', '(LICENSE)', '株式会社0235', 'assets/textures/', 'assets/models/animations/', 'world/lab/shell/reflector/']) expect(section).toContain(w)
+    for (const w of ['CC BY-NC 4.0', '(LICENSE-DATA)', 'MIT', '(LICENSE-CODE)', '(LICENSE)', '株式会社0235', 'assets/textures/', 'assets/models/animations/', 'world/lab/shell/reflector/']) expect(section).toContain(w)
     expect(section).toContain(CHARACTER_GUIDELINE)
     // 他の人の素材の出典がある
     for (const f of ['assets/textures/CREDITS.md', 'assets/models/animations/CREDITS.md']) expect(existsSync(join(ROOT, f))).toBe(true)

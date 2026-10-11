@@ -1,7 +1,7 @@
 /**
  * 入口 character（three + three-vrm: Character。VRM の読み込み・姿勢・手・歩き・道探し・乗り降り・旅程を進める。docs/design/map-split.md §7）。
  *
- * 公開の口（段 6 の終わり 6-7 に決めた。docs/design/map-split.md §10・パッケージの README の「公開の口」）。選んだ名前だけを出す（export * はしない。
+ * 公開の口（段 6 の終わり 6-7 に決めた。docs/design/map-split.md §10・docs/usage.md の「公開の口」）。選んだ名前だけを出す（export * はしない。
  * 名前がぶつからないように・出す名前が公開の口になるので）。出すのは、例のアプリ（examples/town-walker）が使う物と、通り道を差し替える口（configureNav）・
  * 見た目の既定の値、それらの引数・返り値の型。ここにはコードを書かない（export だけ）。
  * kanon-lab はここからは読まず、深いパス（sakurami-cho/character/…）で読む（index から読むと、使わない物まで先に評価されて、モジュールの評価の順が変わるため）
