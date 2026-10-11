@@ -7,6 +7,7 @@ import type { V3 } from './frame'
  * - 看板の絵は、使うときに描く（細かい形を作る建物の分だけ）。同じ文字と見た目の看板は 1 つの絵を共有する
  * - 字は system の Noto Serif CJK JP（明朝。古い店の看板・駅名）と Noto Sans CJK JP（ゴシック）。無ければブラウザのセリフ・サンセリフ
  * - 面の値: aUv（アトラスの中の位置）、aSign.x = 光り方（namedMaterial.ts の createNamedSignMaterial）
+ * - canvas は CPU で描く物（willReadFrequently。GPU の canvas は描いた物が消えることがあった）
  */
 
 export const SIGN_FONTS = {
@@ -66,7 +67,11 @@ class SignAtlas {
     c.width = SIZE_W
     c.height = SIZE_H
     this.canvas = c
-    this.ctx = c.getContext('2d')!
+    // CPU で描く canvas（willReadFrequently）にする: 町を組み立ててから作る 4096² の GPU の canvas は、Chrome で、描いた看板の絵が消えて
+    // 透明のままになり、看板がどれも出ないことがあった（読み返すと全部 0）。消えるかは起動ごとに変わり、駅舎の正面の駅名などが撮るたびに
+    // 出たり出なかったりした。GPU の canvas は 1 度読み返すと CPU に切り替わって残るので、調べる道具を足すと出るようにもなる。
+    // CPU の canvas なら描いた物が残る（中の絵のアトラス interior/pictures.ts と同じ）
+    this.ctx = c.getContext('2d', { willReadFrequently: true })!
     this.ctx.clearRect(0, 0, SIZE_W, SIZE_H)
     const t = new THREE.CanvasTexture(c)
     t.colorSpace = THREE.NoColorSpace
