@@ -4,6 +4,7 @@
  * - 町の行き先（route=auto。歩く・いちばん早い・緑電）: 町の道の経路は、行き先の点を道の上へつないだ所で終わる。そこから行き先の点まで歩いて着く
  *   （前は経路の終わりで止まった。ひらき通りは行き先の北の歩道から 8.4m 南の、緑電の線路の通る道の真ん中）。行き先の点が歩ける所でなければ
  *   （小野寺時計店は店の中の点）、まっすぐ向かって歩ける所の縁の手前まで。どの時間の扱いでも同じ所
+ * - 出る所: 今いる所（町の歩道・ソラノワの乗り場の前）から経路の始め（道の上へつないだ点）まで歩く（前は歩き出したコマにそこへ跳んだ）
  *
  * 交通の運行（緑電・ケーブル・運河バス・ホバー）は描かずに作り（createTransit）、町の毎コマと同じ順（町の時計 → 交通の時計 → 運行 → 乗る仕組み →
  * 人を動かす）で 1/30 秒ずつ進める。交通の時計は 10:00 から。ほかのテストの表が混ざらないよう、まっさらな bun のプロセスで確かめる
@@ -161,6 +162,9 @@ for (const time of ['cut', 'fast', 'none']) out.arrive.push(go('lab', 'hiraki', 
 // そのままの時間（短い道のり）: 停留所の前から歩道へ・北口から小野寺時計店へ
 out.real = [go('hirakiStop', 'hiraki', 'real', 'walk'), go('kitaguchi', 'onodera', 'real', 'walk')]
 
+// 2. 出る所: 歩き出してからのコマごとの位置の差（跳ばない）
+out.depart = [go('hiraki', 'onodera', 'real', 'walk', 600), go('soranowa', 'cafe-front', 'real', 'walk', 600)].map((r) => ({ o: r.o, to: r.to, jump: r.jump, error: r.error }))
+
 console.log(JSON.stringify(out))
 `
 
@@ -208,6 +212,12 @@ describe('旅程（character/avatar/travel.ts）: 着く所と、町の時刻に
     const apart: string[] = []
     for (const [k, list] of by) for (const x of list) if (Math.hypot(x.x - list[0].x, x.z - list[0].z) > 0.05) apart.push(`${k} ${x.time}`)
     expect(apart).toEqual([])
+  })
+
+  test('出る所から経路の始めまで歩く（町の歩道・ソラノワの乗り場の前から、歩き出したコマに跳ばない）', () => {
+    const rows = v.depart as { o: string; to: string; jump: number; error: string | null }[]
+    expect(rows.filter((x) => x.error)).toEqual([])
+    expect(rows.filter((x) => x.jump > 0.2)).toEqual([])
   })
 
 })

@@ -33,7 +33,8 @@ import type { Character, CharacterMotion } from './character'
  *
  * 道のり = 区間（leg）の列。区間は「歩く線」（点の列。名目の速さつき）と「カット」（その間を飛ばす。町の時刻を進める）からなる:
  *   1. 今いるゾーンの中を、ゾーンの出入口まで歩く（ラボは character/avatar/nav.ts、建物の中は interior/model.ts の通り道）
- *   2. 町の道を歩く（設定の道順 A〜G の区間か、いちばん早い道。core/walk/townNav.ts → core/walk/walkLine.ts の歩く線。歩道の側・交差点で渡る・小物よけ）
+ *   2. 町の道を歩く（設定の道順 A〜G の区間か、いちばん早い道。core/walk/townNav.ts → core/walk/walkLine.ts の歩く線。歩道の側・交差点で渡る・小物よけ）。
+ *      町の道の経路の始め（出る所を道の上へつないだ点）へは、出る所（今いる所・ゾーンの出入口の町の点）からまっすぐ歩く（間が町の歩ける所なら）
  *      丘ノ上ケーブルの区間（ride）は、駅の入口からホームの扉の前まで歩き、来た便に乗り、着いた駅のホームから出口まで歩く（character/ride/cableRide.ts。
  *      待つ・乗っている間の時間の扱いは wait・rideTime）。緑電（段 3 で乗れるようにする）と、地下の駅自由通路（見えない区間）は、今はカット
  *      （次の乗り場・出口から続ける。町の時刻をその分進める）
@@ -910,6 +911,23 @@ export function planTravel(ch: Character, req: TravelRequest): TravelPlan | Trav
     const last = planEnd(segs) ?? lastPoint(segs)
     if (last && Math.hypot(f[0] - last[0], -f[1] - last[1]) > 0.5) heading = Math.atan2(f[0] - last[0], -f[1] - last[1])
   }
+  // 町の道の経路の始めは、出る所（今いる所・出たゾーンの出入口の町の点）を道の上へつないだ点。離れていれば、そこまで歩く
+  // （ひらき通りの北の歩道から道の真ん中へ 8m・ソラノワの乗り場の前から 8m。歩かないと、歩き出したコマにそこへ跳ぶ）。
+  // 0.3m まで（3m 内の節点へつないだ所など）は、町の行き先へ着く所と同じく歩かない。間が町の歩ける所でなければ（店の中の点に置いた・
+  // 広場の縁から道へ出るなど）今までどおり
+  let prevEnd: [number, number] | null = here
+  for (const s of segs) {
+    if (s.kind !== 'walk') {
+      prevEnd = null
+      continue
+    }
+    const p = s.pts[0]
+    if (prevEnd && Math.hypot(p.x - prevEnd[0], p.z - prevEnd[1]) > 0.3 && walkableLine(prevEnd, [p.x, p.z])) {
+      s.pts = append(scenePath([prevEnd, [p.x, p.z]], TOWN_WALK_SPEED), s.pts)
+      s.length = s.pts[s.pts.length - 1].s
+    }
+    prevEnd = [s.pts[s.pts.length - 1].x, s.pts[s.pts.length - 1].z]
+  }
   if (!segs.length) return { code: 'empty-plan' }
   for (let i = 0; i < legs.length; i++) Object.assign(legs[i], legStats(segs, i))
   const minutes = legs.reduce((s, l) => s + l.minutes, 0)
@@ -965,6 +983,13 @@ function routeEndAt(p: XY): XY | null {
 /** 町の歩ける所（道・石段・橋の幅の中で縁から margin m 以上内側・広場・停留所のホームなどの歩ける面）か（シーンの x, z） */
 function onTownGround(x: number, z: number, margin = 0) {
   return townWalk.onWalkway(x, z, margin) || townWalk.extraAt(x, -z) !== null
+}
+
+/** a → b（シーンの x, z）のまっすぐの線が、町の歩ける所の上か（0.25m ごと） */
+function walkableLine(a: [number, number], b: [number, number]) {
+  const n = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.25)
+  for (let k = 0; k <= n; k++) if (!onTownGround(a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n)) return false
+  return true
 }
 
 /**
