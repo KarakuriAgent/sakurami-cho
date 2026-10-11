@@ -74,6 +74,7 @@ pnpm check:walk      # 町の歩く道のグラフの確かめ（道具は docs/
 ```
 
 CI（GitHub Actions）が push と pull request のたびに、型の確かめ・テスト・例のアプリのビルド・`check:walk` を流す。
+例のアプリは Cloudflare Workers に静的なページとして出す（設定は `wrangler.jsonc`。`npx wrangler deploy` がビルドしてから出す）。
 
 ## 資料
 

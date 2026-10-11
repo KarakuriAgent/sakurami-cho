@@ -1,0 +1,8 @@
+// Cloudflare Workers に例のアプリ town-walker を静的なページとして出す設定（npx wrangler deploy で使う）。
+// ビルド（pnpm example:build）は build.command で wrangler が先に流す。出すのは examples/town-walker/dist/ だけで、Worker のコードは無い
+{
+  "name": "sakurami-cho",
+  "compatibility_date": "2026-10-11",
+  "build": { "command": "pnpm example:build" },
+  "assets": { "directory": "./examples/town-walker/dist" }
+}
