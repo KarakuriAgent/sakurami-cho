@@ -18,7 +18,12 @@ export interface FootIkState {
 const _fa = new THREE.Vector3()
 const _fb = new THREE.Vector3()
 const _fc = new THREE.Vector3()
+const _fd = new THREE.Vector3()
+const _fe = new THREE.Vector3()
+const _fn = new THREE.Vector3()
 const _fq = new THREE.Quaternion()
+const _fp = new THREE.Quaternion()
+const _fr = new THREE.Quaternion()
 const _fx = new THREE.Vector3(1, 0, 0)
 
 /** 歩く間の立脚の膝の曲げの目安（rad。人の歩きの立脚の中ほどは 10〜15°） */
@@ -41,7 +46,12 @@ export function legAngles(a: number, b: number, D: number) {
  *    低い方の足に合わせて腰を下げ、高い方の足は膝を曲げて持ち上げる（外だけ。ラボの中の平らな床では差が 0）
  * 2. 歩きの .vrma（素材の歩き）は立脚の膝を 25〜35° 曲げたまま運ぶので、花音の脚では中腰に見えた。歩く間は、地面に着いている足の膝が
  *    STANCE_KNEE まで伸びる高さだけ腰を上げ（地面に着いている足が届く分まで・4cm まで）、足の位置はアニメーションのまま（膝を伸ばす）にする
- * 脚は前後の面の中でだけ曲げる（太ももを前へ・膝を後ろへ）。太ももとすねの長さの違いも入れる
+ * 3. 座っている間（行動 sit。座る姿勢を混ぜる強さで）は、腰は座面に載っているので下げず、足だけを足の下の床・地面へまっすぐ
+ *    上げ下げする（低い所へは脚を伸ばし、高い所へは膝を曲げる）。傾いた車室（ケーブルカーの急な区間）で前に出した足の下の床が低くても、
+ *    腰が座面に沈まない
+ * 脚は前後の面の中でだけ曲げる（太ももを前へ・膝を後ろへ）。太ももとすねの長さの違いも入れる。立っている脚は股関節から足首の線の上で足首を
+ * 動かす。座っている脚は股関節から足首の線が前へ倒れているので、その線の上で動かすと足首が前へずれて床に届かない。足首の行き先（真上・真下）
+ * へ届くよう、膝をその骨の曲がる軸のまわりに曲げ（骨の長さと向きのまま解く）、太ももを股関節のまわりに振る（reachSeated）
  */
 export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: number, ankleRest: number) {
   const m = ch.motion
@@ -69,7 +79,10 @@ export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: num
     const want = m.outside ? groundHeight(ch, _fa.x, _fa.z, true) - m.ground : 0
     st[l.key] += (THREE.MathUtils.clamp(want, -0.3, 0.3) - st[l.key]) * k
   }
-  const drop = Math.min(0, st.dL, st.dR)
+  // 座る姿勢の強さ（characterVisual が行動の姿勢を混ぜるのと同じ形）。座っている間は腰を下げない
+  const b = m.action === 'sit' ? m.actionBlend : 0
+  const sit = b * b * (3 - 2 * b)
+  const drop = Math.min(0, st.dL, st.dR) * (1 - sit)
   st.drop += (drop - st.drop) * k
   // 脚の長さ（太もも・すね）
   const rest = vrm.humanoid.normalizedRestPose
@@ -111,6 +124,10 @@ export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: num
     const raise = st[l.key] - st.drop - lift
     if (Math.abs(raise) < 0.002) return
     const D0 = D[i]
+    if (sit > 0) {
+      reachSeated(l.up!, l.low!, l.foot!, raise, D0, sit, (A + B) * 0.55, reach)
+      return
+    }
     const D2 = THREE.MathUtils.clamp(D0 - raise, (A + B) * 0.55, reach)
     const a0 = legAngles(A, B, D0)
     const a1 = legAngles(A, B, D2)
@@ -118,4 +135,49 @@ export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: num
     l.up!.quaternion.multiply(_fq.setFromAxisAngle(_fx, -(a1.hip - a0.hip)))
     l.low!.quaternion.multiply(_fq.setFromAxisAngle(_fx, a1.knee - a0.knee))
   })
+}
+
+/**
+ * 座っている脚の足首を、今の所から raise（m）上げ下げした所へ届かせる。行き先は、真上・真下（座る強さ sit = 1）と、立っている脚と同じ
+ * 股関節から足首の線の上（sit = 0）を混ぜた点。股関節からの長さは minD〜maxD に収める。
+ * 膝はすねの骨の X 軸（曲がる軸）のまわりに曲げ、股関節から足首までがちょうど行き先までの長さになる角度を、骨の今の向きと長さから解く
+ * （2 つの解のうち、今の膝の曲げから近い方）。そのあと太ももを股関節のまわりに振って、足首を行き先に重ねる。シーンの行列は呼ぶ前に新しくしておく
+ */
+function reachSeated(up: THREE.Object3D, low: THREE.Object3D, foot: THREE.Object3D, raise: number, D0: number, sit: number, minD: number, maxD: number) {
+  const H = up.getWorldPosition(_fa)
+  const K = low.getWorldPosition(_fb)
+  const P = foot.getWorldPosition(_fc)
+  // 行き先 _fd（股関節から見た向きと長さ）: 線の上へ動かす分 −(P − H) / D0 × raise と、真上・真下 (0, raise, 0) を sit で混ぜる
+  _fd.subVectors(P, H).multiplyScalar(-raise / D0)
+  _fd.x *= 1 - sit
+  _fd.z *= 1 - sit
+  _fd.y += (raise - _fd.y) * sit
+  _fd.add(P).sub(H)
+  const D2 = THREE.MathUtils.clamp(_fd.length(), minD, maxD)
+  _fd.setLength(D2)
+  // 膝: u = 膝 − 股関節、s = 足首 − 膝。軸 n のまわりに φ 回すと u・s は c0 + Pc cos φ + Ps sin φ。|u + s(φ)| = D2 になる φ
+  const u = K.sub(H)
+  const s = P.sub(H).sub(u)
+  low.getWorldQuaternion(_fq)
+  const n = _fn.copy(_fx).applyQuaternion(_fq)
+  const c0 = u.dot(n) * s.dot(n)
+  const sPerp = _fe.copy(n).multiplyScalar(-s.dot(n)).add(s)
+  const Pc = u.dot(sPerp)
+  const Ps = u.dot(n.cross(sPerp))
+  const R = Math.hypot(Pc, Ps)
+  if (R > 1e-9) {
+    const g = (D2 * D2 - u.lengthSq() - s.lengthSq()) / 2 - c0
+    const base = Math.atan2(Ps, Pc)
+    const open = Math.acos(THREE.MathUtils.clamp(g / R, -1, 1))
+    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a))
+    const p1 = wrap(base + open)
+    const p2 = wrap(base - open)
+    low.quaternion.multiply(_fq.setFromAxisAngle(_fx, Math.abs(p1) < Math.abs(p2) ? p1 : p2))
+  }
+  // 太もも: 股関節から足首の向きを行き先へ（シーンの回りを、太ももの親の座標に直して前から掛ける）
+  up.updateMatrixWorld(true)
+  foot.getWorldPosition(_fe).sub(up.getWorldPosition(_fc)).normalize()
+  _fp.setFromUnitVectors(_fe, _fd.normalize())
+  up.parent!.getWorldQuaternion(_fq)
+  up.quaternion.premultiply(_fp.premultiply(_fr.copy(_fq).invert()).multiply(_fq))
 }
