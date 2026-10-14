@@ -9,6 +9,7 @@ import { alightWheel, boardWheel, DESTINATION_GROUPS, openTravel, setTravelOptio
 import { putWalker, warpFrames, warpSpots, warpTo, warpUi, type WarpFrame, type WarpUi } from './teleport'
 import { clockUi, resetClock, runClock, setClockDate, setClockMinutes, setClockSpeed, stopClock, type ClockUi } from './clock'
 import { QUALITY, qualityUrl, type Quality } from './quality'
+import { fullHook, mapDebugState, openMap, resetMapStats, setGround } from './townMap'
 
 /**
  * 確かめ用の window.__walker（?debug のときだけ出す。確かめの道具がページの中を読む口。段 6 の区切りごとに広げる）。
@@ -17,7 +18,7 @@ import { QUALITY, qualityUrl, type Quality } from './quality'
  * クリックする・地面を拾う・立てるか、様子に WASD・クリックの歩きと案内。6-4: 行き先へ移る（旅程）・取り消す・進め方・行き先の一覧・観覧車に乗る・降りる、
  * 様子に旅程・乗っている乗り物・出来事・町の時刻。6-5: ワープする・ワープ先の一覧、様子にワープ（暗転・跳んだ先・直近のワープのコマの長さ）。
  * put は地図の placeAtPoint で置く（teleport.ts の putWalker）。6-6: 時刻のつまみ（画面と同じ口）、様子に時刻のつまみ・画質・外の光（太陽の向き・灯り）。
- * #8: 跳ぶ（スペースキーと同じ口）、様子に跳ぶ様子
+ * #8: 跳ぶ（スペースキーと同じ口）、様子に跳ぶ様子。#1: 町の地図（全体の地図を開く・閉じる・行き先を選ぶ・見え方・地面の画を敷く（見比べ用））、様子に町の地図
  */
 export interface WalkerDebug {
   /** 町の地図データを読み終えて（か、無いと分かって）、そのあと 30 コマ描いた */
@@ -74,6 +75,11 @@ export interface WalkerDebug {
   clock: { minutes(m: number): string | null; run(speed?: number): string | null; stop(): string | null; speed(s: number): string | null; now(): string | null; date(v: string): string | null }
   /** 画質を変えた URL（読み込み直しはしない。確かめの道具が開く） */
   qualityUrl(q: Quality): string
+  /**
+   * 町の地図（#1）: 全体の地図を開く・閉じる（ミニマップを押す・Esc と同じ口）・行き先を選ぶ（点を押すのと同じ。開いている間だけ）・
+   * 見え方（中心の町の平面座標 x = 東・y = 北と、縮尺 CSS px / m）・地面の画を下に敷く・やめる（見比べ用。既定は敷く）・数を 0 に戻す
+   */
+  map: { open(on: boolean): void; select(id: string | null): void; view(o: { cx?: number; cy?: number; k?: number }): void; ground(on: boolean): void; resetStats(): void }
 }
 
 type V3 = [number, number, number]
@@ -101,6 +107,8 @@ export interface WalkerState {
   sun: { azimuth: number; elevation: number; daylight: number; street: number }
   /** ワープ（暗転・跳んだ先と回数・案内・一覧の組ごとの数・直近のワープのコマ（前のコマからの ms・暗転・幕の不透明度）） */
   teleport: Omit<WarpUi, 'groups'> & { groups: { kind: string; count: number }[]; frames: readonly WarpFrame[] }
+  /** 町の地図（材料の様子・全体の地図を開いているか・いる所の字と印・ミニマップ（窓の直径・下絵の中心とずらし・矢印の回り・毎コマの段と描き直しの時間）・全体の地図の見え方） */
+  map: ReturnType<typeof mapDebugState>
   /** 描く物の数（three の renderer.info.memory）と JS のヒープ（MB。Chrome だけ） */
   memory: { geometries: number; textures: number; programs: number; heapMB: number | null } | null
 }
@@ -182,6 +190,7 @@ function state(): WalkerState {
       const { groups, ...rest } = warpUi()
       return { ...rest, groups: groups.map((g) => ({ kind: g.kind, count: g.items.length })), frames: warpFrames() }
     })(),
+    map: mapDebugState(),
     memory: gl ? { geometries: gl.info.memory.geometries, textures: gl.info.memory.textures, programs: gl.info.programs?.length ?? 0, heapMB: heap ? round(heap / 1048576) : null } : null,
   }
 }
@@ -317,6 +326,18 @@ if (DEBUG) {
     teleport: (id, fade = true) => warpTo(id, fade),
     clock: { minutes: setClockMinutes, run: (sp) => runClock(sp), stop: stopClock, speed: setClockSpeed, now: resetClock, date: setClockDate },
     qualityUrl: (q) => qualityUrl(q, { time: null, date: null }),
+    map: {
+      open: (on) => openMap(on),
+      select: (id) => fullHook.select?.(id),
+      view(o) {
+        if (o.cx !== undefined) fullHook.cx = o.cx
+        if (o.cy !== undefined) fullHook.cy = o.cy
+        if (o.k !== undefined) fullHook.k = o.k
+        fullHook.redraw?.()
+      },
+      ground: (on) => setGround(on),
+      resetStats: resetMapStats,
+    },
     spots: () => warpSpots().map((s) => ({ id: s.id, kind: s.kind, label: s.label, place: s.place, zone: s.zone, x: round(s.x), z: round(s.z), heading: round(s.heading), refY: s.refY === null ? null : round(s.refY) })),
   }
 }

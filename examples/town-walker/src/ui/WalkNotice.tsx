@@ -47,7 +47,7 @@ export function WalkNotice() {
           </button>
         </p>
       )}
-      <p className="help">WASD・矢印で歩く（Shift で走る）・Space で跳ぶ・地面をクリックで歩く・ドラッグで回す・ホイールで寄る・右の一覧から行き先を選ぶ・ワープする</p>
+      <p className="help">WASD・矢印で歩く（Shift で走る）・Space で跳ぶ・地面をクリックで歩く・ドラッグで回す・ホイールで寄る・右の一覧から行き先を選ぶ・ワープする・小さい地図を押すと全体の地図</p>
     </div>
   )
 }

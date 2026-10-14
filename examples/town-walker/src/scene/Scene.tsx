@@ -6,6 +6,7 @@ import { sceneHook, walkerState } from '../debug'
 import { loadingLabBuilt, loadingReady } from '../loading'
 import { town, townState, walker } from '../town'
 import { vrmPending } from '../vrm'
+import { updateMiniMap } from '../townMap'
 import { Controls } from './Controls'
 import { FollowCam } from './FollowCam'
 import { WalkerDriver, WalkerView } from './Walker'
@@ -24,6 +25,7 @@ const RIDERS = [walker]
  *   −50   TownView      遠景と外の光（town.update。TownRoot の最初の子）
  *    −1   FollowCam     追うカメラ（人の位置が決まったあと、町の view の前）
  *     0   TownView      ラボ・星・遠景の窓・殻・什器（town.view。カメラを動かしたあと）、歩く人の見た目（CharacterView・仮の体）、準備の合図
+ *   0.5   MapFrame      小さい地図（townMap.ts の updateMiniMap。下絵をずらして矢印を回すだけ。#1）
  *  0.95   TownExposure  露出（town.exposure。描く前）
  *     1   Render        描く（0 より大きい優先度の購読があると、R3F は自分で描かないので、ここで描く）
  */
@@ -39,6 +41,7 @@ export function Scene() {
       <WalkerDriver />
       <FollowCam />
       <WalkerView />
+      <MapFrame />
       <TownExposure town={town} />
       <Render />
       <Suspense fallback={null}>
@@ -51,6 +54,12 @@ export function Scene() {
       </Suspense>
     </>
   )
+}
+
+/** 小さい地図（優先度 0.5。歩く人・乗り物・カメラが動いたあと。DOM の下絵をずらすだけで、3D の画は描かない） */
+function MapFrame() {
+  useFrame(() => updateMiniMap(), 0.5)
+  return null
 }
 
 /** 描く（優先度 1。TownExposure（0.95）があると R3F は自分で描かない） */

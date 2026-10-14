@@ -115,7 +115,8 @@ canvas {
   position: absolute;
   left: 50%;
   bottom: 12px;
-  max-width: min(640px, calc(100% - 24px));
+  /* 右下の小さい地図（#1）に重ならないよう、両側をその幅だけあける（スマホの幅では小さい地図は右上） */
+  max-width: min(640px, calc(100% - 424px));
   transform: translateX(-50%);
   text-align: center;
   pointer-events: none;
@@ -145,7 +146,8 @@ canvas {
   left: auto;
   right: 12px;
   width: 300px;
-  max-height: calc(100% - 150px);
+  /* 下に右下の小さい地図（#1）の分をあける */
+  max-height: calc(100% - 248px);
   overflow-y: auto;
 }
 
@@ -412,4 +414,220 @@ canvas {
 .town-notice code {
   font-family: 'Share Tech Mono', monospace;
   overflow-wrap: anywhere;
+}
+
+/* 小さい地図（ミニマップ。右下。押すと全体の地図。#1）。下絵（canvas）は窓の 2 倍の広さで、毎コマ transform でずらす */
+.minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.minimap-view {
+  position: relative;
+  display: block;
+  width: 176px;
+  height: 176px;
+  overflow: hidden;
+  border: 2px solid rgba(111, 230, 255, 0.5);
+  border-radius: 50%;
+  background: #101a26;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+}
+
+.minimap:hover .minimap-view,
+.minimap:focus-visible .minimap-view {
+  border-color: #6fe6ff;
+}
+
+.minimap:focus-visible {
+  outline: none;
+}
+
+.minimap-buffer {
+  position: absolute;
+  will-change: transform;
+}
+
+.minimap-arrow,
+.minimap-vehicle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.minimap-arrow {
+  width: 22px;
+  height: 22px;
+  line-height: 0;
+}
+
+.minimap-vehicle {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #060a12;
+  border-radius: 50%;
+  background: #6fe6ff;
+  color: #04111c;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.minimap-north {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #6fe6ff;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  text-shadow: 0 0 3px #000;
+}
+
+.minimap-caption {
+  max-width: 220px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(2, 4, 9, 0.72);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.minimap-empty {
+  cursor: default;
+}
+
+.minimap-note {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  opacity: 0.8;
+}
+
+/* 全体の地図（画面いっぱいの重ね。町の地図データの案内（z-index 11）より上。#1） */
+.town-map {
+  position: absolute;
+  z-index: 12;
+  inset: 0;
+  background: #101a26;
+  outline: none;
+}
+
+.town-map-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  touch-action: none;
+}
+
+.town-map-top {
+  cursor: grab;
+}
+
+.town-map-top:active {
+  cursor: grabbing;
+}
+
+.town-map-bar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid rgba(111, 230, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(2, 4, 9, 0.82);
+  font-size: 13px;
+}
+
+.town-map-bar .panel-title {
+  margin: 0;
+}
+
+.town-map-help {
+  flex: 1;
+  margin: 0;
+}
+
+.town-map-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.town-map-buttons .button.small {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.town-map-card {
+  top: auto;
+  bottom: 12px;
+  left: 50%;
+  width: min(420px, calc(100% - 24px));
+  transform: translateX(-50%);
+}
+
+.town-map-card p {
+  margin: 0 0 6px;
+}
+
+/* スマホの幅: 小さい地図は小さくして右上（右下は操作の説明・指と重なりやすい）。行き先のパネルはその下へ。全体の地図は全画面のまま */
+@media (max-width: 640px) {
+  .minimap {
+    top: 12px;
+    bottom: auto;
+  }
+
+  .minimap-view {
+    width: 112px;
+    height: 112px;
+  }
+
+  .minimap-scale {
+    display: none;
+  }
+
+  .minimap-caption {
+    max-width: 140px;
+    font-size: 10px;
+  }
+
+  .travel-panel {
+    top: 160px;
+    max-height: calc(100% - 172px);
+  }
+
+  .walk-notice {
+    max-width: calc(100% - 24px);
+  }
+
+  .town-map-help {
+    flex-basis: 100%;
+    order: 3;
+  }
 }

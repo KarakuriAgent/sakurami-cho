@@ -799,6 +799,8 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
     parts.push('src/clock.ts', 'src/quality.ts', 'src/ui/TownPanel.tsx', 'src/ui/TownNotice.tsx')
     // 入口のページと読み込み中の進み具合
     parts.push('src/loading.ts')
+    // #1: 町の地図（ミニマップと全体の地図）
+    parts.push('src/mapData.ts', 'src/mapDraw.ts', 'src/townMap.ts', 'src/ui/MiniMap.tsx', 'src/ui/TownMap.tsx')
     expect(files).toEqual(expect.arrayContaining(parts.map((f) => `${EXAMPLE_DIR}/${f}`)))
     expect(files.filter((f) => !f.startsWith(`${EXAMPLE_DIR}/src/`) && !(EXAMPLE_ROOT_FILES as readonly string[]).includes(f.slice(EXAMPLE_DIR.length + 1)))).toEqual([])
     // examples/ の下は例のアプリだけ（ほかの例を足したら、ここと EXAMPLE_DIR を一覧にする）

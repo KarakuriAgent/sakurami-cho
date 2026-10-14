@@ -4,13 +4,15 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { createKeyInput } from '../input/keys'
 import { watchClicks } from '../input/click'
 import { jumpByKey, keyHook, subscribeWalk, updateMarker, walkAtScreen, walkByKeys, walkUi } from '../walk'
+import { mapUi } from '../townMap'
 
 const _fwd = new THREE.Vector3()
 
 /**
  * WASD・クリックで歩く・スペースキーで跳ぶ（優先度 −59: 歩きを進める −58 の前に、このコマの入力を入れる）。
  * キーはページ全体（window）で受け、向きはカメラの見ている向きを水平にした物（= 追うカメラの向き yaw の逆。カメラは人の向きについて回らない）。
- * クリックは Canvas の上で、ドラッグ（追うカメラを回す）と見分ける（input/click.ts）。行き先には小さな印（仮）
+ * クリックは Canvas の上で、ドラッグ（追うカメラを回す）と見分ける（input/click.ts）。行き先には小さな印（仮）。
+ * 全体の地図（ui/TownMap.tsx。画面いっぱいの重ね）を開いている間は、キーで歩かせず、跳ばない（押した回は捨てる。#1）
  */
 export function Controls() {
   const camera = useThree((s) => s.camera)
@@ -32,8 +34,9 @@ export function Controls() {
     const keys = keyHook.keys
     if (keys) {
       camera.getWorldDirection(_fwd)
-      walkByKeys(keys.direction(_fwd.x, _fwd.z), keys.run)
-      if (keys.takeJump()) jumpByKey()
+      const paused = mapUi().open
+      walkByKeys(paused ? null : keys.direction(_fwd.x, _fwd.z), keys.run)
+      if (keys.takeJump() && !paused) jumpByKey()
     }
     updateMarker()
   }, -59)
