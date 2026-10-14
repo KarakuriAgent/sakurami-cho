@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import { walker } from '../town'
 import { travelTo } from '../travel'
 import { arrowDegrees, type Box } from '../mapData'
-import { drawBase, drawPins, drawWalker, type MapView } from '../mapDraw'
-import { baseOptions, fullHook, mapDestinations, mapModel, mapUi, openMap, subscribeMap, type MapDestination, type MapWhere } from '../townMap'
+import { drawBase, drawHover, drawPins, drawWalker, type MapView } from '../mapDraw'
+import { baseOptions, fullHook, hoverPin, mapDestinations, mapModel, mapUi, openMap, subscribeMap, type MapDestination, type MapWhere } from '../townMap'
 
 /** 寄れる縮尺の上（CSS px / m） */
 const K_MAX = 8
@@ -15,7 +15,8 @@ const PICK_PX = 18
 const ZOOM_STEP = 1.5
 
 /**
- * 全体の地図（画面いっぱいの重ね。ミニマップを押すと開く。#1）。北が上。町全体を描き、今いる所（矢印か乗り物の印）と行き先の一覧の 45 か所の点を出す。
+ * 全体の地図（画面いっぱいの重ね。ミニマップを押すと開く。#1）。北が上。町全体を描き、今いる所（矢印か乗り物の印）と行き先の一覧の 45 か所の点、
+ * 置いてある・呼ばれて来るホバーの「ホ」の印（#9）を出す。
  * - 動かす: ドラッグ・ホイール（カーソルの所を中心に寄る）・2 本指でつまむ（スマホ）・「寄る」「引く」・+ −のキー・「今いる所」
  * - 行き先の点を押すと、下にその行き先と、行き先の一覧と同じ「そこへ行く」（旅程。travel.ts の travelTo）を出す。行き始めたら地図を閉じる
  * - Esc か「閉じる」で閉じる。開いている間は地図にフォーカスを置き（閉じたら前の所へ戻す）、WASD・スペースキーで歩く人を動かさない（scene/Controls.tsx）
@@ -83,7 +84,7 @@ function Overlay() {
     let topDirty = true
     let sel: string | null = fullHook.selected
     let where: MapWhere = mapUi().where
-    let last = { x: NaN, y: NaN, deg: NaN }
+    let last = { x: NaN, y: NaN, deg: NaN, hx: NaN, hy: NaN, hc: false }
     const v = fullHook
 
     const kMin = () => Math.min(W / ((model.bounds.xmax - model.bounds.xmin) * 1.05), H / ((model.bounds.ymax - model.bounds.ymin) * 1.05))
@@ -168,13 +169,18 @@ function Overlay() {
       }
       const p = walkerAt()
       const deg = arrowDegrees(walker.motion.heading)
+      const hv = hoverPin()
+      const hx = hv?.x ?? NaN
+      const hy = hv?.y ?? NaN
       if (Math.abs(p.x - last.x) * v.k > 0.5 || Math.abs(p.y - last.y) * v.k > 0.5 || Math.abs(deg - last.deg) > 1) topDirty = true
+      if (Number.isNaN(hx) !== Number.isNaN(last.hx) || Math.abs(hx - last.hx) * v.k > 0.5 || Math.abs(hy - last.hy) * v.k > 0.5 || !!hv?.coming !== last.hc) topDirty = true
       if (!topDirty) return
       const tv = view()
       tctx.clearRect(0, 0, top.width, top.height)
       drawPins(tctx, tv, pins, { selected: sel, font: 12 })
+      if (hv) drawHover(tctx, tv, hv.x, hv.y, hv.coming)
       drawWalker(tctx, tv, p.x, p.y, deg, where.vehicle)
-      last = { x: p.x, y: p.y, deg }
+      last = { x: p.x, y: p.y, deg, hx, hy, hc: !!hv?.coming }
       topDirty = false
     }
     raf = requestAnimationFrame(frame)

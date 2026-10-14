@@ -1,4 +1,5 @@
 import { INTERIOR_ZONES, TOWN_DATA, type InteriorZoneId } from 'sakurami-cho/core'
+import { hoverStatus } from 'sakurami-cho/character'
 import { onTownStatus, townState, walker } from './town'
 import { DESTINATION_GROUPS, reachable } from './travel'
 import { arrowDegrees, buildMapModel, needsRecenter, shortLabel, type InfraJson, type MapModel, type NamedJson, type WalkJson } from './mapData'
@@ -13,6 +14,8 @@ import { drawBase, drawPins, type BaseOptions, type GroundLayer, type MapPin, ty
  * - 北が上で固定（全体の地図と向きをそろえる）。歩く人は真ん中の向き付きの矢印。乗り物に乗っている間は、乗り物の位置（乗っている人の位置）を
  *   真ん中にして、矢印を乗り物の印（字 1 つ）に替え、ケーブル・緑電は乗っている路線の線を強く描く
  * - ラボ・中のある建物の中では、町の地図の上でその建物に印を付ける（中の間取りは出さない）
+ * - ホバー（#9）: 置いてある・呼ばれて来る所に「ホ」の印を出す（ミニマップは窓の外なら縁に寄せる。乗っている間は真ん中の印が「ホ」）。
+ *   ワープしても、ホバーは置いた所のまま（印もそこ）
  * - 下に町の地面の画を薄く敷く（下の「地面の画」。敷く・敷かないを見比べて決めた）
  * - ミニマップは半径 MINIMAP_RADIUS m。下絵（その 2 倍の広さ）を描いておき、毎コマは下絵を CSS でずらし、矢印を回すだけ。歩く人が下絵の
  *   中心から離れた・印や強く描く路線・大きさが変わったときだけ描き直す（./mapData の needsRecenter）。毎コマの段は scene/Scene.tsx の MapFrame
@@ -231,6 +234,10 @@ const mini = {
   view: null as HTMLElement | null,
   buffer: null as HTMLCanvasElement | null,
   arrow: null as HTMLElement | null,
+  /** ホバーの印（窓の真ん中からのずらしで置く）と、前に書いたずらし（CSS px。NaN = 隠している） */
+  hover: null as HTMLElement | null,
+  hx: NaN,
+  hy: NaN,
   /** 窓の直径（CSS px） */
   size: 0,
   dpr: 1,
@@ -242,6 +249,15 @@ const mini = {
   tx: NaN,
   ty: NaN,
   deg: NaN,
+}
+
+/**
+ * 地図に出すホバーの印（地図の hoverStatus。町の平面座標）。まだ一度も呼んでいない・乗っている（真ん中の印が「ホ」）間は null
+ */
+export function hoverPin(): { x: number; y: number; coming: boolean } | null {
+  const h = hoverStatus()
+  if (h.phase !== 'parked' && h.phase !== 'coming') return null
+  return { x: h.x, y: -h.z, coming: h.phase === 'coming' }
 }
 
 /** 確かめ用の数（毎コマの段の時間と、下絵を描き直した回数と時間） */
@@ -259,6 +275,10 @@ export function setMiniBuffer(el: HTMLCanvasElement | null) {
 export function setMiniArrow(el: HTMLElement | null) {
   mini.arrow = el
   mini.deg = NaN
+}
+export function setMiniHover(el: HTMLElement | null) {
+  mini.hover = el
+  mini.hx = mini.hy = NaN
 }
 /** 窓の直径（CSS px）が変わったとき（ResizeObserver） */
 export function setMiniSize(size: number) {
@@ -325,6 +345,33 @@ export function updateMiniMap() {
     mini.tx = tx
     mini.ty = ty
   }
+  if (mini.hover) {
+    // ホバーの印: 真ん中（歩く人）からのずらし。窓の外なら縁に寄せる（向きが分かるように）
+    const pin = hoverPin()
+    let hx = NaN
+    let hy = NaN
+    if (pin) {
+      hx = (pin.x - x) * k
+      hy = (y - pin.y) * k
+      const rim = mini.size / 2 - 9
+      const d = Math.hypot(hx, hy)
+      if (d > rim) {
+        hx *= rim / d
+        hy *= rim / d
+      }
+      hx = Math.round(hx * 2) / 2
+      hy = Math.round(hy * 2) / 2
+    }
+    if (!(hx === mini.hx && hy === mini.hy) && !(Number.isNaN(hx) && Number.isNaN(mini.hx))) {
+      if (pin) {
+        mini.hover.style.display = ''
+        mini.hover.style.transform = `translate(calc(-50% + ${hx}px), calc(-50% + ${hy}px))`
+        mini.hover.dataset.coming = pin.coming ? '1' : ''
+      } else mini.hover.style.display = 'none'
+      mini.hx = hx
+      mini.hy = hy
+    }
+  }
   if (mini.arrow) {
     const deg = Math.round(arrowDegrees(walker.motion.heading) * 2) / 2
     if (deg !== mini.deg) {
@@ -367,6 +414,7 @@ export function mapDebugState() {
       center: [r(mini.bx), r(mini.by)] as [number, number],
       offset: [mini.tx, mini.ty] as [number, number],
       arrow: mini.deg,
+      hover: [mini.hx, mini.hy] as [number, number],
       frames: stats.frames,
       updateAvgMs: stats.frames ? r(stats.updateMs / stats.frames) : 0,
       updateMaxMs: r(stats.updateMax),

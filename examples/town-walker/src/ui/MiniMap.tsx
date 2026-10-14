@@ -1,8 +1,9 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { MINIMAP_RADIUS, mapUi, openMap, setMiniArrow, setMiniBuffer, setMiniSize, setMiniView, subscribeMap } from '../townMap'
+import { MINIMAP_RADIUS, mapUi, openMap, setMiniArrow, setMiniBuffer, setMiniHover, setMiniSize, setMiniView, subscribeMap } from '../townMap'
 
 /**
  * 小さい地図（ミニマップ。右下、スマホの幅では右上。#1）。北が上で、真ん中が歩く人（向き付きの矢印。乗り物の中は乗り物の印）。
+ * 置いてある・呼ばれて来るホバーは「ホ」の印（窓の外なら縁。#9。置くのは townMap.ts）。
  * 描くのは townMap.ts（下絵を描いておき、毎コマはずらすだけ）。押すと全体の地図（ui/TownMap.tsx）が開く。
  * 町の地図データが無い・読めないときは、地図を出さずに理由を出す。確かめの道具は data-walker="minimap" で押す
  */
@@ -55,6 +56,9 @@ export function MiniMap() {
         <canvas className="minimap-buffer" ref={setMiniBuffer} aria-hidden="true" />
         <span className="minimap-north" aria-hidden="true">
           N
+        </span>
+        <span className="minimap-hover" ref={setMiniHover} style={{ display: 'none' }} aria-hidden="true">
+          ホ
         </span>
         {ui.where.vehicle ? (
           <span className="minimap-vehicle" aria-hidden="true">

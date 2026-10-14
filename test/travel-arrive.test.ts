@@ -48,7 +48,6 @@ const { placeAtPoint } = await import(P + '/character/avatar/teleport.ts')
 const { driveRides } = await import(P + '/character/ride/drive.ts')
 const { updateRiders } = await import(P + '/character/ride/riders.ts')
 const { setWarpPermit } = await import(P + '/character/ride/warp.ts')
-const { hoverHome } = await import(P + '/world/outdoor/transit/hoverCraft.ts')
 const TR = await import(P + '/character/avatar/travel.ts')
 const { TRAVEL_PLACES, ZONE_PORTALS } = await import(P + '/core/travel.ts')
 const { WAYPOINTS } = await import(P + '/core/routes.ts')
@@ -110,7 +109,6 @@ const start = (o) => {
   TR.cancelTravel(ch)
   for (let i = 0; i < 30 * 60 && (ch.ride.phase !== 'none' || TR.traveling(ch)); i++) frame()
   townWarp.cancel(ch)
-  hoverHome.at = 'lab'
   const a = ORIGINS[o]
   if (a === null) placeAt(ch, 'front')
   else if (typeof a === 'string') placeAt(ch, a)

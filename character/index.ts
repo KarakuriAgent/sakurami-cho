@@ -25,6 +25,9 @@ export { setWarpPermit } from './ride/warp'
 export type { RideTime } from './ride/warp'
 export { advanceWheelTo, beginWheelBoarding, cancelWheelBoarding, requestWheelAlight, WHEEL_EXIT_OPEN_DEG, wheelBoardProblem, wheelProblemText } from './ride/ride'
 export type { WheelProblem } from './ride/ride'
+// ホバーを呼ぶ（例のアプリの「ホバーを呼ぶ」のために足した部品。#9。乗るのは旅程の via: 'hover'）と、ホバーの様子
+export { hoverStatus, summonHover } from './ride/hoverRide'
+export type { HoverStatus } from './ride/hoverRide'
 // 町の中の移動（旅程。作れない理由は種類と値で、字は travelProblemText）
 export { cancelTravel, driveTravel, isTravelProblem, startTravel, traveling, travelProblemText, travelState } from './avatar/travel'
 export type { TravelCut, TravelPlan, TravelProblem, TravelRequest, TravelRouteId, TravelTime } from './avatar/travel'

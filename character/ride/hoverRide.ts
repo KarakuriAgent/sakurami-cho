@@ -2,19 +2,19 @@ import * as THREE from 'three'
 import type { SeatSpec } from '../avatar/body'
 import { groundHeight } from '../avatar/locomotion'
 import type { Character, CharacterMotion } from '../avatar/character'
-import { HOVER_DOCKS, type HoverDock, type HoverDockId } from '../../core/hoverDocks'
 import { zoneOfPoint } from '../../core/interiors'
-import { SITE } from '../../core/town'
+import { ZONE_PORTALS, type TravelZone } from '../../core/travel'
+import { EDGE_KIND } from '../../core/walk/walkData'
 import { outdoor } from '../../world/environment/daylight'
 import { transitClock } from '../../world/outdoor/transit/clock'
-import { hoverCraft, hoverHome, hoverVehicle, parkedMatrix } from '../../world/outdoor/transit/hoverCraft'
+import { hoverCraft, hoverHome, hoverVehicle, parkedHeight, parkedMatrix } from '../../world/outdoor/transit/hoverCraft'
 import type { Car } from '../../world/outdoor/transit/vehicle'
 import { townData } from '../../world/outdoor/town/townData'
 import { HOVER } from '../../world/outdoor/transit/hoverCar'
-import { droneOnLane, LANE_OFFSET, LANE_SPEED, laneNet, type LaneTrack } from '../../world/outdoor/transit/lanes'
 import { TRACK_HALF, tramNet, tramOccupies, type TramLine } from '../../world/outdoor/transit/trams'
 import { pathPoint } from '../../world/outdoor/transit/transitData'
 import { townEvents } from '../../world/townHost'
+import { propsNear } from '../../world/walk/townProps'
 import { townSolids } from '../../world/walk/townSolids'
 import { townWalk } from '../../world/walk/townWalk'
 import { waitViews, type PlatformView } from './platformViews'
@@ -24,24 +24,29 @@ import { makePath, pathAt, walkPath, type Path } from './walk'
 import { advanceBy, cancelWarp, type RideTime } from './warp'
 
 /**
- * 花音のホバーの一人乗りに乗る（kanon.travel の via=hover。docs/design/town.md §21・§7 の 211〜）。
+ * 花音のホバーの一人乗り（kanon.travel の via=hover。docs/design/town.md §21。#9 でどこからでも呼べる形にした）。
  *
- * 人が乗るホバーは浮遊機器法（単独で動くロボット・機器の決まり）の対象外の乗り物として扱う（ユーザーの決定）。町の中は浮遊レーンの上を、
- * レーンの高さ（地上 5m 以下）で、配送の浮遊機と同じ速さ（4.5 m/s）・同じ左側を飛ぶ。時刻表は無い。
+ * 人が乗るホバーは浮遊機器法（単独で動くロボット・機器の決まり）の対象外の乗り物として扱う（ユーザーの決定）。乗り場は無く、浮遊レーンも使わない。
+ * 町の道のグラフ（walk.json）の上だけを、地面から FLY_HEIGHT（0.6m）の高さで、CRUISE（12 m/s）で飛ぶ（坂・石段・橋は地面に沿って上がり下がりする。
+ * 地下の道は通らない。町の道の外（水の上・草地）はまだ飛ばない）。広い道は進む向きの左に寄り、建物・木・石段のわきの擁壁・街灯の柱・ほかの人・
+ * 緑電の線路（編成の幅）から横へよける。緑電の線路を横切る所は、編成のいない時刻に通る（出る時刻を選ぶ）。浮遊レーンの配送機（地上 2.5m より上）とは高さが違う。
  *
- *   1. 乗る（board）: 乗り場の台に置いたホバーの横（乗り降りする側）から床板へ上がり、前を向いて鞍に腰掛け、ハンドルを握る
- *   2. 回す（power）: ファンを回す（2 秒）。レーンの配送機と近づかない時刻まで待つ（合流待ち。待つ時間の扱い wait）
- *   3. 浮き上がる（lift）: 台からレーンの高さ・左側の列へ、3〜4 秒の弧で上がり、そのままレーンの速さに
- *   4. 飛ぶ（cruise）: レーンの線に沿って（乗っている間の時間の扱い ride）。向かいから来る配送機とは右側ですれ違う
- *   5. 下りる（descend）: 行き先の乗り場の台へ 3〜4 秒の弧で下りて止まる（land）。ファンを止める
- *   6. 降りる（alight）: 立って、乗り降りする側へ床板から下りる。ホバーはその台に置いたまま（次に乗るまで）
- * 一緒に乗る仲間（KB-001。character/ride/party.ts）は乗らずに、ホバーの左（レーンの外の側。向かいの配送機と反対）の少し前を、花音の肩より上の高さで並んで飛ぶ。
- * 経路は、乗る人の仲間に浮かぶ仲間がいれば、並走する所も町の木・建物にかからないように選ぶ（planFlight の escort）。
- * ホバーの位置は交通の時計（運転の日の秒）だけから決まる（早送り・カットでも、配送機と同じ時計で動く）。
- * 機体（置いてある乗り場・行列・ファンの回り・灯り）は地図の側（world/outdoor/transit/hoverCraft.ts）で、ここが 1 コマ 1 回書く（ホバーは 1 台。
- * 乗る仕組みの状態は乗る人ごと（ch.rides.hover）だが、機体を書くのは最後に乗り始めた人（hoverUser）の更新だけ。まだ誰も乗っていない間は、
- * updateRiders（riders.ts）が乗る人の更新の前に置いてある姿を書く（updateParkedHover）。持ち主ごとの機体と、機体を地図が動かす形にするのは段 5）。
- * 回し始めた・台に着いたは地図の出来事（townEvents の hover.spinUp・hover.land）で知らせる（音の合図は使う側が鳴らす）。
+ * 呼ぶ（summonHover）: 呼んだ人の近くの歩ける所（道・広場。ラボ・中のある建物の中なら、そのゾーンの外の出入口の前）を探し、ホバーが今いる所から
+ * 飛んで来て、横に下りて待つ。今いる所から NEAR（100m）より遠い（まだ一度も呼んでいない）ときは、すぐその所に現れる。
+ * 乗っていない間は最後に下りた所に置いておく（hoverHome。次に呼ぶとそこから来る）。
+ *
+ * 乗る（旅程の via=hover。character/avatar/travel.ts）:
+ *   0. 待つ（await）: 呼んだホバーが来るまで横の所で待つ（待つ間の時間の扱い wait）
+ *   1. 乗る（board）: 置いたホバーの横（呼んだ人の側）から床板へ上がり、前を向いて鞍に腰掛け、ハンドルを握る
+ *   2. 回す（power）: ファンを回す（2 秒）。緑電の線路を横切るなら、編成のいない時刻まで待つ（待つ間の時間の扱い wait）
+ *   3. 飛ぶ（fly）: 少し真上へ浮いてから、町の道の上を飛ぶ（乗っている間の時間の扱い ride）。行き先の近くの歩ける所で、真上から下りて止まる
+ *   4. 降りる（land → stand → out）: ファンを止め、立って、行き先の側へ床板から下りる。ホバーはそこに置いたまま
+ * 一緒に乗る仲間（KB-001。character/ride/party.ts）は乗らずに、ホバーの左の少し前を、花音の肩より上の高さで並んで飛ぶ。
+ * 経路は、乗る人の仲間に浮かぶ仲間がいれば、並走する所も町の木・建物にかからないように選ぶ（escort）。
+ * ホバーの位置は交通の時計（運転の日の秒）から決まる（早送り・カットでも同じ時計で動く）。
+ * 機体（置いてある所・行列・ファンの回り・灯り）は地図の側（world/outdoor/transit/hoverCraft.ts）で、ここが 1 コマ 1 回書く（ホバーは 1 台。
+ * 乗っている人がいればその人の更新が書き、いなければ updateRiders（riders.ts）が乗る人の更新の前に updateHoverCraft で書く）。
+ * 回し始めた・下りたは地図の出来事（townEvents の hover.spinUp・hover.land）で知らせる（音の合図は使う側が鳴らす）。
  */
 
 const H = HOVER
@@ -53,11 +58,23 @@ const _dir = new THREE.Vector3()
 const _q = new THREE.Quaternion()
 const _e = new THREE.Euler()
 const _s = new THREE.Vector3(1, 1, 1)
+const _m = new THREE.Matrix4()
 const _pp = pathPoint()
 
-/** レーンの上の速さ（配送機と同じ） */
-const CRUISE = LANE_SPEED
-/** ファンを回してから浮き上がれるまで・止まってからファンを止めるまで（秒） */
+/** 飛ぶ高さ（ホバーの足の下から地面まで。m）と速さ（m/s） */
+export const FLY_HEIGHT = 0.6
+export const CRUISE = 12
+/** 呼んだときに飛んで来るのを見せる離れ（m。これより遠ければ、すぐ横に現れる） */
+export const SUMMON_NEAR = 100
+/** 速くする・遅くする（m/s²）・曲がるときの横の加速（m/s²）・真上へ浮く・真下へ下りるときの速さ（m/s） */
+const ACCEL = 2.6
+const A_LAT = 3.2
+const V_LIFT = 0.55
+/** 真上へ浮く・下りる高さ（m。そこから先は進みながら飛ぶ高さへ）と、進みながら高さを変える長さ（m） */
+const LIFT_UP = 0.4
+const LIFT_RUN = 2.5
+/** 呼ばれて飛ぶ前にファンを回す秒（人が乗っていない）・乗ってから回す秒・止まってからファンを止めるまで（秒） */
+const SUMMON_SPIN = 1.2
 const SPIN_UP = 2.0
 const SPIN_DOWN = 1.6
 /** 床板の上の立つ所（局所の z）と、乗り降りする横の地面の所（|x|） */
@@ -69,106 +86,130 @@ const SEAT: SeatSpec = { height: H.seatY - H.deckY, shift: H.seatZ - STAND_Z, ha
 const ESCORT_LOCAL = new THREE.Vector3(0.85, H.deckY + 1.55, 0.45)
 /** 並ぶ所が町の木の幹・建物にかかるときに逃げる所（花音の頭の後ろの上） */
 const ESCORT_TUCK = new THREE.Vector3(0, H.deckY + 2.05, -0.6)
+/** 道の縁から空ける幅（m。ホバーの幅の半分 0.33m と、乗る人の膝・余白） */
+const EDGE_MARGIN = 0.6
+/** 緑電の線路の真ん中の線（複線の間）から離れる横の幅（m）: 編成の幅（線路から ±1.2m）+ ホバーの幅の半分と乗る人 + 余白 */
+const TRAM_CLEAR = TRACK_HALF + 1.2 + 0.95
+/** ほかの人から離れる（m） */
+const PEOPLE_CLEAR = 1.0
 
 /* -------------------------------------------------------------------------- */
-/* 飛ぶ道（浮き上がる弧・レーン・下りる弧）と時間                                          */
+/* 置く所・飛ぶ道                                                                 */
 /* -------------------------------------------------------------------------- */
+
+/** 置く所（シーンの x, z と足の高さ y・向き・乗り降りする側（局所の x の向き）） */
+export interface HoverPark {
+  x: number
+  y: number
+  z: number
+  heading: number
+  side: 1 | -1
+}
 
 interface FlightSample {
-  /** シーンの位置（ホバーの原点）・進む向き（水平の heading）・道のりの長さ */
+  /** シーンの位置（ホバーの原点）・進む向き（水平の heading）・道のりの長さ（3 次元）・出てからの秒・速さ・足元の地面の高さ */
   p: THREE.Vector3
   heading: number
   s: number
+  t: number
+  v: number
+  g: number
 }
 
 export interface HoverFlight {
-  from: HoverDock
-  to: HoverDock
-  lane: LaneTrack
-  /** レーンの長さの増える向きに進むか（+1 / −1）と、レーンへ入る所の長さ */
-  dir: 1 | -1
-  dM: number
+  from: HoverPark
+  to: HoverPark
   pts: FlightSample[]
-  /** 浮き上がる弧・レーン・下りる弧の長さと秒 */
-  liftLen: number
-  cruiseLen: number
-  descLen: number
-  liftSec: number
-  cruiseSec: number
-  descSec: number
+  /** 道のりの長さ（m）と、出てから下りて止まるまでの秒 */
+  length: number
   total: number
-  /** 道の上で、地面・建物・木に近すぎた所の数（確かめ用。escort = 並走する所がかかった所。並走の場所を空けない道では数えない） */
-  clearance: { low: number; blocked: number; minAbove: number; maxAbove: number; escort: number; tram: number }
+  /** 確かめ用: 道の上で、建物・木・擁壁・街灯にかかる所・地面からの高さの小さい / 大きい所・道の外の所・緑電の線路の上の所の数（水平に飛ぶ所だけ） */
+  clearance: { blocked: number; minAbove: number; maxAbove: number; offWay: number; tram: number; people: number }
   /** 並走する仲間の場所を空けた道か */
   escort: boolean
-  /** 町の木・建物をよけて決めた道か（町のタイルを全部読む前は、よけない道で時間だけ見積もる） */
+  /** 町の木・建物をよけて決めた道か（町のタイルを読んでいる間は、よけない道で時間だけ見積もる） */
   avoided: boolean
-  /** 緑電の線路を横切る所（道のりの長さ s・系統・線の上の長さ d・線からの横のずらし lat） */
-  tramCross: { s: number; line: TramLine; d: number; lat: number }[]
+  /** 緑電の線路を横切る所（出てからの秒 t・系統・線の上の長さ d・線からの横のずらし lat） */
+  tramCross: { t: number; line: TramLine; d: number; lat: number }[]
 }
 
-/** 3 次ベジェの点の列 */
-function bezier(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3, n: number) {
-  const out: THREE.Vector3[] = []
-  for (let i = 0; i <= n; i++) {
-    const t = i / n
-    const a = (1 - t) ** 3
-    const b = 3 * (1 - t) ** 2 * t
-    const c = 3 * (1 - t) * t * t
-    const d = t ** 3
-    out.push(new THREE.Vector3(a * p0.x + b * p1.x + c * p2.x + d * p3.x, a * p0.y + b * p1.y + c * p2.y + d * p3.y, a * p0.z + b * p1.z + c * p2.z + d * p3.z))
-  }
-  return out
-}
+/** 町のタイル（建物・木）を読み終えるのを待つ間か（目録が無い・全部読んだなら待たない） */
+const tilesPending = () => townData.manifest !== null && !townData.allTilesLoaded()
+
+const lerpAngle = (a: number, b: number, k: number) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * k
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a))
 
 /**
- * レーンの長さ d の点（シーン）と進む向き（シーンの x, z の単位ベクトル）。off = 進む向きの左へのずらし（配送機と同じ左側の列は LANE_OFFSET）。
- * 高さはレーンの線のまま（別に決める）
+ * 点（シーン）が町の当たりの形にかかるか。人の歩く道・広場の上では、建物の外形の箱（駅の大庇・門・通り抜けの下など、歩く人が下を通る物も
+ * 地面から屋根までの箱になっている）は見ず、木（葉と幹）と石段のわきの擁壁だけを見る
  */
-function lanePoint(lane: LaneTrack, d: number, dir: 1 | -1, out: THREE.Vector3, tangent: THREE.Vector3, off = LANE_OFFSET) {
-  lane.path.at(d, _pp)
-  const tx = _pp.dx * dir
-  const ty = _pp.dy * dir
-  // 進む向きの左（配送機と同じ。町の平面で (−ty, tx)）
-  const x = _pp.x - ty * off
-  const y = _pp.y + tx * off
-  tangent.set(tx, 0, -ty)
-  return out.set(x, _pp.z - SITE.labFloorElevation, -y)
+function solidAt(x: number, y: number, z: number, onWay = townWalk.onWalkway(x, z, 0)) {
+  return townSolids.blocker(x, y, z, 0, onWay)
 }
 
 /**
  * ホバー（と花音の体・左に並ぶ仲間）の場所が、町の建物・木（葉と幹）・石段のわきの擁壁にかかるか。y = ホバーの原点、(nx, nz) = 進む向きの左
- * （並走する仲間の場所も見るとき。0, 0 ならホバーと花音だけ）
+ * （並走する仲間の場所も見るとき。0, 0 ならホバーと花音だけ）。床板と脚（原点から 0.15・0.5m）・腰掛けた花音の体（1.05m）・頭（1.62m）の高さで、
+ * 真ん中とまわり（床板は 0.45m・体は 0.35m・頭は 0.25m 離れた 4 点）を見る（葉の外側の余白は足さない。カメラの確かめの余白は広すぎるため）
  */
+const BODY_PROBES: readonly [number, number][] = [
+  [0.15, 0.45],
+  [0.5, 0.45],
+  [1.05, 0.35],
+  [1.62, 0.25],
+]
+const AROUND: readonly [number, number][] = [
+  [0, 0],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+]
 function hoverBlocked(x: number, y: number, z: number, nx = 0, nz = 0) {
-  return !!(
-    townSolids.blocker(x, y + 0.45, z, 0.45) ||
-    townSolids.blocker(x, y + 1.05, z, 0.45) ||
-    townSolids.blocker(x, y + 1.62, z, 0.32) ||
-    ((nx || nz) && townSolids.blocker(x + nx * ESCORT_LOCAL.x, y + ESCORT_LOCAL.y, z + nz * ESCORT_LOCAL.x, 0.25))
-  )
+  // 歩く道の上か（真ん中とまわりの 4 向き。まわりは 0.25〜0.45m なので、0.45m の所で見る）
+  const way = AROUND.map(([dx, dz]) => townWalk.onWalkway(x + dx * 0.45, z + dz * 0.45, 0))
+  for (const [h, r] of BODY_PROBES) for (let k = 0; k < 5; k++) if (solidAt(x + AROUND[k][0] * r, y + h, z + AROUND[k][1] * r, way[k])) return true
+  return !!((nx || nz) && solidAt(x + nx * ESCORT_LOCAL.x, y + ESCORT_LOCAL.y, z + nz * ESCORT_LOCAL.x))
+}
+
+/** 街灯の柱・木の幹にかかるか（シーンの x, z。ホバーの幅の半分 + 余白） */
+function propBlocked(x: number, z: number, clear = 0.55) {
+  for (const p of propsNear(x, -z, clear + 0.4)) if (Math.hypot(p.x - x, p.y + z) < p.r + clear) return true
+  return false
+}
+
+/** よける人（updateRiders が渡す乗る人の一覧。飛ぶ道・置く所を決めるときの位置）と、よけない人（乗る人・呼んだ人と、その仲間） */
+let people: readonly Character[] = []
+function peopleNear(x: number, z: number, skip: Character | null, clear = PEOPLE_CLEAR) {
+  for (const c of people) {
+    if (c === skip || (skip && c.ride.member.leader === skip)) continue
+    const p = c.motion.position
+    if (Math.abs(p.x - x) < clear && Math.abs(p.z - z) < clear && Math.hypot(p.x - x, p.z - z) < clear) return true
+  }
+  return false
 }
 
 /**
- * 緑電の線路の真ん中の線（複線の間）の索引（平面。8m の升目）。ホバーは、編成（線路の真ん中から ±1.75m の線路の上の幅 2.4m）と、線路の上の
- * 架線（地上 5.4m。花音の頭は地上 5m ほど）から横へ 2m 離れる（浮遊レーン条例 5「緑電の架線から 2m 以上」）: 真ん中の線から TRAM_CLEAR m の内には入らない
+ * 緑電の線路の真ん中の線（複線の間）の索引（平面。8m の升目）と、点（シーン）から clear m の内に線があるか
  */
-const TRAM_CLEAR = TRACK_HALF + 2.0 + 0.33 + 0.3
 let tramGrid: Map<number, number[]> | null = null
+let tramLinesRef: unknown = null
 let tramSegs: number[] = []
-function nearTram(x: number, z: number) {
+function nearTram(x: number, z: number, clear = TRAM_CLEAR) {
   const lines = tramNet.lines
   if (!lines?.length) return false
-  if (!tramGrid) {
+  if (!tramGrid || tramLinesRef !== lines) {
     tramGrid = new Map()
+    tramLinesRef = lines
     tramSegs = []
+    const C = TRAM_CLEAR + 1
     for (const l of lines) {
       const P = l.path
       for (let i = 1; i < P.x.length; i += 1) {
         const id = tramSegs.length / 4
         tramSegs.push(P.x[i - 1], P.y[i - 1], P.x[i], P.y[i])
-        for (let gx = Math.floor((Math.min(P.x[i - 1], P.x[i]) - TRAM_CLEAR) / 8); gx <= Math.floor((Math.max(P.x[i - 1], P.x[i]) + TRAM_CLEAR) / 8); gx++)
-          for (let gy = Math.floor((Math.min(P.y[i - 1], P.y[i]) - TRAM_CLEAR) / 8); gy <= Math.floor((Math.max(P.y[i - 1], P.y[i]) + TRAM_CLEAR) / 8); gy++) {
+        for (let gx = Math.floor((Math.min(P.x[i - 1], P.x[i]) - C) / 8); gx <= Math.floor((Math.max(P.x[i - 1], P.x[i]) + C) / 8); gx++)
+          for (let gy = Math.floor((Math.min(P.y[i - 1], P.y[i]) - C) / 8); gy <= Math.floor((Math.max(P.y[i - 1], P.y[i]) + C) / 8); gy++) {
             const k = gx * 100003 + gy
             let list = tramGrid.get(k)
             if (!list) tramGrid.set(k, (list = []))
@@ -187,292 +228,505 @@ function nearTram(x: number, z: number) {
     const dx = tramSegs[i * 4 + 2] - ax
     const dy = tramSegs[i * 4 + 3] - ay
     const t = Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1e-9)))
-    if (Math.hypot(px - ax - dx * t, py - ay - dy * t) < TRAM_CLEAR) return true
+    if (Math.hypot(px - ax - dx * t, py - ay - dy * t) < clear) return true
   }
   return false
 }
 
-/**
- * よける道の横のずらし（進む向きの左が +。m）と高さの上げ（m）の候補: −1.2〜+6.0m。ふだんは浮遊レーンの通り道（枝を払った幅 ±2.1m。
- * world/walk/laneCorridor.ts）の内、左側の列（+1.2m）。緑電の通りの上を通る所（丘レーンの 1.5km ほど）は、架線から 2m 離れる歩道の側の上へ
- */
-const AVOID_OFF = Array.from({ length: 25 }, (_, i) => -1.2 + i * 0.3)
-const AVOID_UP = [0, 0.5, 1.0]
+/** 町の歩ける所（道・石段・橋・広場の幅の中。ホームなどの歩ける面も）か */
+function onTownGround(x: number, z: number, margin = 0) {
+  return townWalk.onWalkway(x, z, margin) || townWalk.extraAt(x, -z) !== null
+}
+
+/** 置いたホバー（向き heading）が、まわりの物・人・緑電にかからないか。skip = よけない人 */
+function parkClear(x: number, y: number, z: number, heading: number, skip: Character | null) {
+  if (!townWalk.onWalkway(x, z, EDGE_MARGIN)) return false
+  const fx = Math.sin(heading)
+  const fz = Math.cos(heading)
+  for (const k of [-0.7, 0, 0.7]) {
+    const px = x + fx * k
+    const pz = z + fz * k
+    if (!townWalk.onWalkway(px, pz, 0.35)) return false
+    if (hoverBlocked(px, y, pz)) return false
+    if (propBlocked(px, pz, 0.6)) return false
+  }
+  if (nearTram(x, z)) return false
+  if (peopleNear(x, z, skip, 1.25)) return false
+  return true
+}
+
+/** 道の向き（シーンの heading）。点の近くの道（町の道のグラフの辺）に沿う向き。道が無ければ null */
+function roadHeading(x: number, z: number): number | null {
+  const nav = townWalk.nav
+  if (!nav) return null
+  const hit = nav.snap(x, -z, 12)
+  if (!hit) return null
+  const a = nav.pointOnEdge(hit.edge, hit.along - 1)
+  const b = nav.pointOnEdge(hit.edge, hit.along + 1)
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  if (Math.hypot(dx, dy) < 1e-3) return null
+  // 平面 (dx, dy) → シーン (dx, −dy)
+  return Math.atan2(dx, -dy)
+}
+
+/** 置いたホバーの、点 (px, pz) のある側（局所の x の向き。+1 = 前を向いて左） */
+function sideOf(park: { x: number; z: number; heading: number }, px: number, pz: number): 1 | -1 {
+  // 局所の +x（左）はシーンの (cos h, −sin h)
+  const lx = (px - park.x) * Math.cos(park.heading) - (pz - park.z) * Math.sin(park.heading)
+  return lx >= 0 ? 1 : -1
+}
+
+/** 置いたホバーの横の、乗り降りする所（シーンの x, z） */
+function sideSpot(park: HoverPark, side: 1 | -1, out: THREE.Vector3) {
+  _q.setFromAxisAngle(_d.set(0, 1, 0), park.heading)
+  _m.compose(_v.set(park.x, park.y, park.z), _q, _s)
+  return out.set(side * SIDE_X, 0, STAND_Z).applyMatrix4(_m)
+}
+
+/** a → b（シーンの x, z）のまっすぐの線が、町の歩ける所の上か（0.25m ごと） */
+function walkableLine(ax: number, az: number, bx: number, bz: number) {
+  const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.25))
+  for (let k = 0; k <= n; k++) if (!onTownGround(ax + ((bx - ax) * k) / n, az + ((bz - az) * k) / n)) return false
+  return true
+}
+
+const RINGS = [1.6, 2.1, 2.7, 3.4, 4.3, 5.4, 6.8, 8.5, 10.5, 13, 16]
 
 /**
- * 町の木（レーンの多くは街路樹の並びの上を通る。葉は地上 2.5〜3.5m から上）・建物の角をよける（§7 の 214）: レーンの真ん中から −2.4〜+4.2m 横へ、
- * 0〜1m 上へずらす道を、1m ごとの動的計画法で選ぶ（左側の列 +1.2m・レーンの高さにいるほどよく、向かいの列（−）は避け、1m に 0.3m より大きく横へ動かない）。
- * 選んだ道を前後 6m でならし、ならした所がかかるなら、そこは選んだ道のまま。centers = 真ん中の点、normals = 左の向き、base = 高さ、top = 高さの上限、
- * escort = 左に並ぶ仲間の場所も空ける
+ * 点（シーンの x, z と足元の高さ refY）の近くの、ホバーを置ける所（道・広場の上で、建物・木・街灯・緑電・人にかからない）。向きは道に沿い、
+ * 乗り降りする側は点の側。点から横の乗り降りする所へまっすぐ歩ける所を選ぶ（無ければ近い所）。無ければ null。
+ * skip = よけない人（呼んだ人）
  */
-function avoidObstacles(centers: THREE.Vector3[], normals: THREE.Vector3[], base: number[], top: number[], escort: boolean) {
-  const n = centers.length
-  const NO = AVOID_OFF.length
-  const NU = AVOID_UP.length
-  const pref = AVOID_OFF.findIndex((o) => Math.abs(o - LANE_OFFSET) < 0.01)
-  const at = (i: number, o: number, u: number) => {
-    const x = centers[i].x + normals[i].x * o
-    const z = centers[i].z + normals[i].z * o
-    const y = base[i] + u
-    // 横へずらした所の地面からも 2.5m 以上（坂の横の斜面）。緑電の編成・架線から離れる
-    if (y - townWalk.groundY(x, z, y, false) < 2.45 || nearTram(x, z)) return true
-    return escort ? hoverBlocked(x, y, z, normals[i].x, normals[i].z) : hoverBlocked(x, y, z)
-  }
-  // 左側の列のままでかかる所と、その前後 24m だけ全部の候補を確かめる
-  tramGrid = null
-  const prefBlocked = centers.map((_, i) => at(i, LANE_OFFSET, 0))
-  const near = new Uint8Array(n)
-  for (let i = 0; i < n; i++) if (prefBlocked[i]) for (let j = Math.max(0, i - 24); j <= Math.min(n - 1, i + 24); j++) near[j] = 1
-  const S = NO * NU
-  const blocked = new Uint8Array(n * S)
-  for (let i = 0; i < n; i++) {
-    if (!near[i]) continue
-    for (let o = 0; o < NO; o++) for (let u = 0; u < NU; u++) blocked[i * S + o * NU + u] = base[i] + AVOID_UP[u] > top[i] || at(i, AVOID_OFF[o], AVOID_UP[u]) ? 1 : 0
-  }
-  const stateCost = (i: number, o: number, u: number) => {
-    const off = AVOID_OFF[o]
-    // 通り道（枝を払った幅）の外は、葉が当たりの形に残るので、当たらなければ通ってよい（少し高くつく）
-    let c = 0.6 * Math.abs(off - LANE_OFFSET) + 1.6 * AVOID_UP[u] + (off < 0 ? 2 + -off * 2 : 0) + (off > 1.5 ? 1.5 + (off - 1.5) * 0.4 : 0)
-    if (blocked[i * S + o * NU + u]) c += 1000
-    return c
-  }
-  const cost = new Float64Array(n * S).fill(Infinity)
-  const from = new Int32Array(n * S).fill(-1)
-  for (let o = 0; o < NO; o++) for (let u = 0; u < NU; u++) cost[o * NU + u] = stateCost(0, o, u) + (o === pref && u === 0 ? 0 : 50)
-  for (let i = 1; i < n; i++) {
-    for (let o = 0; o < NO; o++)
-      for (let u = 0; u < NU; u++) {
-        const sc = stateCost(i, o, u)
-        let best = Infinity
-        let arg = -1
-        for (let po = Math.max(0, o - 1); po <= Math.min(NO - 1, o + 1); po++)
-          for (let pu = Math.max(0, u - 1); pu <= Math.min(NU - 1, u + 1); pu++) {
-            const c = cost[(i - 1) * S + po * NU + pu] + (po !== o ? 0.15 : 0) + (pu !== u ? 0.4 : 0)
-            if (c < best) {
-              best = c
-              arg = po * NU + pu
-            }
-          }
-        cost[i * S + o * NU + u] = best + sc
-        from[i * S + o * NU + u] = arg
+export function hoverSpotNear(x: number, z: number, refY: number, skip: Character | null = null): HoverPark | null {
+  if (!townWalk.ready) return null
+  let best: HoverPark | null = null
+  let bestCost = Infinity
+  for (const r of RINGS) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2
+      const cx = x + Math.cos(a) * r
+      const cz = z + Math.sin(a) * r
+      if (!townWalk.onWalkway(cx, cz, EDGE_MARGIN)) continue
+      const gy = townWalk.groundY(cx, cz, refY, false)
+      if (Math.abs(gy - refY) > 0.8) continue
+      const h0 = roadHeading(cx, cz) ?? Math.atan2(cx - x, cz - z) + Math.PI / 2
+      for (const heading of [h0, wrapAngle(h0 + Math.PI)]) {
+        const y = parkedHeight(cx, cz, heading, gy)
+        if (!parkClear(cx, y, cz, heading, skip)) continue
+        const side = sideOf({ x: cx, z: cz, heading }, x, z)
+        const park: HoverPark = { x: cx, y, z: cz, heading, side }
+        const sp = sideSpot(park, side, _w)
+        const line = walkableLine(x, z, sp.x, sp.z)
+        // 近いほど・まっすぐ歩けるほど・前を向いて左から乗る（同じなら）ほどよい
+        const cost = r + (line ? 0 : 6) + (side > 0 ? 0 : 0.05)
+        if (cost < bestCost) {
+          bestCost = cost
+          best = park
+        }
       }
+    }
+    if (best && bestCost < r + 1) break
   }
-  // 終わりは左側の列・レーンの高さへ戻す（下りる弧につなぐ）
-  let st = pref * NU
-  let bestEnd = cost[(n - 1) * S + st]
-  for (let k = 0; k < S; k++) if (cost[(n - 1) * S + k] + 50 < bestEnd) {
-    bestEnd = cost[(n - 1) * S + k] + 50
-    st = k
+  return best
+}
+
+/** 角を丸める（半径は道の幅の 0.8 倍・1〜r m。隣の線分の 45% より長くしない。角の内側へ道の外まで寄らないように）。点は [x, y, 辺] */
+function roundCorners(pts: [number, number, number][], r: number): [number, number, number][] {
+  const widthOf = (e: number) => (e >= 0 ? townWalk.edgeWidth(e) : 2)
+  if (pts.length < 3) return pts
+  const out: [number, number, number][] = [pts[0]]
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1]
+    const b = pts[i]
+    const c = pts[i + 1]
+    const la = Math.hypot(b[0] - a[0], b[1] - a[1])
+    const lc = Math.hypot(c[0] - b[0], c[1] - b[1])
+    const ang = Math.abs(Math.atan2((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]), (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1])))
+    if (ang < 0.08 || la < 1e-6 || lc < 1e-6) {
+      out.push(b)
+      continue
+    }
+    const rr = Math.min(r, Math.max(1, 0.8 * Math.min(widthOf(a[2]), widthOf(b[2]))), la * 0.45, lc * 0.45)
+    const p0 = [b[0] + ((a[0] - b[0]) * rr) / la, b[1] + ((a[1] - b[1]) * rr) / la]
+    const p1 = [b[0] + ((c[0] - b[0]) * rr) / lc, b[1] + ((c[1] - b[1]) * rr) / lc]
+    const n = Math.max(2, Math.ceil(ang / 0.2))
+    for (let k = 0; k <= n; k++) {
+      const u = k / n
+      out.push([(1 - u) * (1 - u) * p0[0] + 2 * (1 - u) * u * b[0] + u * u * p1[0], (1 - u) * (1 - u) * p0[1] + 2 * (1 - u) * u * b[1] + u * u * p1[1], u < 0.5 ? a[2] : b[2]])
+    }
   }
-  const offs = new Float64Array(n)
-  const ups = new Float64Array(n)
-  for (let i = n - 1; i >= 0; i--) {
-    offs[i] = AVOID_OFF[Math.floor(st / NU)]
-    ups[i] = AVOID_UP[st % NU]
-    if (i > 0) st = from[i * S + st]
+  out.push(pts[pts.length - 1])
+  return out
+}
+
+/** 1m ごとの点に（点の辺は区間の始めの点のもの） */
+function resample(pts: [number, number, number][], step: number): [number, number, number][] {
+  const out: [number, number, number][] = [pts[0]]
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]
+    const b = pts[i]
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1])
+    if (l < 1e-6) continue
+    const n = Math.max(1, Math.ceil(l / step))
+    for (let k = 1; k <= n; k++) out.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n, k === n ? b[2] : a[2]])
   }
-  // 前後 6m でならす（ならした所がかかるなら、そこは選んだ道のまま）
-  const K = 6
-  const so = new Float64Array(n)
-  const su = new Float64Array(n)
+  return out
+}
+
+/**
+ * ホバーの道を選ぶときの、辺ごとの時間の倍率（町の道のグラフの経路探索 townNav の edgeFactor）: 広場を横切る辺（広場の縁の点の間のまっすぐの線。
+ * 木・建物にかかることがある）は 4 倍（線が広場の外へ出るなら 40 倍）、緑電の線路の上しか通れない所（道の幅の中に、編成から離れる所が無い）の割合だけ最大 4 倍
+ */
+const edgeFactors = new Map<number, number>()
+let edgeFactorsOf: unknown = null
+function hoverEdgeFactor(edge: number) {
+  const nav = townWalk.nav
+  if (!nav) return 1
+  if (edgeFactorsOf !== nav || tramLinesRef !== tramNet.lines) {
+    edgeFactors.clear()
+    edgeFactorsOf = nav
+    nearTram(0, 0)
+  }
+  let f = edgeFactors.get(edge)
+  if (f !== undefined) return f
+  const e = nav.data.edges[edge]
+  if (e.k === EDGE_KIND.plaza) {
+    // 広場を横切るまっすぐの線が広場の外へ出る（形のへこんだ広場）なら、ほかに道が無いときだけ
+    const L = nav.edgeLength(edge)
+    let out = false
+    for (let d = 0; d <= L && !out; d += 1) {
+      const a = nav.pointOnEdge(edge, d)
+      if (!onTownGround(a[0], -a[1])) out = true
+    }
+    f = out ? 40 : 4
+  } else {
+    const L = nav.edgeLength(edge)
+    const half = Math.max(0, townWalk.edgeWidth(edge) / 2 - EDGE_MARGIN)
+    const n = Math.max(1, Math.ceil(L / 5))
+    let bad = 0
+    for (let k = 0; k <= n; k++) {
+      const a = nav.pointOnEdge(edge, (L * k) / n)
+      const b = nav.pointOnEdge(edge, Math.min(L, (L * k) / n + 0.5))
+      const c = nav.pointOnEdge(edge, Math.max(0, (L * k) / n - 0.5))
+      const dx = b[0] - c[0]
+      const dy = b[1] - c[1]
+      const l = Math.hypot(dx, dy) || 1
+      let free = false
+      for (let o = -half; o <= half + 1e-6 && !free; o += 0.5) if (!nearTram(a[0] - (dy / l) * o, -(a[1] + (dx / l) * o))) free = true
+      if (!free) bad++
+    }
+    f = 1 + (3 * bad) / (n + 1)
+  }
+  edgeFactors.set(edge, f)
+  return f
+}
+
+/** 辺の道で、進む向きの左へ寄る量（m。広い道は車線の真ん中くらい、狭い道・石段・橋・広場・路地は真ん中）と、寄ってよい幅の半分 */
+function laneOf(edge: number): { pref: number; half: number } {
+  const nav = townWalk.nav
+  if (!nav || edge < 0) return { pref: 0, half: 0 }
+  const e = nav.data.edges[edge]
+  const w = townWalk.edgeWidth(edge)
+  const half = Math.max(0, w / 2 - EDGE_MARGIN)
+  if (e.k !== EDGE_KIND.road || e.f < 0) return { pref: 0, half }
+  const f = nav.data.feats[e.f]
+  if (f.private || w < 5) return { pref: 0, half }
+  return { pref: Math.min(w / 4, half), half }
+}
+
+/**
+ * ホバーが飛ぶ道（from の置いた所から to の置く所まで。町の道のグラフの上）。avoid = 町の木・建物・街灯・人・緑電をよける（町のタイルを全部読んでから）、
+ * escort = 左に並走する仲間の場所も空ける、skip = よけない人（乗る人・呼んだ人）。だめなら理由。
+ * よけても建物・木にかかる所が残ったら、その所の辺を避けて（時間を 8 倍にして）2 回まで選び直し、かかる所の少ない道にする
+ */
+export function planHoverFlight(from: HoverPark, to: HoverPark, opts: { avoid?: boolean; escort?: boolean; skip?: Character | null } = {}): HoverFlight | string {
+  const avoid = opts.avoid ?? !tilesPending()
+  let best = planOnce(from, to, avoid, !!opts.escort, opts.skip ?? null, null)
+  if (typeof best === 'string' || !avoid) return best
+  const penalty = new Set<number>()
+  for (let k = 0; k < 2 && best.clearance.blocked > 0; k++) {
+    for (const e of best.blockedEdges) penalty.add(e)
+    const f = planOnce(from, to, avoid, !!opts.escort, opts.skip ?? null, penalty)
+    if (typeof f === 'string') break
+    if (f.clearance.blocked < best.clearance.blocked) best = f
+  }
+  return best
+}
+
+function planOnce(from: HoverPark, to: HoverPark, avoid: boolean, escort: boolean, skip: Character | null, penalty: Set<number> | null): (HoverFlight & { blockedEdges: Set<number> }) | string {
+  if (!townWalk.ready || !townWalk.nav) return '町の道のデータがまだありません（町のデータを読み込み中）'
+  const nav = townWalk.nav
+  const route = townWalk.route([from.x, -from.z], [to.x, -to.z], { cable: false, underground: false, speed: 60 * CRUISE, maxSnap: 40, privatePenalty: 1.25, edgeFactor: penalty ? (e) => hoverEdgeFactor(e) * (penalty.has(e) ? 8 : 1) : hoverEdgeFactor })
+  if (!route) return 'ホバーで行ける町の道が見つかりません'
+  // 1. 道の真ん中の線（平面座標。つなぎは置く所から道の上の点へまっすぐ）を丸めて 1m ごとに
+  const line: [number, number, number][] = [[from.x, -from.z, -1]]
+  for (const p of nav.polyline(route)) {
+    const l = line[line.length - 1]
+    if (Math.hypot(p.x - l[0], p.y - l[1]) < 0.05) {
+      l[2] = p.edge
+      continue
+    }
+    line.push([p.x, p.y, p.edge])
+  }
+  const lastP = line[line.length - 1]
+  if (Math.hypot(lastP[0] - to.x, lastP[1] + to.z) > 0.05) {
+    lastP[2] = -1
+    line.push([to.x, -to.z, -1])
+  } else line[line.length - 1] = [to.x, -to.z, -1]
+  const dense = resample(roundCorners(line, 4), 1)
+  const n = dense.length
+  if (n < 2) return 'ホバーで行くには近すぎます'
+  // 2. 横へ寄る量: 進む向きの左（広い道）。始めと終わりの 8m は置く所へ寄せる
+  const nx = new Float64Array(n)
+  const ny = new Float64Array(n)
+  const half = new Float64Array(n)
+  const pref = new Float64Array(n)
+  let along = 0
+  const sAt = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    if (i > 0) along += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1])
+    sAt[i] = along
+    const a = dense[Math.max(0, i - 1)]
+    const b = dense[Math.min(n - 1, i + 1)]
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1
+    nx[i] = -(b[1] - a[1]) / l
+    ny[i] = (b[0] - a[0]) / l
+  }
+  const total = along
+  for (let i = 0; i < n; i++) {
+    const ln = laneOf(dense[i][2])
+    const taper = Math.min(1, sAt[i] / 8, (total - sAt[i]) / 8)
+    half[i] = ln.half * Math.max(0, taper)
+    pref[i] = ln.pref * Math.max(0, taper)
+  }
+  // 寄る量をならす（道の幅の替わる所で、とびとびに寄らないように。前後 6m）
+  const want = new Float64Array(n)
   for (let i = 0; i < n; i++) {
     let a = 0
-    let b = 0
     let w = 0
-    for (let k = -K; k <= K; k++) {
+    for (let k = -6; k <= 6; k++) {
       const j = Math.min(n - 1, Math.max(0, i + k))
-      const wk = 1 - Math.abs(k) / (K + 1)
-      a += offs[j] * wk
-      b += ups[j] * wk
+      const wk = 7 - Math.abs(k)
+      a += pref[j] * wk
       w += wk
     }
-    so[i] = a / w
-    su[i] = b / w
-    if (near[i] && at(i, so[i], su[i]) && !at(i, offs[i], ups[i])) {
-      so[i] = offs[i]
-      su[i] = ups[i]
+    want[i] = Math.max(-half[i], Math.min(half[i], a / w))
+  }
+  // 3. 地面の高さ（橋の上と下は、前の点の高さに近い面）
+  const ground = (x: number, y: number, ref: number) => townWalk.groundY(x, -y, ref, false)
+  const gC = new Float64Array(n)
+  let ref = from.y
+  for (let i = 0; i < n; i++) {
+    gC[i] = ground(dense[i][0], dense[i][1], ref)
+    ref = gC[i]
+  }
+  // 4. よける: 寄る量の所がかかれば、道の幅の中で近い所へずらす（左右 0.25m ずつ）
+  const bad = (i: number, o: number) => {
+    const x = dense[i][0] + nx[i] * o
+    const y = dense[i][1] + ny[i] * o
+    const z = -y
+    const g = ground(x, y, gC[i])
+    if (Math.abs(g - gC[i]) > 0.6) return 3
+    if (hoverBlocked(x, g + FLY_HEIGHT, z, escort ? nx[i] : 0, escort ? -ny[i] : 0) || propBlocked(x, z)) return 3
+    if (!onTownGround(x, z, 0.3)) return 2
+    if (peopleNear(x, z, skip)) return 2
+    if (nearTram(x, z)) return 1
+    return 0
+  }
+  const off = Float64Array.from(want)
+  const res = new Uint8Array(n)
+  if (avoid) {
+    for (let i = 0; i < n; i++) {
+      res[i] = bad(i, want[i])
+      if (!res[i]) continue
+      // かからない所（無ければ、かかり方の軽い所。建物・木 > 道の外・人 > 緑電の線路）のうち、寄る量に近い所
+      let level = res[i]
+      for (let k = 1; k * 0.25 <= half[i] * 2 + 1e-6 && level > 0; k++) {
+        for (const sg of [1, -1]) {
+          const o = want[i] + sg * k * 0.25
+          if (Math.abs(o) > half[i] + 1e-6) continue
+          const b = bad(i, o)
+          if (b < level) {
+            off[i] = o
+            level = b
+            if (!b) break
+          }
+        }
+      }
+      res[i] = level
+    }
+    // ずらした所を前後に広げて（大きい方を残す）ならす。ならした所がかかるなら、そこはずらした所のまま
+    const shift = new Float64Array(n)
+    for (let i = 0; i < n; i++) shift[i] = off[i] - want[i]
+    const wide = new Float64Array(n)
+    for (let i = 0; i < n; i++) {
+      let b = 0
+      for (let k = -3; k <= 3; k++) {
+        const v = shift[Math.min(n - 1, Math.max(0, i + k))]
+        if (Math.abs(v) > Math.abs(b)) b = v
+      }
+      wide[i] = b
+    }
+    for (let i = 0; i < n; i++) {
+      let a = 0
+      let w = 0
+      for (let k = -4; k <= 4; k++) {
+        const wk = 5 - Math.abs(k)
+        a += wide[Math.min(n - 1, Math.max(0, i + k))] * wk
+        w += wk
+      }
+      const o = Math.max(-half[i], Math.min(half[i], want[i] + a / w))
+      if (Math.abs(o - off[i]) > 1e-6 && bad(i, o) <= res[i]) off[i] = o
     }
   }
-  return { offs: so, ups: su }
-}
-
-/** レーンの高さを、地面から 2.6〜4.6m に収めて、前後 12m でならした高さの列（d0 → d1 を 1m ごと）と、高さの上限（地上 4.95m） */
-function cruiseHeights(lane: LaneTrack, d0: number, d1: number, dir: 1 | -1) {
-  const n = Math.max(2, Math.ceil(Math.abs(d1 - d0)))
-  const raw: number[] = []
-  const lo: number[] = []
-  const top: number[] = []
-  for (let i = 0; i <= n; i++) {
-    const d = d0 + ((d1 - d0) * i) / n
-    lanePoint(lane, d, dir, _v, _dir)
-    const g = townWalk.groundY(_v.x, _v.z, _v.y, false)
-    // 道の上の橋・高架の下を通る所は、下の面（今の高さに近い面）から
-    lo.push(g + 2.6)
-    top.push(g + 4.95)
-    raw.push(THREE.MathUtils.clamp(_v.y, g + 2.6, g + 4.6))
+  // 5. 点（シーン）と高さ: 地面 + FLY_HEIGHT を前後 3m でならす（地面から 0.45〜0.95m に収める）。始めと終わりは真上へ浮く・下りる
+  const P: { x: number; z: number; g: number }[] = []
+  ref = from.y
+  for (let i = 0; i < n; i++) {
+    const x = dense[i][0] + nx[i] * off[i]
+    const y = dense[i][1] + ny[i] * off[i]
+    const g = ground(x, y, ref)
+    ref = g
+    P.push({ x, z: -y, g })
   }
-  const K = 12
-  const out: number[] = []
-  for (let i = 0; i <= n; i++) {
-    let sum = 0
+  P[0].g = from.y
+  P[n - 1].g = to.y
+  const hy = new Float64Array(n)
+  for (let i = 0; i < n; i++) {
+    let a = 0
     let w = 0
-    for (let k = -K; k <= K; k++) {
-      const j = Math.min(n, Math.max(0, i + k))
-      const wk = 1 - Math.abs(k) / (K + 1)
-      sum += raw[j] * wk
+    for (let k = -3; k <= 3; k++) {
+      const j = Math.min(n - 1, Math.max(0, i + k))
+      const wk = 4 - Math.abs(k)
+      a += P[j].g * wk
       w += wk
     }
-    // ならしても、地面から 2.5m より下にはしない（人の頭の上は 2.5m 以上。浮遊レーン条例 3）
-    out.push(Math.max(sum / w, lo[i] - 0.1))
+    hy[i] = Math.min(P[i].g + 0.95, Math.max(P[i].g + 0.45, a / w + FLY_HEIGHT))
   }
-  return { heights: out, top }
-}
-
-/**
- * 乗り場 from から to へ飛ぶ道（同じレーンの上だけ）。avoid = 町の木・建物をよける（重い。乗るときだけ）、escort = 左に並走する仲間の場所も空ける
- * （乗る人の仲間に浮かぶ仲間がいるとき。character/ride/party.ts の partyEscorts）。だめなら理由
- */
-export function planFlight(from: HoverDock, to: HoverDock, avoid = false, escort = true): HoverFlight | string {
-  if (from.lane !== to.lane) return `${from.label}と${to.label}は別の浮遊レーンです（レーンを乗り継ぐのは、まだできません）`
-  const lane = laneNet.byId.get(from.lane)
-  if (!lane || !townWalk.ready) return '浮遊レーンのデータがまだありません（町のデータを読み込み中）'
-  const pa = parkedMatrix(from, new THREE.Matrix4())
-  const pb = parkedMatrix(to, new THREE.Matrix4())
-  const A = new THREE.Vector3().setFromMatrixPosition(pa)
-  const B = new THREE.Vector3().setFromMatrixPosition(pb)
-  const sa = lane.path.project(A.x, -A.z).d
-  const sb = lane.path.project(B.x, -B.z).d
-  const dir: 1 | -1 = sb >= sa ? 1 : -1
-  // レーンへ入る所・出る所（台から前後 9m）
-  const MERGE = 9
-  const dM = THREE.MathUtils.clamp(sa + dir * MERGE, 0, lane.path.length)
-  const dN = THREE.MathUtils.clamp(sb - dir * MERGE, 0, lane.path.length)
-  if ((dN - dM) * dir < 5) return `${from.label}と${to.label}は近すぎます（歩いてください）`
-  const { heights, top } = cruiseHeights(lane, dM, dN, dir)
-  const n = heights.length - 1
-  const cruise: THREE.Vector3[] = []
-  const tangents: THREE.Vector3[] = []
-  const centers: THREE.Vector3[] = []
-  const normals: THREE.Vector3[] = []
-  for (let i = 0; i <= n; i++) {
-    const t = new THREE.Vector3()
-    const c = lanePoint(lane, dM + ((dN - dM) * i) / n, dir, new THREE.Vector3(), t, 0)
-    c.y = heights[i]
-    centers.push(c)
-    tangents.push(t)
-    // 進む向きの左（シーン）: 平面の (−ty, tx) → シーン (−ty, −tx)。t はシーンの (tx, 0, −ty)
-    normals.push(new THREE.Vector3(t.z, 0, -t.x))
+  // 進みながら浮く・下りる（始めと終わりの LIFT_RUN m は、真上へ浮いた LIFT_UP から飛ぶ高さへ）
+  for (let i = 0; i < n; i++) {
+    const e = Math.min(sAt[i], total - sAt[i])
+    if (e >= LIFT_RUN) continue
+    const k = THREE.MathUtils.smoothstep(e, 0, LIFT_RUN)
+    hy[i] = P[i].g + LIFT_UP + (hy[i] - P[i].g - LIFT_UP) * k
   }
-  const av = avoid ? avoidObstacles(centers, normals, heights, top, escort) : null
-  for (let i = 0; i <= n; i++) cruise.push(centers[i].clone().addScaledVector(normals[i], av ? av.offs[i] : LANE_OFFSET).setY(heights[i] + (av ? av.ups[i] : 0)))
-  const M = cruise[0]
-  const TM = tangents[0]
-  const N = cruise[n]
-  const TN = tangents[n]
-  // 浮き上がる弧: まっすぐ上へ 1.6m、それからレーンの向きへ
-  const lift = bezier(A, A.clone().add(_v.set(0, 1.7, 0)).addScaledVector(_d.subVectors(M, A).setY(0).normalize(), 0.6), M.clone().addScaledVector(TM, -4.2), M, 40)
-  const desc = bezier(N, N.clone().addScaledVector(TN, 4.2), B.clone().add(_v.set(0, 1.7, 0)).addScaledVector(_d.subVectors(N, B).setY(0).normalize(), 0.6), B, 40)
-  // 道のりの長さ s: 弧は弧の長さ、レーンの上はレーンの線の長さ（配送機と同じレーンの長さで進むので、同じ向きの配送機との間が変わらない。
-  // 木をよけて横へずれた所・曲がり角の内と外で、ホバーの道の長さとレーンの長さが少し違う）
   const pts: FlightSample[] = []
-  const push = (p: THREE.Vector3, s: number) => {
+  const edgeOf: number[] = []
+  const push = (x: number, y: number, z: number, g: number, e: number) => {
     const last = pts[pts.length - 1]
+    const s = last ? last.s + Math.hypot(x - last.p.x, y - last.p.y, z - last.p.z) : 0
     if (last && s - last.s < 1e-4) return
-    pts.push({ p: p.clone(), heading: 0, s })
+    pts.push({ p: new THREE.Vector3(x, y, z), heading: 0, s, t: 0, v: 0, g })
+    edgeOf.push(e)
   }
-  let acc = 0
-  for (let i = 0; i < lift.length; i++) {
-    if (i > 0) acc += lift[i].distanceTo(lift[i - 1])
-    push(lift[i], acc)
-  }
-  const liftLen = acc
-  const step = Math.abs(dN - dM) / n
-  for (let i = 1; i <= n; i++) push(cruise[i], liftLen + i * step)
-  const cruiseLen = Math.abs(dN - dM)
-  acc = liftLen + cruiseLen
-  for (let i = 1; i < desc.length; i++) {
-    acc += desc[i].distanceTo(desc[i - 1])
-    push(desc[i], acc)
-  }
-  const total = acc
-  const descLen = total - liftLen - cruiseLen
-  // 向き: 水平に動く向き（真上・真下へ動く所は、台に置いた向きから・台に置く向きへなめらかに）
-  const fromH = from.heading
-  const toH = to.heading
-  for (let i = 0; i < pts.length; i++) {
+  push(from.x, from.y, from.z, from.y, -1)
+  for (let i = 0; i < n; i++) push(P[i].x, i === 0 ? from.y + LIFT_UP : i === n - 1 ? to.y + LIFT_UP : hy[i], P[i].z, P[i].g, dense[i][2])
+  push(to.x, to.y, to.z, to.y, -1)
+  const m = pts.length
+  // 6. 向き（水平に動く向き。真上へ浮く間に、置いた向きから回す。下りる所は着く向き）
+  for (let i = 0; i < m; i++) {
     const a = pts[Math.max(0, i - 1)].p
-    const b = pts[Math.min(pts.length - 1, i + 1)].p
-    const dx = b.x - a.x
-    const dz = b.z - a.z
-    const hz = Math.hypot(dx, dz)
-    const move = Math.atan2(dx, dz)
-    const s = pts[i].s
-    // 台の近く（弧の始め 35%・終わり 35%）は台の向きから回す
-    const kFrom = THREE.MathUtils.smoothstep(s, liftLen * 0.15, liftLen * 0.75)
-    const kTo = THREE.MathUtils.smoothstep(total - s, descLen * 0.15, descLen * 0.75)
-    let h = hz > 1e-3 ? move : i > 0 ? pts[i - 1].heading : fromH
-    h = lerpAngle(fromH, h, kFrom)
-    h = lerpAngle(toH, h, kTo)
-    pts[i].heading = h
+    const b = pts[Math.min(m - 1, i + 1)].p
+    const hz = Math.hypot(b.x - a.x, b.z - a.z)
+    pts[i].heading = hz > 0.05 ? Math.atan2(b.x - a.x, b.z - a.z) : i > 0 ? pts[i - 1].heading : from.heading
   }
-  const liftSec = THREE.MathUtils.clamp((1.3 * liftLen) / CRUISE, 3.0, 4.2)
-  const descSec = THREE.MathUtils.clamp((1.3 * descLen) / CRUISE, 3.0, 4.2)
-  const cruiseSec = cruiseLen / CRUISE
-  // 地面・建物・木からの近さ（確かめ用）
-  const clearance = { low: 0, blocked: 0, minAbove: Infinity, maxAbove: -Infinity, escort: 0, tram: 0 }
-  for (let i = 0; i < pts.length; i += 2) {
+  const liftLen = pts[1].s
+  const descLen = pts[m - 1].s - pts[m - 2].s
+  const len = pts[m - 1].s
+  // 着く向き: 置く所の向き（道に沿う）のうち、来る向きに近い方
+  const arrive = pts[m - 2].heading
+  let toHeading = to.heading
+  if (Math.abs(wrapAngle(toHeading - arrive)) > Math.PI / 2) toHeading = wrapAngle(toHeading + Math.PI)
+  for (let i = 0; i < m; i++) {
+    const k0 = THREE.MathUtils.smoothstep(pts[i].s, liftLen * 0.1, liftLen + 2.5)
+    const k1 = THREE.MathUtils.smoothstep(len - pts[i].s, descLen * 0.1, descLen + 2.5)
+    pts[i].heading = lerpAngle(toHeading, lerpAngle(from.heading, pts[i].heading, k0), k1)
+  }
+  // 7. 速さ（曲がり・真上の上り下りで遅く。速くする・遅くするは ACCEL）と、出てからの秒
+  const vmax = new Float64Array(m)
+  for (let i = 1; i < m - 1; i++) {
+    // 真上へ浮いた所・真上から下りる所（その前後の区間は遅く）
+    if (i === 1 || i === m - 2) {
+      vmax[i] = V_LIFT
+      continue
+    }
+    const a = pts[Math.max(1, i - 2)]
+    const b = pts[Math.min(m - 2, i + 2)]
+    const ds = Math.max(0.5, b.s - a.s)
+    const kap = Math.abs(wrapAngle(b.heading - a.heading)) / ds
+    vmax[i] = Math.min(CRUISE, Math.sqrt(A_LAT / Math.max(kap, 1e-4)))
+  }
+  const v = Float64Array.from(vmax)
+  v[0] = 0
+  for (let i = 1; i < m; i++) v[i] = Math.min(vmax[i], Math.sqrt(v[i - 1] * v[i - 1] + 2 * ACCEL * (pts[i].s - pts[i - 1].s)))
+  v[m - 1] = 0
+  for (let i = m - 2; i >= 0; i--) v[i] = Math.min(v[i], Math.sqrt(v[i + 1] * v[i + 1] + 2 * ACCEL * (pts[i + 1].s - pts[i].s)))
+  // 真上へ浮く・下りる区間は、遅い一定の速さで（止まった所から浮き始める・着いて止まる）
+  let t = 0
+  for (let i = 0; i < m; i++) {
+    pts[i].v = v[i]
+    if (i > 0) {
+      const ds = pts[i].s - pts[i - 1].s
+      const avg = (v[i] + v[i - 1]) / 2
+      t += ds / Math.max(avg, i === 1 || i === m - 1 ? V_LIFT * 0.5 : 0.25)
+    }
+    pts[i].t = t
+  }
+  // 8. 確かめ（水平に飛ぶ所）と、緑電の線路を横切る所
+  const clearance = { blocked: 0, minAbove: Infinity, maxAbove: -Infinity, offWay: 0, tram: 0, people: 0 }
+  const blockedEdges = new Set<number>()
+  const tramCross: HoverFlight['tramCross'] = []
+  for (let i = 2; i < m - 2; i++) {
     const p = pts[i].p
-    const g = townWalk.groundY(p.x, p.z, p.y, false)
-    const above = p.y - g
-    const inCruise = pts[i].s > liftLen && pts[i].s < liftLen + cruiseLen
-    if (inCruise) {
+    const above = p.y - pts[i].g
+    // 地面からの高さは、進みながら浮く・下りる所（始めと終わりの LIFT_RUN m）のほか
+    if (pts[i].s > liftLen + LIFT_RUN + 0.5 && pts[i].s < len - descLen - LIFT_RUN - 0.5) {
       clearance.minAbove = Math.min(clearance.minAbove, above)
       clearance.maxAbove = Math.max(clearance.maxAbove, above)
-      if (above < 2.4) clearance.low++
     }
-    if (hoverBlocked(p.x, p.y, p.z)) clearance.blocked++
-    if (inCruise && nearTram(p.x, p.z)) clearance.tram++
-    else if (escort && inCruise && townSolids.blocker(p.x + Math.cos(pts[i].heading) * ESCORT_LOCAL.x, p.y + ESCORT_LOCAL.y, p.z - Math.sin(pts[i].heading) * ESCORT_LOCAL.x, 0.2)) clearance.escort++
-  }
-  // 緑電の線路を横切る所（レーンの上。前後 3m ごと）
-  const tramCross: HoverFlight['tramCross'] = []
-  for (let i = 0; i < pts.length; i += 3) {
-    const p = pts[i].p
-    const sp = pts[i].s
-    if (sp < liftLen || sp > liftLen + cruiseLen || !nearTram(p.x, p.z)) continue
-    for (const line of tramNet.lines ?? []) {
-      const pr = line.path.project(p.x, -p.z)
-      if (pr.dist > TRAM_CLEAR + 1) continue
-      line.path.at(pr.d, _pp)
-      const lat = (p.x - _pp.x) * -_pp.dy + (-p.z - _pp.y) * _pp.dx
-      tramCross.push({ s: sp, line, d: pr.d, lat })
+    if (hoverBlocked(p.x, p.y, p.z) || propBlocked(p.x, p.z, 0.45)) {
+      clearance.blocked++
+      if (edgeOf[i] >= 0) blockedEdges.add(edgeOf[i])
+    }
+    if (!onTownGround(p.x, p.z)) clearance.offWay++
+    if (peopleNear(p.x, p.z, skip, 0.6)) clearance.people++
+    if (nearTram(p.x, p.z)) {
+      clearance.tram++
+      for (const line of tramNet.lines ?? []) {
+        const pr = line.path.project(p.x, -p.z)
+        if (pr.dist > TRAM_CLEAR + 1) continue
+        line.path.at(pr.d, _pp)
+        const lat = (p.x - _pp.x) * -_pp.dy + (-p.z - _pp.y) * _pp.dx
+        tramCross.push({ t: pts[i].t, line, d: pr.d, lat })
+      }
     }
   }
-  return { from, to, lane, dir, dM, tramCross, pts, liftLen, cruiseLen, descLen, liftSec, cruiseSec, descSec, total: liftSec + cruiseSec + descSec, clearance, avoided: avoid, escort }
+  const toPark: HoverPark = { ...to, heading: toHeading }
+  return { from, to: toPark, pts, length: pts[m - 1].s, total: pts[m - 1].t, clearance, escort, avoided: avoid, tramCross, blockedEdges }
 }
 
-const lerpAngle = (a: number, b: number, k: number) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * k
-
-/** 出てから tau 秒の、道のりの長さと速さ（浮き上がる弧は 0 → レーンの速さ、下りる弧はレーンの速さ → 0。3 次のエルミート） */
+/** 出てから tau 秒の、道のりの長さと速さ */
 function distAt(f: HoverFlight, tau: number): { s: number; v: number } {
+  const pts = f.pts
   if (tau <= 0) return { s: 0, v: 0 }
-  if (tau < f.liftSec) {
-    const u = tau / f.liftSec
-    const s = f.liftLen * (3 * u * u - 2 * u * u * u) + CRUISE * f.liftSec * (u * u * u - u * u)
-    const v = (f.liftLen * (6 * u - 6 * u * u) + CRUISE * f.liftSec * (3 * u * u - 2 * u)) / f.liftSec
-    return { s, v }
+  if (tau >= f.total) return { s: f.length, v: 0 }
+  let lo = 0
+  let hi = pts.length - 1
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1
+    if (pts[mid].t <= tau) lo = mid
+    else hi = mid
   }
-  const t2 = tau - f.liftSec
-  if (t2 < f.cruiseSec) return { s: f.liftLen + t2 * CRUISE, v: CRUISE }
-  const t3 = t2 - f.cruiseSec
-  if (t3 < f.descSec) {
-    const u = t3 / f.descSec
-    // s(0) = 0, s'(0) = v, s(1) = L, s'(1) = 0
-    const s = CRUISE * f.descSec * (u * u * u - 2 * u * u + u) + f.descLen * (3 * u * u - 2 * u * u * u)
-    const v = (CRUISE * f.descSec * (3 * u * u - 4 * u + 1) + f.descLen * (6 * u - 6 * u * u)) / f.descSec
-    return { s: f.liftLen + f.cruiseLen + s, v }
-  }
-  return { s: f.liftLen + f.cruiseLen + f.descLen, v: 0 }
+  const a = pts[lo]
+  const b = pts[hi]
+  const dt = Math.max(1e-6, b.t - a.t)
+  const u = Math.min(1, Math.max(0, (tau - a.t) / dt))
+  // その区間は速さが時間に比例して変わる（区間の終わりで b に着くように、進んだ割合で長さを分ける）
+  const go = a.v * u + 0.5 * (b.v - a.v) * u * u
+  const full = (a.v + b.v) / 2
+  const k = full > 1e-6 ? go / full : u
+  return { s: a.s + (b.s - a.s) * k, v: a.v + (b.v - a.v) * u }
 }
 
 /** 道のりの長さ s の点と向き */
@@ -500,76 +754,195 @@ function sampleAt(f: HoverFlight, s: number, out: THREE.Vector3): number {
   return lerpAngle(a.heading, b.heading, k)
 }
 
-/**
- * 出る時刻 t0（運転の日の秒）で飛ぶと、レーンの配送機と近づかないか: 同じ向きにレーンの上で前後 8m の内の配送機とは 4m、ほかの配送機とは 1.0m
- * （向かいの配送機とは、ふだんは 2.4m、木の幹をよけてレーンの真ん中を飛ぶ所では 1.2m 離れてすれ違う。つづら折りではとなりの列の配送機が近くを通る）。
- * 0.5 秒ごとに確かめる
- */
-function flightClear(f: HoverFlight, t0: number, why?: { tau: number; s: number; k: number; same: boolean; d: number }) {
-  const lane = f.lane
-  // 緑電の線路を横切るとき、編成がそこにいない（前後と横に 1.5m の余白）
-  for (const c of f.tramCross) {
-    const tau = f.liftSec + (c.s - f.liftLen) / CRUISE
-    if (tramOccupies(c.line, t0 + tau, c.d, c.lat, 1.5)) {
-      if (why) Object.assign(why, { tau, s: c.s, k: -1, same: false, d: 0 })
-      return false
-    }
-  }
-  for (let tau = 0; tau <= f.total; tau += 0.5) {
-    const { s } = distAt(f, tau)
-    sampleAt(f, s, _w)
-    const sec = (t0 + tau) % 86400
-    // ホバーのレーンの上の長さ（弧の間は入る所・出る所）
-    const dh = f.dM + f.dir * THREE.MathUtils.clamp(s - f.liftLen, 0, f.cruiseLen)
-    for (let k = 0; k < lane.n; k++) {
-      const dr = droneOnLane(lane, k, sec, _v)
-      if (Math.abs(_v.x - _w.x) > 4 || Math.abs(_v.z - _w.z) > 4) continue
-      const d = _v.distanceTo(_w)
-      // 同じ向きにレーンの上で前後 8m の内（追いつく・追いつかれる）か、どの配送機とも 1.0m より近い（すれ違い・つづら折りのとなりの列）
-      const same = dr.back === f.dir && Math.abs(dr.d - dh) < 8
-      if (d < (same ? 4 : 1.0)) {
-        if (why) Object.assign(why, { tau, s, k, same, d })
-        return false
-      }
-    }
-  }
+/** 出る時刻 t0（運転の日の秒）で飛ぶと、緑電の線路を横切る所に編成がいないか（前後と横に 1.5m の余白） */
+function flightClear(f: HoverFlight, t0: number) {
+  for (const c of f.tramCross) if (tramOccupies(c.line, t0 + c.t, c.d, c.lat, 1.5)) return false
   return true
 }
 
-/**
- * 時刻 base（運転の日の秒）から 0.5 秒ごとに、配送機と近づかず・緑電の編成と重ならずに出られる時刻を探す（1 コマに 10 個まで。1 個 2ms ほど）。
- * 見つかればその時刻、まだなら null（次のコマに続ける）。2 分の内に無ければ base
- */
-function searchDeparture(ctl: HoverRide, f: HoverFlight) {
-  for (let k = 0; k < 10; k++) {
-    if (ctl.searchDt > 120) return ctl.searchBase
-    if (flightClear(f, ctl.searchBase + ctl.searchDt)) return ctl.searchBase + ctl.searchDt
-    ctl.searchDt += 0.5
-  }
-  return null
+/** 時刻 base（運転の日の秒）から 0.5 秒ごとに、緑電の編成と重ならずに出られる時刻を探す。2 分の内に無ければ base */
+function pickDeparture(f: HoverFlight, base: number) {
+  if (!f.tramCross.length) return base
+  for (let dt = 0; dt <= 120; dt += 0.5) if (flightClear(f, base + dt)) return base + dt
+  return base
 }
-function pickDeparture(ctl: HoverRide, f: HoverFlight, now: number, lead: number) {
-  ctl.searchBase = now + lead
-  ctl.searchDt = 0
-  let r: number | null = null
-  while (r === null) r = searchDeparture(ctl, f)
-  return r
+
+/** 飛ぶ道の、出てから tau 秒のホバーの行列（前後・横の傾きとわずかな上下も） */
+function flightPose(f: HoverFlight, tau: number, out: THREE.Matrix4, now: number) {
+  const { s, v } = distAt(f, tau)
+  const h = sampleAt(f, s, _pt)
+  const a = distAt(f, tau + 0.25)
+  sampleAt(f, a.s, _w)
+  const ha = sampleAt(f, Math.min(f.length, s + Math.max(1.5, v * 0.6)), _d)
+  const climb = (_w.y - _pt.y) / 0.25
+  const tilt = THREE.MathUtils.clamp(-(a.v - v) * 0.04 - climb * 0.01, -0.06, 0.05)
+  const bank = THREE.MathUtils.clamp(-Math.atan2(Math.sin(ha - h), Math.cos(ha - h)) * v * 0.05, -0.08, 0.08)
+  // 浮いている間のわずかな上下（交通の時計で）
+  const bob = 0.02 * Math.sin(now * 1.9) * THREE.MathUtils.smoothstep(tau, 0.8, 2.5) * THREE.MathUtils.smoothstep(f.total - tau, 0.6, 2.0)
+  _q.setFromEuler(_e.set(tilt, h, bank, 'YXZ'))
+  _pt.y += bob
+  out.compose(_pt, _q, _s)
+  return v
 }
 
 /* -------------------------------------------------------------------------- */
-/* 状態                                                                         */
+/* 呼ぶ                                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** 呼んだホバーの様子（ホバーは 1 台なので 1 つ）。flight = 呼んだ人の近くへ飛んでいる道（無ければ置いてある）、depart = 出る時刻（運転の日の秒） */
+const summon = {
+  by: null as Character | null,
+  flight: null as HoverFlight | null,
+  depart: 0,
+  upCued: false,
+}
+
+/** 乗っている人（乗り込みから降りるまで。機体を書く。いなければ null） */
+let rider: Character | null = null
+
+/**
+ * 呼んだ人 ch の近くの置く所: 町の中・ラボのまわり・建物の外なら今いる所の近く。ラボ・中のある建物の中、近くに置ける所が無いときは、
+ * そのゾーンの外の出入口の前の近く。だめなら理由
+ */
+function summonSpot(ch: Character): HoverPark | string {
+  const m = ch.motion
+  const p = m.position
+  const inside = m.zone !== 'town' && (m.zone === 'lab' ? !m.outside : m.indoor)
+  if (!inside) {
+    const near = hoverSpotNear(p.x, p.z, m.ground, ch)
+    if (near) return near
+  }
+  if (m.zone !== 'town') {
+    const portal = ZONE_PORTALS[m.zone as TravelZone]?.[0]
+    if (portal) {
+      const x = portal.town[0]
+      const z = -portal.town[1]
+      const near = hoverSpotNear(x, z, townWalk.groundY(x, z, inside ? townWalk.groundY(x, z) : m.ground, false), ch)
+      if (near) return near
+    }
+  }
+  return '近くにホバーを置ける道・広場がありません'
+}
+
+/** 呼んだホバーが飛んでいる途中か */
+const summonFlying = () => summon.flight !== null
+
+/** 今のホバーの位置（シーン。置いてある所か、呼ばれて飛んでいる途中の所） */
+function craftPose(): HoverPark | null {
+  if (summon.flight) {
+    const f = summon.flight
+    const tau = transitClock.serviceSec - summon.depart
+    const { s } = distAt(f, tau)
+    const h = sampleAt(f, s, _v)
+    return { x: _v.x, y: townWalk.groundY(_v.x, _v.z, _v.y - FLY_HEIGHT, false), z: _v.z, heading: h, side: hoverHome.side }
+  }
+  return hoverHome.placed ? { ...hoverHome } : null
+}
+
+/** ホバーを置く（すぐ。飛ばない） */
+function placeHover(p: HoverPark) {
+  hoverHome.placed = true
+  hoverHome.x = p.x
+  hoverHome.y = p.y
+  hoverHome.z = p.z
+  hoverHome.heading = p.heading
+  hoverHome.side = p.side
+}
+
+/**
+ * ホバーを置く所 spot へ来させる（飛んで来るか、すぐ現れる）。もうそこにいれば何もしない
+ */
+function startSummon(ch: Character, spot: HoverPark) {
+  summon.by = ch
+  townData.loadAllTiles()
+  const here = craftPose()
+  if (here && !summon.flight && Math.hypot(here.x - spot.x, here.z - spot.z) < 0.5) {
+    hoverHome.side = spot.side
+    return
+  }
+  const now = transitClock.serviceSec
+  const far = !here || Math.hypot(here.x - spot.x, here.z - spot.z) > SUMMON_NEAR
+  const f = far ? null : planHoverFlight(here!, spot, { escort: false, skip: ch })
+  if (!f || typeof f === 'string' || f.length > SUMMON_NEAR * 2) {
+    // 遠い（まだ一度も呼んでいない）: すぐ横に現れる（ファンを止めながら下りたところ）
+    summon.flight = null
+    placeHover(spot)
+    hoverCraft.power = Math.max(hoverCraft.power, 0.7)
+    townEvents.emit('hover.land', { x: spot.x, y: spot.y + 0.3, z: spot.z })
+    return
+  }
+  // 飛んでいる途中に呼び直したら、今の所から（置いてある所を今の所に）
+  if (summon.flight) placeHover({ ...here!, y: parkedHeight(here!.x, here!.z, here!.heading, here!.y) })
+  const toPark: HoverPark = { ...f.to, side: sideOf(f.to, ch.motion.position.x, ch.motion.position.z) }
+  f.to = toPark
+  summon.flight = f
+  summon.upCued = false
+  summon.depart = pickDeparture(f, now + SUMMON_SPIN)
+}
+
+/**
+ * ホバーを呼ぶ（公開の口。例のアプリの「ホバーを呼ぶ」）。呼んだ人 ch の近くの歩ける所（道・広場。ラボ・中のある建物の中なら、外の出入口の前）へ、
+ * ホバーが今いる所から地面の少し上を飛んで来て、横に下りて待つ（100m より遠い・まだ一度も呼んでいないときは、すぐ横に現れる）。
+ * 乗るのは旅程（startTravel の via: 'hover'）で、行き先の近くまで飛んで下りる。呼んだら null、呼べなければ理由の字（何もしない）。
+ * 乗っていない間は最後に下りた所に置いておく
+ */
+export function summonHover(ch: Character): string | null {
+  if (!townWalk.ready) return '町の道のデータがまだありません（町のデータを読み込み中か、町の地図データがありません）'
+  if (rider && riderWrites(rider)) return rider === ch ? 'もうホバーに乗っています' : 'ホバーはほかの人が乗っています'
+  if (ch.ride.phase !== 'none') return `${ch.ride.car?.vehicle.label ?? '乗り物'}に乗っています`
+  const spot = summonSpot(ch)
+  if (typeof spot === 'string') return spot
+  startSummon(ch, spot)
+  return null
+}
+
+/** ホバーの様子（公開の口 hoverStatus の返り値） */
+export interface HoverStatus {
+  /** none = まだ一度も呼んでいない・coming = 呼んだ人の近くへ飛んでいる・parked = 置いてある（呼んだ人の横で待つ・最後に下りた所）・riding = 人が乗っている（乗り込みから降りるまで） */
+  phase: 'none' | 'coming' | 'parked' | 'riding'
+  /** 今の所（シーンの x, z）と向き。none なら 0 */
+  x: number
+  z: number
+  heading: number
+  /** 呼んだ人（いなければ null）と、来るまでの秒（coming のとき。ほかは null） */
+  summoner: Character | null
+  arriveInSec: number | null
+}
+
+/** ホバーの様子（公開の口。例のアプリの案内・地図の印） */
+export function hoverStatus(): HoverStatus {
+  if (rider && riderWrites(rider)) {
+    _v.setFromMatrixPosition(hoverCraft.matrix)
+    return { phase: 'riding', x: _v.x, z: _v.z, heading: rider.motion.heading, summoner: summon.by, arriveInSec: null }
+  }
+  const p = craftPose()
+  if (!p) return { phase: 'none', x: 0, z: 0, heading: 0, summoner: null, arriveInSec: null }
+  if (summon.flight) return { phase: 'coming', x: p.x, z: p.z, heading: p.heading, summoner: summon.by, arriveInSec: Math.max(0, summon.depart + summon.flight.total - transitClock.serviceSec) }
+  return { phase: 'parked', x: p.x, z: p.z, heading: p.heading, summoner: summon.by, arriveInSec: null }
+}
+
+/** 旅程を一度に終える（cut=none）ときなど: ホバーを置く所へすぐ置く（飛ばない。呼んでいる途中ならやめる） */
+export function parkHoverAt(p: HoverPark) {
+  summon.flight = null
+  placeHover(p)
+}
+
+/* -------------------------------------------------------------------------- */
+/* 乗る仕組みの状態                                                               */
 /* -------------------------------------------------------------------------- */
 
 export interface HoverRideSpec {
-  from: HoverDockId
-  to: HoverDockId
+  /** 降りる所（行き先の近くの置く所）と、降りてから向かう所（シーンの x, z。降りる側を決める）・行き先の名前 */
+  to: HoverPark
+  toward: [number, number]
+  label: string
   wait: RideTime
   ride: RideTime
   fastSec: number | null
   fastSpeed: number | null
 }
 
-type Step = 'idle' | 'board' | 'turn' | 'settle' | 'power' | 'fly' | 'land' | 'stand' | 'out' | 'done' | 'failed'
+type Step = 'idle' | 'await' | 'board' | 'turn' | 'settle' | 'power' | 'fly' | 'land' | 'stand' | 'out' | 'done' | 'failed'
 
 /** ホバーに乗る仕組みの状態（Character ごと。ch.rides.hover。character/ride/rides.ts が作る） */
 export function createHoverRide(ch: Character) {
@@ -580,13 +953,11 @@ export function createHoverRide(ch: Character) {
     cabin: null as Car | null,
     spec: null as HoverRideSpec | null,
     step: 'idle' as Step,
-    dock: null as HoverDock | null,
+    /** 乗った所（置いてあったホバー）と飛ぶ道 */
+    park: null as HoverPark | null,
     flight: null as HoverFlight | null,
-    /** 出る時刻（運転の日の秒）・回し始めたシーンの時計・止まったシーンの時計 */
+    /** 出る時刻（運転の日の秒。0 = まだ決めていない） */
     depart: 0,
-    /** 出る時刻を探す途中（探し始めた時刻と、次に確かめるずれ。-1 = 探していない） */
-    searchBase: 0,
-    searchDt: -1,
     upCued: false,
     powerAt: 0,
     landAt: 0,
@@ -594,8 +965,10 @@ export function createHoverRide(ch: Character) {
     path: null as Path | null,
     waitDone: false,
     rideDone: false,
-    /** 浮く前（回す間）にやめて、乗った台で降りる（下りる・降りる段の台は行き先でなく乗った台） */
+    /** 浮く前（回す間）にやめて、乗った所で降りる */
     stayed: false,
+    /** 降りる側（局所の x の向き） */
+    outSide: 1 as 1 | -1,
     placeSerial: -1,
     first: true,
     error: null as string | null,
@@ -606,8 +979,11 @@ export function createHoverRide(ch: Character) {
 }
 export type HoverRide = ReturnType<typeof createHoverRide>
 
-/** 機体を書く人（最後に乗り始めた人。ホバーは 1 台なので 1 人。まだ誰も乗っていなければ null で、その間は updateRiders が updateParkedHover で書く） */
-let hoverUser: Character | null = null
+/** 乗っている人の更新が機体を書く段（乗り込みから降りるまで。待つ間は呼んだホバーが飛んで来る） */
+function riderWrites(ch: Character) {
+  const step = ch.rides.hover.step
+  return step !== 'idle' && step !== 'await' && step !== 'done' && step !== 'failed'
+}
 
 /** 今の様子（状態の返送） */
 export function hoverRideState(ch: Character) {
@@ -615,10 +991,12 @@ export function hoverRideState(ch: Character) {
   if (ctl.step === 'idle') return null
   const now = transitClock.serviceSec
   const f = ctl.flight
+  const coming = ctl.step === 'await' && summon.flight ? Math.max(0, summon.depart + summon.flight.total - now) : null
   return {
     step: ctl.step,
-    from: ctl.spec ? HOVER_DOCKS[ctl.spec.from].label : null,
-    to: ctl.spec ? HOVER_DOCKS[ctl.spec.to].label : null,
+    from: null,
+    to: ctl.spec?.label ?? null,
+    come_in_s: coming === null ? null : Math.round(coming),
     depart_in_s: ctl.depart ? Math.round(ctl.depart - now) : null,
     arrive_in_s: f && ctl.depart ? Math.round(ctl.depart + f.total - now) : null,
     error: ctl.error,
@@ -642,12 +1020,12 @@ export const hoverRide = {
     if (ctl.step === 'done' || ctl.step === 'failed') reset(ctl, false)
   },
   /**
-   * 町の中の移動が取り消された: まだ腰掛けていなければやめる。回している間（浮く前）なら、ファンを止めて乗った台で降りる（合流待ちの
-   * 早送り・カットもやめる）。飛んでいる途中なら、着いて降りるまで続ける
+   * 町の中の移動が取り消された: まだ腰掛けていなければやめる（呼んだホバーは、来る途中ならそのまま来て待つ）。回している間（浮く前）なら、
+   * ファンを止めて乗った所で降りる（待つ間の早送り・カットもやめる）。飛んでいる途中なら、着いて降りるまで続ける
    */
   cancel(ch: Character) {
     const ctl = ch.rides.hover
-    if (ctl.step === 'board' || ctl.step === 'turn' || ctl.step === 'settle') reset(ctl, true)
+    if (ctl.step === 'await' || ctl.step === 'board' || ctl.step === 'turn' || ctl.step === 'settle') reset(ctl, true)
     else if (ctl.step === 'power') {
       ctl.step = 'land'
       ctl.landAt = ctl.t
@@ -660,61 +1038,90 @@ export const hoverRide = {
   spec: (ch: Character) => ch.rides.hover.spec,
 }
 
-/** 乗る便（乗り場の台の横の待つ所と、飛ぶ道）。だめなら理由 */
+/** 乗る便（ホバーを呼んで、横の乗る所と、飛ぶ道）。だめなら理由 */
 export interface HoverBoardingPlan {
-  from: HoverDockId
-  to: HoverDockId
+  /** 乗る所（呼んだホバーを置く所）・飛ぶ道 */
+  park: HoverPark
   flight: HoverFlight
-  /** 乗り降りする横の地面の所（シーンの x, z）と、そこで向く向き */
+  /** 乗り降りする横の地面の所（シーンの x, z）と、そこで向く向き（ホバーの方） */
   spot: [number, number]
   heading: number
 }
 
-/** 乗る便を決める（escort = 並走する仲間の場所を空ける。乗る人の仲間に浮かぶ仲間がいるか: character/ride/party.ts の partyEscorts） */
-export function planHoverBoarding(from: HoverDockId, to: HoverDockId, escort = true): HoverBoardingPlan | string {
-  if (hoverHome.at !== from) return `ホバーは${HOVER_DOCKS[hoverHome.at].label}に置いてあります（${HOVER_DOCKS[from].label}ではありません）`
-  const d = HOVER_DOCKS[from]
+/**
+ * 乗る便を決める（旅程の乗り物の区間。character/avatar/travel.ts）: ホバーを乗る人 ch の近くへ呼び（もう近くで待っている・こちらへ来る途中なら、
+ * そのまま）、そこから降りる所 to へ飛ぶ道を決める。escort = 並走する仲間の場所を空ける（乗る人の仲間に浮かぶ仲間がいるか: character/ride/party.ts の partyEscorts）
+ */
+export function planHoverBoarding(ch: Character, to: HoverPark, escort = true): HoverBoardingPlan | string {
+  if (rider && rider !== ch && riderWrites(rider)) return 'ホバーはほかの人が乗っています'
+  const m = ch.motion
+  // 呼ぶ（来る途中・待っている所が、乗る人から 8m の内でまっすぐ歩けるなら、そのまま）
+  let park: HoverPark | null = summon.flight ? summon.flight.to : hoverHome.placed ? { ...hoverHome } : null
+  if (park) {
+    const sp = sideSpot(park, sideOf(park, m.position.x, m.position.z), _w)
+    if (summon.by !== ch || Math.hypot(sp.x - m.position.x, sp.z - m.position.z) > 8 || !walkableLine(m.position.x, m.position.z, sp.x, sp.z)) park = null
+  }
+  if (!park) {
+    const spot = summonSpot(ch)
+    if (typeof spot === 'string') return spot
+    startSummon(ch, spot)
+    park = summon.flight ? summon.flight.to : { ...hoverHome }
+  }
+  const side = sideOf(park, m.position.x, m.position.z)
+  park = { ...park, side }
+  if (summon.flight) summon.flight.to.side = side
+  else hoverHome.side = side
   // 町の木・建物をよける道は、町のタイルを全部読んでから（まだなら、回して待つ間に決め直す）
   townData.loadAllTiles()
-  const f = planFlight(d, HOVER_DOCKS[to], townData.allTilesLoaded(), escort)
+  const f = planHoverFlight(park, to, { avoid: !tilesPending(), escort, skip: ch })
   if (typeof f === 'string') return f
-  const m = parkedMatrix(d, new THREE.Matrix4())
-  const p = new THREE.Vector3(d.side * SIDE_X, 0, STAND_Z).applyMatrix4(m)
+  const p = sideSpot(park, side, new THREE.Vector3())
   // 横の所でホバーの方（床板の方）を向く
-  return { from, to, flight: f, spot: [p.x, p.z], heading: d.heading + (d.side > 0 ? -Math.PI / 2 : Math.PI / 2) }
+  return { park, flight: f, spot: [p.x, p.z], heading: park.heading + (side > 0 ? -Math.PI / 2 : Math.PI / 2) }
 }
 
-/** 乗るのを始める（花音は乗り場の台の横に着いている） */
+/** 乗るのを始める（乗る人はホバーの横の乗る所に着いている。ホバーがまだ来ていなければ、来るまで待つ） */
 export function beginHoverRide(ch: Character, spec: HoverRideSpec, plan: HoverBoardingPlan) {
   const ctl = ch.rides.hover
-  // 機体を書くのはこの人（乗り始める前の止め直しから）
-  hoverUser = ch
   reset(ctl, false)
+  // 機体を書くのはこの人（乗り込み始めてから）
+  rider = ch
   ctl.spec = spec
-  ctl.dock = HOVER_DOCKS[spec.from]
+  ctl.park = plan.park
   ctl.flight = plan.flight
   ctl.placeSerial = ch.motion.placeSerial
   ctl.cabin = hoverVehicle.car(0)
+  ctl.outSide = 1
   setRiderCar(ch.ride, ctl.cabin)
-  ch.ride.phase = 'board'
   ctl.first = true
-  updatePose(ctl, 0)
-  // 横の地面の所 → 床板の縁 → 立つ所（局所）
-  const s = ctl.dock.side
-  const p0 = ctl.cabin.toCabin(ch.motion.position, new THREE.Vector3())
-  ctl.path = makePath([new THREE.Vector3(p0.x, 0, p0.z), new THREE.Vector3(s * 0.5, 0, STAND_Z), new THREE.Vector3(0, 0, STAND_Z)])
-  ctl.path.speed = 0
-  ctl.step = 'board'
-  ctl.entered = false
   const m = ch.motion
   m.stopId = null
   m.targetId = null
   m.activityHeld = false
   m.seat = null
   m.action = 'present'
-  // ホバーは待たない（乗る機体が決まって、すぐ乗り込み始める）
+  ch.ride.phase = 'wait'
+  ctl.step = 'await'
   ch.events.emit('ride.wait', ctl.cabin)
-  ch.events.emit('ride.board', ctl.cabin)
+  // もう来ていれば、すぐ乗り込む
+  if (!summonFlying()) startBoarding(ctl)
+}
+
+/** 置いたホバーへ乗り込み始める */
+function startBoarding(ctl: HoverRide) {
+  const ch = ctl.ch
+  const park = { ...hoverHome }
+  ctl.park = park
+  ctl.cabin!.setPose(parkedMatrix(_m), true)
+  ctl.first = false
+  const s = park.side
+  const p0 = ctl.cabin!.toCabin(ch.motion.position, new THREE.Vector3())
+  ctl.path = makePath([new THREE.Vector3(p0.x, 0, p0.z), new THREE.Vector3(s * 0.5, 0, STAND_Z), new THREE.Vector3(0, 0, STAND_Z)])
+  ctl.path.speed = 0
+  ctl.step = 'board'
+  ctl.entered = false
+  ch.ride.phase = 'board'
+  ch.events.emit('ride.board', ctl.cabin!)
 }
 
 function fail(ctl: HoverRide, msg: string) {
@@ -726,6 +1133,7 @@ function fail(ctl: HoverRide, msg: string) {
     r.phase = 'none'
     setRiderCar(r, null)
   }
+  if (rider === ctl.ch) rider = null
   cancelWarp(ctl.ch)
   if (car) ctl.ch.events.emit('ride.cancel', car)
 }
@@ -735,10 +1143,10 @@ function reset(ctl: HoverRide, stopRider: boolean) {
   ctl.spec = null
   ctl.step = 'idle'
   ctl.flight = null
+  ctl.park = null
   ctl.path = null
   ctl.error = null
   ctl.depart = 0
-  ctl.searchDt = -1
   ctl.upCued = false
   ctl.waitDone = ctl.rideDone = false
   ctl.stayed = false
@@ -750,8 +1158,8 @@ function reset(ctl: HoverRide, stopRider: boolean) {
     r.attach = 0
     r.inside = false
   }
-  if (hoverUser === ctl.ch) {
-    hoverCraft.power = 0
+  if (rider === ctl.ch) {
+    rider = null
     hoverCraft.speed = 0
   }
   cancelWarp(ctl.ch)
@@ -766,65 +1174,10 @@ function reset(ctl: HoverRide, stopRider: boolean) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 毎コマ（updateRiders。交通の時計を進めたあと・花音を動かす前）                          */
+/* 毎コマ（updateRiders。交通の時計を進めたあと・人を動かす前）                          */
 /* -------------------------------------------------------------------------- */
 
-/**
- * 今のコマのホバーの行列（飛んでいる間は道の上、ほかは置いてある乗り場）。機体を書く人（hoverUser）の分だけ書く。
- * ctl = null は誰も乗っていない間（updateRiders の updateParkedHover。置いてある乗り場 hoverHome.at）
- */
-function updatePose(ctl: HoverRide | null, dt: number) {
-  if (ctl && hoverUser !== ctl.ch) return
-  const f = ctl?.flight
-  const now = transitClock.serviceSec
-  let speed = 0
-  let tilt = 0
-  let bank = 0
-  let bob = 0
-  if (ctl && f && ctl.step === 'fly') {
-    const tau = now - ctl.depart
-    const { s, v } = distAt(f, tau)
-    const h = sampleAt(f, s, _pt)
-    // 前後の傾き（速さの変わり方と上り下り）・曲がるときの横の傾き（向きの変わり方）
-    const a = distAt(f, tau + 0.25)
-    sampleAt(f, a.s, _w)
-    const ha = sampleAt(f, Math.min(f.pts[f.pts.length - 1].s, s + Math.max(1.5, v * 0.6)), _d)
-    const climb = (_w.y - _pt.y) / 0.25
-    tilt = THREE.MathUtils.clamp(-(a.v - v) * 0.04 - climb * 0.012, -0.06, 0.05)
-    bank = THREE.MathUtils.clamp(-Math.atan2(Math.sin(ha - h), Math.cos(ha - h)) * v * 0.05, -0.07, 0.07)
-    speed = v
-    // 浮いている間のわずかな上下（交通の時計で）
-    bob = 0.025 * Math.sin(now * 1.9) * THREE.MathUtils.smoothstep(tau, 0.8, 2.5) * THREE.MathUtils.smoothstep(f.total - tau, 0.6, 2.0)
-    _q.setFromEuler(_e.set(tilt, h, bank, 'YXZ'))
-    _pt.y += bob
-    hoverCraft.matrix.compose(_pt, _q, _s)
-  } else {
-    const d = !ctl || ctl.step === 'idle' || !ctl.spec ? HOVER_DOCKS[hoverHome.at] : ctl.step === 'land' || ctl.step === 'stand' || ctl.step === 'out' || ctl.step === 'done' ? alightDock(ctl) : HOVER_DOCKS[ctl.spec.from]
-    if (!townWalk.ready) return
-    parkedMatrix(d, hoverCraft.matrix)
-    // ファンが回っている間は台からわずかに浮く（着く前・止める前）
-    if (hoverCraft.power > 0.01) {
-      const lift = 0.04 * hoverCraft.power + 0.008 * Math.sin(now * 2.3) * hoverCraft.power
-      hoverCraft.matrix.elements[13] += lift
-    }
-  }
-  hoverCraft.speed = speed
-  hoverCraft.ready = true
-  void dt
-  if (!ctl) return
-  const car = ctl.ch.ride.car
-  if (car?.vehicle === hoverVehicle) {
-    car.setPose(hoverCraft.matrix, ctl.first)
-    ctl.first = false
-  }
-}
-
-/** 降りる乗り場の台（ふだんは行き先。浮く前にやめたときは乗った台）。spec がある間だけ */
-function alightDock(ctl: HoverRide) {
-  return HOVER_DOCKS[ctl.stayed ? ctl.spec!.from : ctl.spec!.to]
-}
-
-/** 機体のファンの回り（回す・止める）と灯り（夜。回っている間）。機体を書く人の更新か、誰も乗っていない間の updateParkedHover から 1 コマ 1 回 */
+/** 機体のファンの回り（回す・止める）と灯り（夜。回っている間）。1 コマ 1 回 */
 function updatePower(spinning: boolean, dt: number) {
   hoverCraft.power += ((spinning ? 1 : 0) - hoverCraft.power) * (1 - Math.exp(-dt * (spinning ? 2.2 : 1.6)))
   if (hoverCraft.power < 1e-3) hoverCraft.power = 0
@@ -832,15 +1185,60 @@ function updatePower(spinning: boolean, dt: number) {
   hoverCraft.lamp = Math.min(1, hoverCraft.power * 1.5) * dark
 }
 
+/** 置いてあるホバーの行列（ファンが回っている間は地面からわずかに浮く） */
+function writeParked(now: number) {
+  parkedMatrix(hoverCraft.matrix)
+  if (hoverCraft.power > 0.01) hoverCraft.matrix.elements[13] += 0.04 * hoverCraft.power + 0.008 * Math.sin(now * 2.3) * hoverCraft.power
+  hoverCraft.speed = 0
+  hoverCraft.ready = true
+}
+
 /**
- * 毎コマ（riders.ts の updateRiders。乗る人ごとの更新の前）: まだ誰も乗っていない間（hoverUser が null）の機体（置いてある乗り場・ファンは止まったまま）。
- * 乗る人の「乗っていない間」の分と同じ式
+ * 毎コマ（riders.ts の updateRiders。乗る人ごとの更新の前に 1 回）: 乗っている人がいない間の機体（置いてある・呼ばれて飛んで来る）。
+ * characters = よける人（飛ぶ道・置く所を決めるとき）
  */
-export function updateParkedHover(delta: number) {
-  if (hoverUser) return
+export function updateHoverCraft(characters: readonly Character[], delta: number) {
+  people = characters
+  if (rider && riderWrites(rider)) return
   const dt = Math.min(delta, 0.1)
+  const now = transitClock.serviceSec
+  const f = summon.flight
+  if (f) {
+    const tau = now - summon.depart
+    if (tau >= f.total) {
+      // 着いた: 下りた所に置く（次に呼ぶとここから）
+      summon.flight = null
+      placeHover(f.to)
+      townEvents.emit('hover.land', { x: f.to.x, y: f.to.y + 0.3, z: f.to.z })
+    } else {
+      if (!summon.upCued && tau > -SUMMON_SPIN) {
+        summon.upCued = true
+        townEvents.emit('hover.spinUp', { x: f.from.x, y: f.from.y + 0.3, z: f.from.z })
+      }
+      updatePower(true, dt)
+      if (tau > 0) {
+        hoverCraft.speed = flightPose(f, tau, hoverCraft.matrix, now)
+        hoverCraft.ready = true
+      } else writeParked(now)
+      return
+    }
+  }
   updatePower(false, dt)
-  updatePose(null, dt)
+  if (!hoverHome.placed || !townWalk.ready) {
+    hoverCraft.ready = false
+    return
+  }
+  writeParked(now)
+}
+
+/** 乗っている人の、今のコマのホバーの行列（飛んでいる間は道の上、ほかは置いてある所） */
+function updatePose(ctl: HoverRide, now: number) {
+  if (rider !== ctl.ch) return
+  const f = ctl.flight
+  if (f && ctl.step === 'fly') {
+    hoverCraft.speed = flightPose(f, now - ctl.depart, hoverCraft.matrix, now)
+    hoverCraft.ready = true
+  } else if (riderWrites(ctl.ch)) writeParked(now)
 }
 
 export function updateHoverRide(ch: Character, t: number, delta: number) {
@@ -848,17 +1246,19 @@ export function updateHoverRide(ch: Character, t: number, delta: number) {
   const r = ch.ride
   ctl.t = t
   const dt = Math.min(delta, 0.1)
+  const now = transitClock.serviceSec
+  if (!hoverRide.active(ch)) return
   // ファンの回り（回す・止める）と灯り（機体を書く人だけ）
-  if (hoverUser === ch) updatePower(ctl.step === 'power' || ctl.step === 'fly' || (ctl.step === 'land' && t - ctl.landAt < SPIN_DOWN), dt)
-  if (!hoverRide.active(ch)) {
-    updatePose(ctl, dt)
-    return
-  }
+  if (rider === ch && riderWrites(ch)) updatePower(ctl.step === 'power' || ctl.step === 'fly' || (ctl.step === 'land' && t - ctl.landAt < SPIN_DOWN), dt)
   if (ch.motion.placeSerial !== ctl.placeSerial) {
-    // 途中で別の所へ置き直された（kanon.place）: ホバーは今いる乗り場（飛んでいる途中なら行き先）に置く
-    if (ctl.step === 'fly' && ctl.spec) hoverHome.at = ctl.spec.to
+    // 途中で別の所へ置き直された（ワープ・kanon.place）: 飛んでいる途中なら、ホバーはその下の地面に下ろして置く
+    if (ctl.step === 'fly' && rider === ch) {
+      _v.setFromMatrixPosition(hoverCraft.matrix)
+      const h = Math.atan2(hoverCraft.matrix.elements[8], hoverCraft.matrix.elements[10])
+      const g = townWalk.groundY(_v.x, _v.z, _v.y - FLY_HEIGHT, false)
+      placeHover({ x: _v.x, y: parkedHeight(_v.x, _v.z, h, g), z: _v.z, heading: h, side: 1 })
+    }
     reset(ctl, false)
-    updatePose(ctl, dt)
     return
   }
   const spec = ctl.spec!
@@ -867,62 +1267,63 @@ export function updateHoverRide(ch: Character, t: number, delta: number) {
     fail(ctl, 'ホバーの飛ぶ道がありません')
     return
   }
-  const now = transitClock.serviceSec
-  if (ctl.step === 'power') {
+  if (ctl.step === 'await') {
+    // 呼んだホバーが来るのを待つ（待つ間の時間の扱い wait）
+    if (!summonFlying()) startBoarding(ctl)
+    else if (!ctl.waitDone) {
+      ctl.waitDone = true
+      const arrive = summon.depart + summon.flight!.total
+      if (spec.wait !== 'real' && arrive - now > 3) advanceBy(ch, arrive - 1.5 - now, spec.wait, spec.fastSec, spec.fastSpeed, 6)
+    }
+  } else if (ctl.step === 'power') {
     // ファンを回し始めた（花音が腰掛けて回し始めたコマ。音の合図は使う側が鳴らす）
     if (!ctl.upCued) {
       ctl.upCued = true
       const p = hoverPos(_v)
       townEvents.emit('hover.spinUp', { x: p.x, y: p.y, z: p.z })
     }
-    // 町のタイルを読み終えたら、町の木・建物をよける道に決め直す（読み終えるまで待つ。並走の場所を空けるかは、乗り始めたときの道のまま）
-    if (!f.avoided && townData.allTilesLoaded()) {
-      const nf = planFlight(f.from, f.to, true, f.escort)
+    // 町のタイルを読み終えたら、町の木・建物をよける道に決め直す（読み終えるまで待つ）
+    if (!f.avoided && !tilesPending()) {
+      const nf = planHoverFlight(f.from, spec.to, { avoid: true, escort: f.escort, skip: ch })
       if (typeof nf === 'string') {
         fail(ctl, nf)
         return
       }
       ctl.flight = nf
     }
-    // 回し始めて 2 秒（ファンが回りきる）たったら、配送機と近づかない出る時刻を決めて、それまで待つ（合流待ち）
+    // 回し始めて 2 秒（ファンが回りきる）たったら、緑電の線路を横切る所に編成がいない出る時刻を決めて、それまで待つ
     if (!ctl.depart && ctl.flight!.avoided && t - ctl.powerAt > SPIN_UP - 0.4) {
-      if (ctl.searchDt < 0) {
-        ctl.searchBase = now + 0.4
-        ctl.searchDt = 0
-      }
-      const dep = searchDeparture(ctl, ctl.flight!)
-      if (dep !== null) {
-        ctl.depart = dep
-        ctl.searchDt = -1
-      }
-    }
-    if (ctl.depart && !ctl.waitDone) {
+      ctl.depart = pickDeparture(ctl.flight!, now + 0.4)
+      if (!ctl.waitDone && spec.wait !== 'real' && ctl.depart - now > 3) advanceBy(ch, ctl.depart - 1.5 - now, spec.wait, spec.fastSec, spec.fastSpeed, 6)
       ctl.waitDone = true
-      if (spec.wait !== 'real' && ctl.depart - now > 3) advanceBy(ch, ctl.depart - 1.5 - now, spec.wait, spec.fastSec, spec.fastSpeed, 6)
     }
     if (ctl.depart && now >= ctl.depart) {
       ctl.step = 'fly'
       r.phase = 'riding'
     }
   } else if (ctl.step === 'fly') {
+    const fl = ctl.flight!
     const tau = now - ctl.depart
-    // 飛ぶ間（浮き上がってレーンを 6 秒飛んだら、下り始める 6 秒前へ）
-    if (!ctl.rideDone && tau > f.liftSec + 6) {
+    // 飛ぶ間（浮いて 6 秒飛んだら、下り始める 6 秒前へ）
+    if (!ctl.rideDone && tau > 6) {
       ctl.rideDone = true
-      const target = ctl.depart + f.liftSec + f.cruiseSec - 6
+      const target = ctl.depart + fl.total - 6
       if (spec.ride !== 'real' && target - now > 2) advanceBy(ch, target - now, spec.ride, spec.fastSec, spec.fastSpeed, 20)
     }
-    if (tau >= f.total) {
-      // 着いた: 台に置く。ファンを止める
-      hoverHome.at = spec.to
+    if (tau >= fl.total) {
+      // 着いた: 下りた所に置く（次に呼ぶとここから）。ファンを止める。降りる側は、降りてから向かう所の側
+      const to = fl.to
+      ctl.outSide = sideOf(to, spec.toward[0], spec.toward[1])
+      placeHover({ ...to, side: ctl.outSide })
       ctl.step = 'land'
       ctl.landAt = t
       const p = hoverPos(_v)
       townEvents.emit('hover.land', { x: p.x, y: p.y, z: p.z })
-      // 台に着いた（並走していた仲間はここで離れる）
+      // 着いた（並走していた仲間はここで離れる）
       ch.events.emit('ride.arrived', ctl.cabin!)
     }
   } else if (ctl.step === 'land') {
+    if (ctl.stayed) ctl.outSide = hoverHome.side
     if (t - ctl.landAt > SPIN_DOWN) {
       ctl.step = 'stand'
       r.phase = 'alight'
@@ -931,8 +1332,13 @@ export function updateHoverRide(ch: Character, t: number, delta: number) {
       ch.events.emit('ride.alight', ctl.cabin!)
     }
   }
-  updatePose(ctl, dt)
-  updateParty(ch, ctl.cabin!, dt)
+  updatePose(ctl, now)
+  const car = ctl.cabin
+  if (car && r.car === car) {
+    car.setPose(hoverCraft.matrix, ctl.first)
+    ctl.first = false
+  }
+  if (car) updateParty(ch, car, dt)
 }
 
 /** ホバーの今の位置（シーン。音の合図の出来事） */
@@ -943,8 +1349,6 @@ function hoverPos(out: THREE.Vector3) {
 /* -------------------------------------------------------------------------- */
 /* 一緒に乗る仲間の道（ホバーの左の少し前に並んで飛ぶ。character/ride/party.ts。前の KB-001 の付き添いの式と数のまま） */
 /* -------------------------------------------------------------------------- */
-
-const _arrivalM = new THREE.Matrix4()
 
 defineMemberSlots('hover', {
   /** 並走を始める（花音が腰掛けた）: 花音の後ろ・上から、左へ回り込みながらホバーと一緒に動く（浮き上がる前にホバーに付き、飛ぶ間はばねの分だけ） */
@@ -960,7 +1364,7 @@ defineMemberSlots('hover', {
       end: 'none',
       settle: 0,
       speed: 3,
-      speedNow: () => (ctl.step === 'fly' ? 4 : 2.6),
+      speedNow: () => (ctl.step === 'fly' ? CRUISE + 2 : 2.6),
       attach0: 0,
       attachRate: 1.2,
       attachGate: null,
@@ -972,24 +1376,22 @@ defineMemberSlots('hover', {
       maxAbove: null,
     }
   },
-  /** 並走をやめる（台に着いた）: その場で離れる */
+  /** 並走をやめる（下りた）: その場で離れる */
   leave: () => null,
-  /** 降りて立つ所: 降りる乗り場の台（行き先。浮く前にやめたときは乗った台）に置いたホバーの、乗り降りする側の横の地面（ホバーと反対の方を向く） */
+  /** 降りて立つ所: 下りたホバーの、降りる側の横の地面（ホバーと反対の方を向く） */
   arrival(leader, out) {
     const ctl = leader.rides.hover
     if (!ctl.spec) return null
-    const d = alightDock(ctl)
-    out.set(d.side * SIDE_X, 0, STAND_Z).applyMatrix4(parkedMatrix(d, _arrivalM))
+    const s = ctl.outSide
+    out.set(s * SIDE_X, 0, STAND_Z).applyMatrix4(parkedMatrix(_m))
     out.y = groundHeight(leader, out.x, out.z, false, out.y)
-    return d.heading + (d.side > 0 ? Math.PI / 2 : -Math.PI / 2)
+    return hoverHome.heading + (s > 0 ? Math.PI / 2 : -Math.PI / 2)
   },
 })
 
 /* -------------------------------------------------------------------------- */
 /* 花音の動き（locomotion の中から）                                               */
 /* -------------------------------------------------------------------------- */
-
-const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a))
 
 function turnToward(m: CharacterMotion, target: number, dt: number, maxRate = 2.4) {
   const err = wrapAngle(target - m.heading)
@@ -1021,8 +1423,18 @@ export function driveHover(ch: Character, _t: number, dt: number): boolean {
   m.timeScale = 1
   m.stride = null
   const step = ctl.step
-  const s = ctl.dock?.side ?? 1
   const car = ctl.cabin!
+  if (step === 'await') {
+    // 横の乗る所で、来るホバーの方を向いて待つ
+    m.speed = 0
+    m.phase = 'idle'
+    _v.setFromMatrixPosition(hoverCraft.matrix)
+    if (hoverCraft.ready && Math.hypot(_v.x - m.position.x, _v.z - m.position.z) > 0.3) turnToward(m, Math.atan2(_v.x - m.position.x, _v.z - m.position.z), dt)
+    else m.turnRate = 0
+    m.moveDir.set(Math.sin(m.heading), 0, Math.cos(m.heading))
+    setGround(ch, dt)
+    return true
+  }
   if (step === 'board' || step === 'out') {
     const p = ctl.path!
     const done = walkPath(p, dt, step === 'board' ? 0.7 : 0.75)
@@ -1047,7 +1459,7 @@ export function driveHover(ch: Character, _t: number, dt: number): boolean {
     }
     if (step === 'board' && done) ctl.step = 'turn'
     if (step === 'out' && done) {
-      // 台の横の地面に下りた: 町の中の移動へ返す
+      // 横の地面に下りた: 町の中の移動へ返す
       m.speed = 0
       m.phase = 'idle'
       r.phase = 'none'
@@ -1056,6 +1468,7 @@ export function driveHover(ch: Character, _t: number, dt: number): boolean {
       r.attach = 0
       ctl.step = 'done'
       r.serials.alight++
+      if (rider === ch) rider = null
       ch.events.emit('ride.left', car)
       return false
     }
@@ -1099,8 +1512,9 @@ export function driveHover(ch: Character, _t: number, dt: number): boolean {
     return true
   }
   if (step === 'stand') {
-    // 立ち上がったら（腰掛けの姿勢がほどけたら）、乗り降りする側へ床板から下りる
+    // 立ち上がったら（腰掛けの姿勢がほどけたら）、降りる側へ床板から下りる
     if (m.actionBlend < 0.25) {
+      const s = ctl.outSide
       m.seat = null
       ctl.path = makePath([new THREE.Vector3(0, 0, STAND_Z), new THREE.Vector3(s * 0.5, 0, STAND_Z - 0.05), new THREE.Vector3(s * (SIDE_X + 0.25), 0, STAND_Z - 0.2)])
       ctl.path.speed = 0
@@ -1116,10 +1530,6 @@ export function driveHover(ch: Character, _t: number, dt: number): boolean {
 /* 自動カメラ（配信。乗っている間の画）                                                */
 /* -------------------------------------------------------------------------- */
 
-/**
- * 乗っている間の自動カメラの画 i（ホバーと一緒に動く）: 0 = 外から追う（左後ろの斜め上）、1 = 横に並ぶ（左。KB-001 の外）、2 = 前から（進む先の
- * レーンの上。向かいの配送機とすれ違うのが見える）。町の建物・木・地面に入る・さえぎられるなら、外から追う画へ。どれもだめなら null
- */
 /** 画の手前（カメラから 1〜3.5m）の、画角の縁の近くの点に、町の木の葉・建物があるか（画の手前に葉の塊が大きく入る画を使わない） */
 const _fwd = new THREE.Vector3()
 const _side = new THREE.Vector3()
@@ -1150,16 +1560,20 @@ const autoPick = new Map<number, { view: number; at: number }>()
 /** ?debug: 画を置けなかったわけ（画の番号ごと） */
 const autoWhy: string[] = []
 
-/** 乗り場の台の横で乗り降りする間の自動カメラの画の候補（src/camera/rideViews.ts） */
+/** 置いたホバーの横で乗り降りする間（待つ間も）の自動カメラの画の候補（src/camera/rideViews.ts） */
 export function hoverPlatformViews(ch: Character, _car: Car, out: PlatformView[]) {
   const ctl = ch.rides.hover
   out.length = 0
-  if (ctl.step === 'idle' || !ctl.dock) return
-  // 乗り場の台の横: ホバーの右前・左前・後ろの斜め（台の上の花音と、置いたホバーの全体）
-  waitViews(ch.motion.position, ctl.dock.heading + (ctl.dock.side > 0 ? Math.PI / 2 : -Math.PI / 2), out)
+  if (ctl.step === 'idle' || !hoverHome.placed) return
+  // ホバーの横: ホバーの右前・左前・後ろの斜め（横の花音と、置いたホバーの全体）
+  const s = ctl.step === 'out' || ctl.step === 'stand' || ctl.step === 'land' ? ctl.outSide : hoverHome.side
+  waitViews(ch.motion.position, hoverHome.heading + (s > 0 ? Math.PI / 2 : -Math.PI / 2), out)
 }
 
-/** 乗っている間の自動カメラの画 i（便 car のホバーと一緒に動く。src/camera/rideViews.ts） */
+/**
+ * 乗っている間の自動カメラの画 i（便 car のホバーと一緒に動く。src/camera/rideViews.ts）: 0 = 外から追う（左後ろの斜め上）、1 = 横に並ぶ（左。KB-001 の外）、
+ * 2 = 前から。町の建物・木・地面に入る・さえぎられるなら、外から追う画へ。どれもだめなら null
+ */
 export function hoverAutoView(ch: Character, car: Car, i: number, pos: THREE.Vector3, target: THREE.Vector3): number | null {
   const ctl = ch.rides.hover
   if (car.vehicle !== hoverVehicle || (ctl.step !== 'power' && ctl.step !== 'fly' && ctl.step !== 'land')) return null
@@ -1170,7 +1584,7 @@ export function hoverAutoView(ch: Character, car: Car, i: number, pos: THREE.Vec
     [1.7, H.deckY + 2.0, -4.3, 0.1, eyeY - 0.25, 0.6, 46],
     [3.1, H.deckY + 1.15, 0.45, 0, eyeY - 0.1, -0.15, 44],
     [-0.55, H.deckY + 1.4, 3.7, 0.05, eyeY - 0.05, -0.1, 42],
-    // 置けないとき: すぐ後ろの上（浮遊レーンの通り道の中。枝を払った幅の内）
+    // 置けないとき: すぐ後ろの上
     [0.0, H.deckY + 1.9, -3.2, 0, eyeY - 0.1, 0.8, 50],
   ]
   const place = (kk: number) => {
@@ -1181,11 +1595,9 @@ export function hoverAutoView(ch: Character, car: Car, i: number, pos: THREE.Vec
       const g = townWalk.groundY(pos.x, pos.z, pos.y, false)
       if (pos.y < g + 0.8) pos.y = g + 0.8
     }
-    // 町の建物・木の葉から 0.9m（画の手前に葉の塊が入らないように）・花音まで見通せる。通り道の外の画は、画の手前の縁も見る
-    // すぐ後ろの上の画（通り道の中。通り道の壁の葉まで 0.9m ほど）は、0.5m
-    const m = kk === 3 ? 0.5 : 0.9
-    // （通り道の上は葉が残っているので、すぐ後ろの上の画は上を見ない）
-    const b = townSolids.blocker(pos.x, pos.y, pos.z, m) ?? (kk === 3 ? null : townSolids.blocker(pos.x, pos.y + 0.7, pos.z, m - 0.3)) ?? townSolids.blocker(pos.x, pos.y - 0.7, pos.z, m - 0.3)
+    // 町の建物・木の葉から 0.9m（画の手前に葉の塊が入らないように）・花音まで見通せる。すぐ後ろの上の画は 0.5m
+    const mg = kk === 3 ? 0.5 : 0.9
+    const b = townSolids.blocker(pos.x, pos.y, pos.z, mg) ?? (kk === 3 ? null : townSolids.blocker(pos.x, pos.y + 0.7, pos.z, mg - 0.3)) ?? townSolids.blocker(pos.x, pos.y - 0.7, pos.z, mg - 0.3)
     if (b) return ((autoWhy[kk] = `place:${b}`), false)
     const sb = townSolids.sightBlocker(pos, target, 0.8)
     if (sb) return ((autoWhy[kk] = `sight:${sb}`), false)
@@ -1224,7 +1636,6 @@ export function hoverRideDebug(ch: Character) {
     flightPosAt: (tau: number) => flightPosAt(ctl, tau),
     autoView: (i: number, pos: THREE.Vector3, target: THREE.Vector3) => (ctl.cabin ? hoverAutoView(ch, ctl.cabin, i, pos, target) : null),
     autoWhy,
-    droneOnLane,
     /** 仲間の今の位置（ホバーの局所）・段・行き先・付いて動く度合い */
     members: () => {
       const local = (p: THREE.Vector3) => (r.lastCar ? r.lastCar.toCabin(p, new THREE.Vector3()) : p.clone()).toArray().map((v) => +v.toFixed(2))
@@ -1233,16 +1644,19 @@ export function hoverRideDebug(ch: Character) {
     ctl,
     hoverHome,
     hoverCraft,
-    planFlight,
-    planHoverBoarding,
-    beginHoverRide: (spec: HoverRideSpec, plan: HoverBoardingPlan) => beginHoverRide(ch, spec, plan),
+    summon,
+    summonHover: () => summonHover(ch),
+    hoverStatus,
+    planHoverFlight,
+    hoverSpotNear,
+    planHoverBoarding: (to: HoverPark, escort?: boolean) => planHoverBoarding(ch, to, escort),
     hoverRideState: () => hoverRideState(ch),
     flightClear,
-    pickDeparture: (f: HoverFlight, now: number, lead: number) => pickDeparture(ctl, f, now, lead),
-    laneNet,
+    pickDeparture,
     townSolids,
     townWalk,
     nearTram,
-    docks: HOVER_DOCKS,
+    hoverBlocked,
+    propBlocked,
   }
 }

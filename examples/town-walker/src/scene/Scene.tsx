@@ -18,7 +18,7 @@ const RIDERS = [walker]
  * 例のアプリの場面（町とラボと歩く人）。毎コマの順（R3F の useFrame の優先度。小さい方が先。kanon-lab の docs/design/map-split.md §8）:
  *
  *   −90   TownClock     町の時計と外の状態（town.begin。Suspense の外）
- *   −79   RideDriver    乗る仕組み（ケーブルの線・緑電と運河バスの運行・置いてあるホバー → 乗る人ごと）
+ *   −79   RideDriver    乗る仕組み（ケーブルの線・緑電と運河バスの運行・誰も乗っていない間のホバー → 乗る人ごと）
  *   −59   Controls      WASD の向きを歩く人へ（カメラの向きから）・クリックの行き先の印
  *   −58   WalkerDriver  歩く人を進める（updateLocomotion。乗っている間は drivers.motion の driveRides、ほかは drivers.travel の旅程か WASD・クリック）と、
  *                       旅程の様子（travel.ts の updateTravel）

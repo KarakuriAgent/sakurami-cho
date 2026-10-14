@@ -12,7 +12,7 @@ export interface RideDriverProps {
  * 乗る仕組みの中身は three の形（character/ride/riders.ts の updateRiders）で、ここは useFrame の時期に合わせて呼ぶだけ。
  *
  * 優先度 -79（町の毎コマの初め town.begin（−90。早送り・カットの分を町の時刻へ → 外の状態 → 交通の時計 → ホイールの角度。react/TownView.tsx の
- * TownClock）のあと、花音を動かす KanonNavigator の -58 より前）: 乗る人の乗り物（updateRiders。ケーブルの線・緑電と運河バスの運行・置いてあるホバー →
+ * TownClock）のあと、花音を動かす KanonNavigator の -58 より前）: 乗る人の乗り物（updateRiders。ケーブルの線・緑電と運河バスの運行・誰も乗っていない間のホバー →
  * 乗る人ごと）。地図の更新を乗る人の数によらず 1 コマ 1 回にするため（交通の時計とホイールは 5-6 で town.begin へ。docs/design/map-split.md §7）
  */
 export function RideDriver({ characters }: RideDriverProps) {

@@ -74,7 +74,7 @@ export function createTransit(infra: TownInfra, tiles: TownTile[], skipLight: In
   const boats = new BoatFleet(t, shapes, material, new WaterbusDetail(3), boatLandings.list)
   boatNet.fleet = boats
   const lanes = new LaneFleet(t, shapes, material)
-  // 花音のホバーの一人乗りと乗り場の台（hover.ts）
+  // 花音のホバーの一人乗り（hover.ts）
   const hover = new HoverView()
   group.add(hover.group)
   // 駅員ロボ「えきもり」（ケーブルの 3 駅・緑電の主な停留所・運河バスの乗り場。robots.ts）
@@ -173,7 +173,7 @@ export function createTransit(infra: TownInfra, tiles: TownTile[], skipLight: In
       cable?.update(tt, camera, o.cableRunning > 0.5 ? 1 : 0.3, 1 - THREE.MathUtils.smoothstep(o.daylight, 0.1, 0.45))
       boats.update(tt, transitClock.sec, camera, lit, 1 - THREE.MathUtils.smoothstep(o.daylight, 0.1, 0.45))
       lanes.update(transitClock.sec, camera)
-      hover.update(camera, Math.min(Math.max(dt, 0), 0.25), 1 - THREE.MathUtils.smoothstep(o.daylight, 0.08, 0.4))
+      hover.update(camera, Math.min(Math.max(dt, 0), 0.25))
       robots.update(camera, tt, animTime)
       wireMat.uniforms.uPx.value = px
     },

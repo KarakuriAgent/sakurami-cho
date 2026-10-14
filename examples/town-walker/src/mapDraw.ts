@@ -45,6 +45,9 @@ export const MAP_COLORS = {
   halo: 'rgba(6, 10, 18, 0.9)',
   dest: '#ffd36f',
   destSelected: '#6fe6ff',
+  /** 置いてある・呼ばれて来るホバーの印（ホバーの塗りのひらき緑とクリーム） */
+  hover: '#3f8a63',
+  hoverText: '#f3ecd6',
 } as const
 
 /** 道の見た目（描く順。後ろほど上）: 色と、細いときの最小の太さ（CSS px）と、これより細くなるなら描かない太さ（CSS px） */
@@ -348,5 +351,30 @@ export function drawWalker(ctx: CanvasRenderingContext2D, v: MapView, x: number,
     ctx.strokeStyle = MAP_COLORS.halo
     ctx.stroke()
   }
+  ctx.restore()
+}
+
+/** ホバーの印（全体の地図。#9）: 置いてある・呼ばれて来る所に、緑の角の丸い四角と「ホ」。coming = 来る途中（縁を点線に） */
+export function drawHover(ctx: CanvasRenderingContext2D, v: MapView, x: number, y: number, coming: boolean) {
+  const px = v.px
+  const sx = toScreenX(v, x)
+  const sy = toScreenY(v, y)
+  const r = 8 * px
+  ctx.save()
+  ctx.translate(sx, sy)
+  ctx.beginPath()
+  ctx.roundRect(-r, -r, r * 2, r * 2, 3 * px)
+  ctx.fillStyle = MAP_COLORS.hover
+  ctx.fill()
+  ctx.lineWidth = 2 * px
+  ctx.strokeStyle = MAP_COLORS.hoverText
+  if (coming) ctx.setLineDash([3 * px, 2 * px])
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.fillStyle = MAP_COLORS.hoverText
+  ctx.font = `700 ${11 * px}px system-ui, 'Noto Sans JP', 'Noto Sans CJK JP', sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('ホ', 0, 0.5 * px)
   ctx.restore()
 }

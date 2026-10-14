@@ -18,7 +18,7 @@ pnpm install
 pnpm example:dev     # 開発（入口は http://localhost:5174/、アプリは /walk/。ビルドは pnpm example:build で、出力は examples/town-walker/dist/）
 ```
 
-任意の VRM を読んで、WASD・クリック・行き先の一覧（旅程。乗り物にも乗る）・ワープで町じゅうを動き、町の時刻と画質を変えられる。
+任意の VRM を読んで、WASD・クリック・行き先の一覧（旅程。乗り物にも乗る。ホバーはどこからでも呼んで乗れる）・ワープで町じゅうを動き、町の時刻と画質を変えられる。
 操作・URL の引数・`?debug` の口は [examples/town-walker/README.md](examples/town-walker/README.md)。
 
 ## 自分のアプリに入れる
@@ -57,7 +57,7 @@ town.on('outsideness', (k) => walker.setRimBlend(k))
 |---|---|
 | `core/` | three を読まない: 座標・地名・立ち寄り先・道順・歩く道のグラフと経路探索・時刻表・町の時計・ラボの間取りのデータ |
 | `world/` | three: 町・ラボ（殻・什器のキット・照明・素材）・名前のある建物・中のある建物・公共交通・町の音。口は `world/createTown.ts` |
-| `character/` | three + three-vrm: キャラクター（VRM・姿勢・歩き・道探し・乗り降り・旅程） |
+| `character/` | three + three-vrm: キャラクター（VRM・姿勢・歩き・道探し・乗り降り・旅程・ホバーを呼ぶ） |
 | `react/` | R3F の薄い包み（React・R3F を使ってよいのはここだけ） |
 | `tools/` | 地図データ・アニメーションを書き出す道具（Node・bun で動かす。[docs/tools.md](docs/tools.md)） |
 | `assets/` | アセット（[docs/usage.md](docs/usage.md) の「アセット」） |
@@ -103,7 +103,6 @@ CC BY-NC 4.0 にする物（町の地図データと、設定資料をコード�
 | `core/routes.ts` | 道順（区間と目印） |
 | `core/interiors.ts` | 中のある建物のゾーンと部屋 |
 | `core/cableStations.ts` | ケーブルカーの駅 |
-| `core/hoverDocks.ts` | ホバーの乗り場 |
 | `core/soranowa.ts` | 観覧車ソラノワ |
 | `core/travel.ts` | 町の行き先とゾーンの出入口 |
 | `core/spots.ts` | ワープ先の名前の表 |

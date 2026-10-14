@@ -4,11 +4,13 @@ import {
   cancelTravel,
   cancelWheelBoarding,
   goTo,
+  hoverStatus,
   isTravelProblem,
   requestWheelAlight,
   startTravel,
   stopDirect,
   stopWalking,
+  summonHover,
   traveling,
   travelProblemText,
   travelState,
@@ -37,6 +39,9 @@ import { town, townUnavailable, walker } from './town'
  *   早送り（秒））・乗っている間と待つ間の時間（省けば時間と同じ）・乗り物の中で座るか立つか
  * - 様子: 行き先・道のり・今の区間・乗っている乗り物・町の時刻と足した時間・着いた・取り消した・だめだった理由、乗り降りなどの出来事
  * - 観覧車ソラノワ: 乗り場のゾーンにいるとき、乗る（乗車位置へ歩いてから）・降りる（降りる扉が開く所まで進める。時間の扱いは進め方の時間）
+ * - ホバー（#9）: 「ホバーを呼ぶ」で地図の summonHover を呼び（近くへ飛んで来る・遠ければすぐ横に現れる）、進め方の乗り物を「ホバー」にする。
+ *   行き先を選ぶと、旅程（via=hover）が呼んだホバーに乗って行き先の近くまで飛ぶ（呼ばずに乗り物「ホバー」で行き先を選んでも、旅程の始めで呼んで乗る）。
+ *   様子（来る途中・あと何秒・横で待っている）は地図の hoverStatus から
  * - 町の地図データが無い・形の版が合わない・読めない（6-6）: 行き先はラボの中とまわり（ゾーン lab）だけ（町の道・乗り物・中のある建物が無いため）
  */
 
@@ -172,7 +177,7 @@ export const VIA_CHOICES: readonly { id: Via; label: string }[] = [
   { id: 'walk', label: '歩くだけ' },
   { id: 'tram', label: '緑電' },
   { id: 'waterbus', label: '運河バス' },
-  { id: 'hover', label: 'ホバー' },
+  { id: 'hover', label: 'ホバー（呼んで乗る）' },
 ]
 
 export const TIME_CHOICES: readonly { id: TravelTime; label: string }[] = [
@@ -231,6 +236,8 @@ export interface TravelUi {
   added: number
   /** 観覧車ソラノワの乗り場にいるか・乗る前に乗車位置へ歩いているか */
   wheel: { here: boolean; pending: 'board' | 'alight' | null }
+  /** ホバー: none = まだ呼んでいない・coming = 来る途中（あと arriveIn 秒）・parked = 置いてある（歩く人から distance m）・riding = 乗っている */
+  hover: { phase: 'none' | 'coming' | 'parked' | 'riding'; arriveIn: number | null; distance: number | null }
   /** 出来事（新しい順に 12 まで） */
   events: TravelEvent[]
 }
@@ -247,6 +254,7 @@ let ui: TravelUi = {
   townTime: '--:--',
   added: 0,
   wheel: { here: false, pending: null },
+  hover: { phase: 'none', arriveIn: null, distance: null },
   events: [],
 }
 const listeners = new Set<() => void>()
@@ -420,6 +428,22 @@ export function alightWheel(time: RideTime = ui.options.time): string | null {
 
 let alightTime: RideTime = 'fast'
 
+/** 呼んだホバーが来た・待っている間の字（乗ったら・離れたら消す） */
+const HOVER_WAIT = 'ホバーが横で待っています。行き先を選ぶと乗って行きます（進め方の乗り物: ホバー）'
+const HOVER_COMING = 'ホバーを呼びました。近くへ飛んで来ます'
+
+/**
+ * ホバーを呼ぶ（「ホバーを呼ぶ」のボタン）。呼んだら進め方の乗り物を「ホバー」にする（道順は auto）。呼んだら null、呼べなければ理由（様子にも出す）
+ */
+export function callHover(): string | null {
+  if (riding()) return fail(`${walker.ride.car?.vehicle.label ?? '乗り物'}に乗っている間は、ホバーを呼べません`)
+  if (townUnavailable()) return fail('町の地図データが無いので、ホバーは呼べません')
+  const err = summonHover(walker)
+  if (err) return fail(err)
+  set({ options: { ...ui.options, route: 'auto', via: 'hover' }, message: hoverStatus().phase === 'coming' ? HOVER_COMING : HOVER_WAIT, status: ui.status === 'moving' ? ui.status : 'idle' })
+  return null
+}
+
 /* -------------------------------------------------------------------------- */
 /* 毎コマ                                                                        */
 /* -------------------------------------------------------------------------- */
@@ -469,6 +493,16 @@ export function updateTravel() {
     message = '観覧車を降ります（下へ戻って扉が開いたら）'
   }
   if (message === WHEEL_WAIT && walker.ride.phase !== 'wait') message = null
+  // ホバーの様子（来た・乗った・離れた）
+  const hs = hoverStatus()
+  const hp = walker.motion.position
+  const hover: TravelUi['hover'] = {
+    phase: hs.phase,
+    arriveIn: hs.arriveInSec === null ? null : Math.ceil(hs.arriveInSec),
+    distance: hs.phase === 'parked' ? Math.round(Math.hypot(hs.x - hp.x, hs.z - hp.z)) : null,
+  }
+  if (message === HOVER_COMING && hs.phase === 'parked') message = HOVER_WAIT
+  if ((message === HOVER_COMING || message === HOVER_WAIT) && (hs.phase === 'riding' || hs.summoner !== walker || (hover.distance ?? 0) > 20)) message = null
   const st = travelState(walker)
   const leg = st ? { index: st.leg_index + 1, count: st.legs, label: st.leg_label, phase: st.phase } : null
   const car = walker.ride.car
@@ -484,8 +518,9 @@ export function updateTravel() {
     here !== ui.wheel.here ||
     wheelPending !== ui.wheel.pending ||
     JSON.stringify(leg) !== JSON.stringify(ui.leg) ||
-    JSON.stringify(ride) !== JSON.stringify(ui.ride)
-  if (changed) set({ status, message, leg, ride, townTime, added, wheel: { here, pending: wheelPending } })
+    JSON.stringify(ride) !== JSON.stringify(ui.ride) ||
+    JSON.stringify(hover) !== JSON.stringify(ui.hover)
+  if (changed) set({ status, message, leg, ride, townTime, added, wheel: { here, pending: wheelPending }, hover })
 }
 
 /* -------------------------------------------------------------------------- */

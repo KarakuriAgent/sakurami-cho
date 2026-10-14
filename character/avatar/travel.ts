@@ -7,10 +7,8 @@ import { TRAVEL_PLACES, ZONE_PORTALS, type PortalDef, type TravelPlaceId, type T
 import { beginCableRide, cableRideResult, cableRideSpec, cancelCableRide, cableRiding, cableRideState, clearCableRide, planCableBoarding } from '../ride/cableRide'
 import { beginBoatRide, boatExitLanding, landingPath, landingTown, nextBoatBoarding, planBoatBoarding } from '../ride/boatRide'
 import { beginTramRide, planTramBoarding, platformFoot, platformPath, tramExitPlatform, tramPlatformFor } from '../ride/tramRide'
-import { beginHoverRide, hoverRide, planFlight, planHoverBoarding } from '../ride/hoverRide'
+import { beginHoverRide, CRUISE as HOVER_CRUISE, hoverRide, hoverSpotNear, hoverStatus, parkHoverAt, planHoverBoarding, planHoverFlight, SUMMON_NEAR, type HoverPark } from '../ride/hoverRide'
 import { partyEscorts } from '../ride/party'
-import { hoverHome } from '../../world/outdoor/transit/hoverCraft'
-import { HOVER_DOCKS, type HoverDockId } from '../../core/hoverDocks'
 import { nextTramBoarding, tramLine, tramNet, tramStopPose } from '../../world/outdoor/transit/trams'
 import { boatNet } from '../../world/outdoor/transit/boats'
 import { landingById } from '../../world/outdoor/transit/landings'
@@ -24,6 +22,7 @@ import { EDGE_KIND } from '../../core/walk/walkData'
 import { walkLine } from '../../core/walk/walkLine'
 import type { RouteTarget, TownRoute, XY } from '../../core/walk/townNav'
 import { townWalk } from '../../world/walk/townWalk'
+import { propsNear } from '../../world/walk/townProps'
 import { findPath } from './nav'
 import { groundHeight, seatApproach, stopWalking, stopZone, TOWN_WALK_SPEED, WALK_SPEED } from './locomotion'
 import type { Character, CharacterMotion } from './character'
@@ -117,7 +116,7 @@ export type RideVehicle = 'cable' | 'tram' | 'waterbus' | 'hover'
 /**
  * 乗り物の区間（乗り場の外から歩き、待って乗り、着いた乗り場に出るまで）: 丘ノ上ケーブル（character/ride/cableRide.ts。from・to は駅）・
  * 緑電（character/ride/tramRide.ts。from・to は停留所の名前、line は系統の番号）・運河バス（character/ride/boatRide.ts。from・to は乗り場の id、line は航路）・
- * 花音のホバー（character/ride/hoverRide.ts。from・to はホバーの乗り場の id）
+ * 花音のホバー（character/ride/hoverRide.ts。乗り場は無く、区間の始めでホバーを呼んで乗る。from は空、to は行き先の名前、park は下りて置く所）
  */
 interface RideSeg {
   kind: 'ride'
@@ -132,6 +131,9 @@ interface RideSeg {
   state: 'pending' | 'approach' | 'riding' | 'done'
   /** 道のりがこの区間で終わるとき、降りた乗り場から歩いて出る所（シーンの x, z） */
   exitAt?: [number, number]
+  /** ホバー: 行き先の近くの下りて置く所と、降りてから向かう所（シーンの x, z） */
+  park?: HoverPark
+  toward?: [number, number]
 }
 
 type Seg = WalkSeg | CutSeg | RideSeg
@@ -196,9 +198,7 @@ export type TravelProblem =
   | { code: 'town-path-cable'; to: string }
   /** 緑電・運河バス（via で選んだ）で行き先へ行く乗り方が無い */
   | { code: 'transit-way'; vehicle: 'tram' | 'waterbus'; to: string }
-  /** ホバー（via=hover）: 置き場が歩いて 25 分より遠い・同じ浮遊レーンの乗り場が無い（dock = 置いてある乗り場の名前）・行き先へ行く乗り方が無い */
-  | { code: 'hover-far'; dock: string }
-  | { code: 'hover-no-dock'; dock: string }
+  /** ホバー（via=hover）で行き先へ行く乗り方が無い（行き先の近くに下りられる道が無い・町の道で行けない・近すぎる） */
   | { code: 'hover-way'; to: string }
   /** 行き先のゾーンの出入口から立ち寄り先への通り道が無い */
   | { code: 'zone-entry-path'; zone: ZoneId; stop: PlaceId }
@@ -236,10 +236,6 @@ export function travelProblemText(p: TravelProblem): string {
       return `町の道で行き先「${p.to}」への道（丘ノ上ケーブルの駅の前後）が見つかりません`
     case 'transit-way':
       return `${p.vehicle === 'tram' ? '緑電' : '運河バス'}で行き先「${p.to}」へ行く乗り方が見つかりません（乗り場が遠い・便が無い時刻）。via を auto にすればいちばん早い道`
-    case 'hover-far':
-      return `ホバーは${p.dock}に置いてあり、歩いて 25 分より遠いです`
-    case 'hover-no-dock':
-      return `ホバーで行き先へ行く乗り場が見つかりません（ホバーは${p.dock}。同じ浮遊レーンの乗り場だけ）`
     case 'hover-way':
       return `ホバーで行き先「${p.to}」へ行く乗り方が見つかりません`
     case 'zone-entry-path':
@@ -298,45 +294,6 @@ function offsetOf(edge: number) {
     default:
       return 0
   }
-}
-
-/** 小物（街灯の柱・木の幹）の索引（町の平面座標。タイルの灯りと木から。初めて使うときに作る） */
-let props: Map<number, { x: number; y: number; r: number }[]> | null = null
-let propsTiles = 0
-const PROP_CELL = 8
-function propIndex() {
-  const tiles = [...townData.tiles, ...townData.extraTiles.values()]
-  if (props && propsTiles === tiles.length) return props
-  props = new Map()
-  propsTiles = tiles.length
-  const add = (x: number, y: number, r: number) => {
-    const k = Math.floor(x / PROP_CELL) * 100003 + Math.floor(y / PROP_CELL)
-    let l = props!.get(k)
-    if (!l) props!.set(k, (l = []))
-    l.push({ x, y, r })
-  }
-  for (const t of tiles) {
-    const tp = t.sections.t_pos?.array
-    if (tp) for (let i = 0; i < tp.length; i += 4) add(tp[i], tp[i + 1], 0.35)
-    const lp = t.sections.l_pos?.array
-    const lk = t.sections.l_kind?.array
-    if (lp && lk)
-      for (let i = 0; i < lp.length / 4; i++) {
-        // 街灯（柱のある灯り。灯具が地面から 2.5m より上）
-        if (lk[i * 2] !== 1) continue
-        const x = lp[i * 4]
-        const y = lp[i * 4 + 1]
-        if (lp[i * 4 + 2] - townData.heightAt(x, y) > 2.5) add(x, y, 0.2)
-      }
-  }
-  return props
-}
-function propsNear(x: number, y: number, r: number) {
-  const idx = propIndex()
-  const out: { x: number; y: number; r: number }[] = []
-  for (let gx = Math.floor((x - r) / PROP_CELL); gx <= Math.floor((x + r) / PROP_CELL); gx++)
-    for (let gy = Math.floor((y - r) / PROP_CELL); gy <= Math.floor((y + r) / PROP_CELL); gy++) for (const p of idx.get(gx * 100003 + gy) ?? []) if (Math.hypot(p.x - x, p.y - y) < r + p.r) out.push(p)
-  return out
 }
 
 /** 平面の点を、街灯の柱・木の幹から 0.9m 離す（止まる所が柱に重ならないように） */
@@ -633,13 +590,10 @@ function chooseTransit(O: XY, targets: { point: XY; portal: PortalDef | null }[]
 
 /** ホバーで行く道のり（chooseHover） */
 interface HoverChoice {
-  from: HoverDockId
-  to: HoverDockId
   label: string
-  /** 乗り場まで・乗り場から歩く町の道（乗り場の出入口が今の所・行き先と同じなら null） */
-  r1: TownRoute | null
+  /** 下りて置く所と、そこから行き先まで歩く町の道（置く所が行き先と同じなら null） */
+  park: HoverPark
   r2: TownRoute | null
-  access: XY
   exit: XY
   target: { point: XY; portal: PortalDef | null }
   rideSec: number
@@ -650,30 +604,40 @@ interface HoverChoice {
 const samePoint = (a: XY, b: XY) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 1.5
 
 /**
- * 花音のホバーで行く道のりを選ぶ（route=auto。docs/design/town.md §7 の 213）: ホバーの置いてある乗り場まで歩き（25 分まで）、同じ浮遊レーンの
- * ほかの乗り場へ飛び、そこから歩く（25 分まで）。時間 = 歩く + 乗って回す 0.6 分 + 飛ぶ（弧とレーン）+ 降りる 0.4 分 + 歩く。
- * via=auto では、ケーブルの止まっている夜中（23:30〜6:00）に、歩くより 3 分以上かつ 25% 以上早いときだけ（ふだんは歩く・ケーブル・緑電。花音の習慣）。
- * escort = 並走する仲間の場所を空ける（乗る人の仲間に浮かぶ仲間がいる。character/ride/party.ts の partyEscorts）
+ * 花音のホバーで行く道のりを選ぶ（route=auto。docs/design/town.md §7 の 213。#9 で乗り場を無くした）: 区間の始め（今いる所・ゾーンの出入口の外）で
+ * ホバーを呼んで乗り、行き先（ゾーンの出入口・町の行き先の点）の近くの道・広場へ飛んで下り、そこから歩く（25 分まで）。
+ * 時間 = 呼んだホバーが来るまで（100m の内なら飛んで来る）+ 乗って回す 0.6 分 + 飛ぶ + 降りる 0.4 分 + 歩く。
+ * via=auto では、ケーブルの止まっている夜中（23:30〜6:00）に、歩くより 3 分以上かつ 25% 以上早いときだけ（ふだんは歩く・ケーブル・緑電。花音の習慣）
  */
-function chooseHover(O: XY, targets: { point: XY; portal: PortalDef | null }[], walkMin: number, via: 'auto' | 'hover', escort: boolean): HoverChoice | TravelProblem | null {
-  const from = HOVER_DOCKS[hoverHome.at]
+function chooseHover(O: XY, targets: { point: XY; portal: PortalDef | null }[], walkMin: number, via: 'auto' | 'hover'): HoverChoice | null {
   const MAX_WALK = 25
-  const r1 = samePoint(O, from.access) ? null : townWalk.route(O, from.access as XY, { cable: false, privatePenalty: 1.25 })
-  if (!samePoint(O, from.access) && (!r1 || r1.minutes > MAX_WALK)) return via === 'hover' ? { code: 'hover-far', dock: from.label } : null
+  const ox = O[0]
+  const oz = -O[1]
+  const oy = townWalk.groundY(ox, oz)
+  const start = hoverSpotNear(ox, oz, oy)
+  if (!start) return null
+  // 呼んでから来るまで（100m の内なら飛んで来る。遠い・まだ呼んでいないなら、すぐ横に現れる）
+  const st = hoverStatus()
+  const dist = st.phase === 'none' ? Infinity : Math.hypot(st.x - start.x, st.z - start.z)
+  const comeSec = dist <= SUMMON_NEAR ? (dist * 1.25) / HOVER_CRUISE + 5 : 0
   let best: HoverChoice | null = null
-  for (const to of Object.values(HOVER_DOCKS)) {
-    if (to.id === from.id || to.lane !== from.lane) continue
-    const f = planFlight(from, to, false, escort)
-    if (typeof f === 'string') continue
-    for (const tg of targets) {
-      const r2 = samePoint(to.access as XY, tg.point) ? null : townWalk.route(to.access as XY, tg.point, { cable: false, privatePenalty: 1.25 })
-      if (!samePoint(to.access as XY, tg.point) && (!r2 || r2.minutes > MAX_WALK)) continue
-      const rideSec = f.total + 36 + 24
-      const total = (r1?.minutes ?? 0) + rideSec / 60 + (r2?.minutes ?? 0)
-      if (!best || total < best.total) best = { from: from.id, to: to.id, label: `ホバー（${from.label.replace('のホバーの置き場', '').replace('のホバーの乗り場', '')} → ${to.label.replace('のホバーの置き場', '').replace('のホバーの乗り場', '')}。丘レーン）`, r1, r2, access: from.access as XY, exit: to.access as XY, target: tg, rideSec, total }
-    }
+  for (const tg of targets) {
+    const tx = tg.point[0]
+    const tz = -tg.point[1]
+    const park = hoverSpotNear(tx, tz, townWalk.groundY(tx, tz))
+    if (!park) continue
+    const f = planHoverFlight(start, park, { avoid: false })
+    if (typeof f === 'string' || f.length < 8) continue
+    const exit: XY = [park.x, -park.z]
+    // 置く所から行き先が近くて、まっすぐ歩けるなら町の道を通らない
+    const direct = samePoint(exit, tg.point) || (Math.hypot(exit[0] - tg.point[0], exit[1] - tg.point[1]) < 10 && walkableLine([park.x, park.z], [tx, tz]))
+    const r2 = direct ? null : townWalk.route(exit, tg.point, { cable: false, privatePenalty: 1.25 })
+    if (!direct && (!r2 || r2.minutes > MAX_WALK)) continue
+    const rideSec = comeSec + f.total + 36 + 24
+    const total = rideSec / 60 + (r2?.minutes ?? 0)
+    if (!best || total < best.total) best = { label: `ホバー（${tg.portal ? tg.portal.label : '行き先'}の近くまで）`, park, r2, exit, target: tg, rideSec, total }
   }
-  if (!best) return via === 'hover' ? { code: 'hover-no-dock', dock: from.label } : null
+  if (!best) return null
   if (via === 'auto' && !(best.total <= walkMin - Math.max(3, walkMin * 0.25))) return null
   return best
 }
@@ -826,19 +790,23 @@ export function planTravel(ch: Character, req: TravelRequest): TravelPlan | Trav
     const targets = (toPortals.length ? toPortals : [null]).map((p) => ({ point: (p ? p.town : TRAVEL_PLACES[place!].at) as XY, portal: p }))
     let transit = via === 'auto' || via === 'tram' || via === 'waterbus' ? chooseTransit(curXY, targets, best?.r.minutes ?? Infinity, via, cableOk) : null
     if ((via === 'tram' || via === 'waterbus') && !transit) return { code: 'transit-way', vehicle: via, to: req.to }
-    // ホバー: via=hover か、ケーブルの止まっている夜中に十分に早いとき（§7 の 213）
-    const hv = via === 'hover' || (via === 'auto' && !cableRunning()) ? chooseHover(curXY, targets, Math.min(best?.r.minutes ?? Infinity, transit?.total ?? Infinity), via === 'hover' ? 'hover' : 'auto', partyEscorts(ch)) : null
-    if (via === 'hover' && (!hv || 'code' in hv)) return hv ?? { code: 'hover-way', to: req.to }
-    if (hv && !('code' in hv)) {
+    // ホバー: via=hover か、ケーブルの止まっている夜中に十分に早いとき（§7 の 213）。区間の始めで呼んで乗る
+    const hv = via === 'hover' || (via === 'auto' && !cableRunning()) ? chooseHover(curXY, targets, Math.min(best?.r.minutes ?? Infinity, transit?.total ?? Infinity), via === 'hover' ? 'hover' : 'auto') : null
+    if (via === 'hover' && !hv) return { code: 'hover-way', to: req.to }
+    if (hv) {
       transit = null
-      const exitLabel = hv.r1 ? 'ホバーの乗り場へ' : ''
-      if (hv.r1) segs.push(...townSegs(hv.r1, pushLeg('town', `町の道（${exitLabel}）`, 'walk'), names))
       const leg = pushLeg('hover', hv.label, 'hover')
-      segs.push({ kind: 'ride', leg, vehicle: 'hover', from: hv.from, to: hv.to, seconds: hv.rideSec, state: 'pending' })
+      const tp = hv.target.point
+      segs.push({ kind: 'ride', leg, vehicle: 'hover', from: '', to: req.to, seconds: hv.rideSec, state: 'pending', park: hv.park, toward: [tp[0], -tp[1]] })
       names.push(hv.label)
       cur = hv.exit
       if (hv.r2) segs.push(...townSegs(hv.r2, pushLeg('after', '町の道', 'walk'), names))
-      else cur = hv.target.point
+      else {
+        // 行き先が置く所の近く: 置く所から行き先（ゾーンの出入口・町の行き先の点）へまっすぐ歩く
+        const pts = scenePath([[hv.park.x, hv.park.z], [tp[0], -tp[1]]], TOWN_WALK_SPEED)
+        if (pts.length >= 2) segs.push({ kind: 'walk', leg: pushLeg('after', '町の道', 'walk'), pts, length: pts[pts.length - 1].s })
+        cur = hv.target.point
+      }
       if (hv.target.portal) chosen = hv.target.portal
     } else if (transit) {
       if (!pushTownRoute(transit.r1, cur, transit.access, 'town', `町の道（${transit.vehicle === 'tram' ? '停留所' : '乗り場'}へ）`)) return { code: 'town-path-cable', to: req.to }
@@ -1412,6 +1380,8 @@ function jumpToEnd(ch: Character, plan: TravelPlan) {
   const tail = plan.segs[plan.segs.length - 1]
   const last = planEnd(plan.segs) ?? lastPoint(plan.segs)
   if (!last) return
+  // ホバーで行った: ホバーは行き先の近くの下りた所に置いてある
+  for (const sg of plan.segs) if (sg.kind === 'ride' && sg.vehicle === 'hover' && sg.park) parkHoverAt(sg.park)
   const lines: { x: number; z: number }[][] = plan.segs.filter((s): s is WalkSeg => s.kind === 'walk').map((s) => s.pts)
   if (tail && tail.kind !== 'walk') lines.push([{ x: last[0], z: last[1] }])
   setGround(m, groundAlong(ch, lines, m.position.y))
@@ -1697,7 +1667,7 @@ function rideStep(ch: Character, rs: RideSeg): boolean {
     const b = run.boarding!
     if (b.vehicle === 'cable') beginCableRide(ch, { from: rs.from as CableStationKey, to: rs.to as CableStationKey, ...spec }, b.cable)
     else if (b.vehicle === 'tram') beginTramRide(ch, spec, b.tram.plan, b.tram.run, b.tram.heading)
-    else if (b.vehicle === 'hover') beginHoverRide(ch, { from: b.hover.from, to: b.hover.to, wait: spec.wait, ride: spec.ride, fastSec: spec.fastSec, fastSpeed: spec.fastSpeed }, b.hover)
+    else if (b.vehicle === 'hover') beginHoverRide(ch, { to: rs.park!, toward: rs.toward ?? [rs.park!.x, rs.park!.z], label: rs.to, wait: spec.wait, ride: spec.ride, fastSec: spec.fastSec, fastSpeed: spec.fastSpeed }, b.hover)
     else beginBoatRide(ch, spec, b.boat.plan, b.boat.run, b.boat.heading)
     rs.state = 'riding'
     const res = rideResult(ch, rs.vehicle)
@@ -1737,7 +1707,7 @@ function rideApproach(ch: Character, rs: RideSeg): boolean {
   const here: [number, number] = [m.position.x, m.position.z]
   let lead = 35
   for (let tries = 0; tries < 2; tries++) {
-    const a = approachPlan(rs, here, lead, partyEscorts(ch))
+    const a = approachPlan(ch, rs, here, lead, partyEscorts(ch))
     if (typeof a === 'string') {
       cancelTravel(ch, a)
       return false
@@ -1785,7 +1755,7 @@ type Boarding =
   | { vehicle: 'hover'; hover: Exclude<ReturnType<typeof planHoverBoarding>, string> }
 
 /** 乗る便・待つ所と、そこまでの道（シーンの点）。escort = ホバーで並走する仲間の場所を空ける。だめなら理由 */
-function approachPlan(rs: RideSeg, here: [number, number], lead: number, escort: boolean): { boarding: Boarding; pts: Pt[]; spot: [number, number]; heading: number } | string {
+function approachPlan(ch: Character, rs: RideSeg, here: [number, number], lead: number, escort: boolean): { boarding: Boarding; pts: Pt[]; spot: [number, number]; heading: number } | string {
   if (rs.vehicle === 'cable') {
     const zone = STATION_ZONE[rs.from as CableStationKey]
     const model = interiors.models.get(zone)
@@ -1805,14 +1775,12 @@ function approachPlan(rs: RideSeg, here: [number, number], lead: number, escort:
     return { boarding: { vehicle: 'tram', tram: plan }, pts, spot: plan.spot, heading: plan.heading }
   }
   if (rs.vehicle === 'hover') {
-    // 乗り場の出入口から台の横（乗り降りする側）へ。台の手前 1.2m を通って、まっすぐ横から寄る
-    const hp = planHoverBoarding(rs.from as HoverDockId, rs.to as HoverDockId, escort)
+    // ホバーを呼び（来る途中・近くで待っているならそのまま）、置く所の横（呼んだ人の側）へまっすぐ歩く
+    if (!rs.park) return 'ホバーの下りる所がありません'
+    const hp = planHoverBoarding(ch, rs.park, escort)
     if (typeof hp === 'string') return hp
-    const d = HOVER_DOCKS[rs.from as HoverDockId]
-    const pre: [number, number] = [hp.spot[0] - Math.sin(hp.heading) * 1.2, hp.spot[1] - Math.cos(hp.heading) * 1.2]
-    const pts = scenePath([here, pre, hp.spot], TOWN_WALK_SPEED)
-    void d
-    return { boarding: { vehicle: 'hover', hover: hp }, pts, spot: hp.spot, heading: hp.heading }
+    const pts = scenePath([here, hp.spot], TOWN_WALK_SPEED)
+    return { boarding: { vehicle: 'hover', hover: hp }, pts: pts.length >= 2 ? pts : scenePath([here, [here[0] + 0.01, here[1]]], TOWN_WALK_SPEED), spot: hp.spot, heading: hp.heading }
   }
   const plan = planBoatBoarding(String(rs.line), rs.from, rs.to, lead)
   if (typeof plan === 'string') return plan
@@ -1850,12 +1818,10 @@ function rideExit(ch: Character, rs: RideSeg) {
     const pf = b && b.vehicle === 'tram' ? tramExitPlatform(b.tram.plan) : null
     pts = pf ? scenePath(platformPath(pf, here, nextStart ?? rideExitPoint(rs) ?? here, true), TOWN_WALK_SPEED) : scenePath([here, nextStart ?? here], TOWN_WALK_SPEED)
   } else if (rs.vehicle === 'hover') {
-    // 台の横から、乗り場の出入口（町の道）へ
-    const d = HOVER_DOCKS[rs.to as HoverDockId]
-    const acc: [number, number] = [d.access[0], -d.access[1]]
-    const tail: [number, number][] = [here, acc]
-    if (nextStart && Math.hypot(nextStart[0] - acc[0], nextStart[1] - acc[1]) > 0.05) tail.push(nextStart)
-    else if (!nextStart && rs.exitAt && Math.hypot(rs.exitAt[0] - acc[0], rs.exitAt[1] - acc[1]) > 0.05) tail.push(rs.exitAt)
+    // 下りたホバーの横から、次の町の道の始めへ（道のりの最後なら、行き先の方へ）
+    const tail: [number, number][] = [here]
+    if (nextStart) tail.push(nextStart)
+    else if (rs.exitAt) tail.push(rs.exitAt)
     pts = scenePath(tail, TOWN_WALK_SPEED)
   } else {
     const b = run.boarding
@@ -1865,7 +1831,7 @@ function rideExit(ch: Character, rs: RideSeg) {
   rs.state = 'done'
   const len = pts.length >= 2 ? pts[pts.length - 1].s : 0
   if (len > 0.05) {
-    // カットでも、道のりの最後の短い出口（ホバーの台の横から駅舎の前までなど。12m まで）は歩いて見せる（道のりの最後の見せる所）。
+    // カットでも、道のりの最後の短い出口（下りたホバーの横から行き先までなど。12m まで）は歩いて見せる（道のりの最後の見せる所）。
     // 飛ばすときは、出る道の終わり（次の歩く所の始めか、道のりの最後なら降りた乗り場の外）へ置く（advanceSeg）
     const last = run.seg + 1 >= run.segs.length
     if (req.time === 'cut' && !(last && len <= Math.max(12, req.showSec * TOWN_WALK_SPEED))) run.segs.splice(run.seg + 1, 0, { kind: 'cut', leg: rs.leg, seconds: timeOf({ kind: 'walk', leg: rs.leg, pts, length: len }, 0, len), mode: 'skip', path: pts })

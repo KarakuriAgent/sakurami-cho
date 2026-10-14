@@ -179,7 +179,7 @@ export interface TownEventMap {
   'robot.signal': TownPoint
   /** ホバーがファンを回し始めた（乗る人が腰掛けて回し始めたコマ。位置は機体の 0.3m 上） */
   'hover.spinUp': TownPoint
-  /** ホバーが行き先の乗り場の台に着いた（ファンを止め始める。位置は機体の 0.3m 上） */
+  /** ホバーが下りて止まった（呼ばれて来た・行き先の近く・すぐ現れた。ファンを止め始める。位置は機体の 0.3m 上） */
   'hover.land': TownPoint
 }
 export type TownEventName = keyof TownEventMap

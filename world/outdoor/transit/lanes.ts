@@ -16,7 +16,7 @@ import type { VehicleShapes } from './vehicles'
 
 const SPEED = 4.5
 const SPACING = 300
-/** 配送機の速さ（m/s）と、行き来する向きで左右に分ける幅（レーンの真ん中から。進む向きの左。花音のホバーも同じ。character/ride/hoverRide.ts） */
+/** 配送機の速さ（m/s）と、行き来する向きで左右に分ける幅（レーンの真ん中から。進む向きの左） */
 export const LANE_SPEED = SPEED
 export const LANE_OFFSET = 1.2
 
@@ -29,7 +29,7 @@ export interface LaneTrack {
   phase: number
 }
 
-/** 町の浮遊レーン（交通を作ったときに入る。ホバーの一人乗りが読む） */
+/** 町の浮遊レーン（交通を作ったときに入る。配送機の位置と町の音が読む） */
 export const laneNet = { lanes: [] as LaneTrack[], byId: new Map<string, LaneTrack>() }
 
 const _dp = pathPoint()

@@ -3,7 +3,7 @@
  * 同じ種（seed）から毎回同じ音になるので、配信（AudioContext）と撮影の書き出し（OfflineAudioContext。world/sound/townSound.ts）で同じ音が鳴る。
  *
  * - 一度だけ鳴る音（ONESHOTS）: ケーブルの発車ベル・緑電の「チンチン」・扉のチャイム・扉の開け閉め・運河バスの汽笛・駅員ロボの合図・駅の放送のチャイム・
- *   ホバーのファンを回す・止める音と、台に着く音
+ *   ホバーのファンを回す・止める音と、下りて止まる音
  * - くり返す音（LOOPS。4 秒。つなぎ目は重ねて消す）: 車輪の走る音・継ぎ目の音・きしみ・モーター・巻き上げ機・水の音・波を切る音・車室のこもった響き・
  *   ホバーのファン・飛ぶ間の風・浮遊レーンの配送機の羽音。
  *   速さで再生の速さ（音の高さ）と音量を変える
@@ -271,7 +271,7 @@ function makeOneShot(id: OneShotId, rate: number): Float32Array {
       return fadeEdges(normalize(out, 0.7), rate)
     }
     case 'hoverTouch': {
-      // 台に着く（ゴムの脚が石に当たる、やわらかい低い「とん」）
+      // 地面に下りる（ゴムの脚が道に当たる、やわらかい低い「とん」）
       const r = rng(63)
       const n = Math.round(0.5 * rate)
       const out = biquad(brown(n, r), rate, 'lp', 260)

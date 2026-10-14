@@ -21,6 +21,12 @@ export interface RouteOptions {
   maxSnap?: number
   /** 点からこの距離（m）より近い節点があれば、その節点から（既定 3。設定の道順の計算と同じ） */
   nodeSnap?: number
+  /** 地下の道（駅の自由通路）の辺を使うか（既定 true。見えない区間を通れない乗り物（ホバー）は false） */
+  underground?: boolean
+  /** 坂・石段の速さを使わず、この速さ（m/分）で辺の長さから時間を決める（既定なし = 歩く時間。ホバーの道は長さで選ぶ） */
+  speed?: number
+  /** 辺ごとの時間に掛ける倍率（1 以上。既定なし = 1。ホバーは広場を横切る辺・緑電の線路の上しか通れない辺を避ける） */
+  edgeFactor?: (edge: number) => number
 }
 
 /** 道の上に置いた点（edge の a → b の向きに、始めから along m） */
@@ -282,14 +288,16 @@ export class TownNav {
   private edgeAllowed(e: number, opts: RouteOptions) {
     const k = this.data.edges[e].k
     if (!opts.cable && (k === EDGE_KIND.cable || k === EDGE_KIND.cableBoard)) return false
+    if (opts.underground === false && k === EDGE_KIND.underground) return false
     return true
   }
 
   private edgeTime(e: number, forward: boolean, opts: RouteOptions) {
     const ed = this.data.edges[e]
-    let t = forward ? ed.tf : ed.tb
+    let t = opts.speed ? this.edgeLength(e) / opts.speed : forward ? ed.tf : ed.tb
     const pen = opts.privatePenalty ?? 1
     if (pen !== 1 && ed.f >= 0 && this.data.feats[ed.f]?.private) t *= pen
+    if (opts.edgeFactor) t *= Math.max(1, opts.edgeFactor(e))
     return t
   }
 
@@ -334,7 +342,7 @@ export class TownNav {
     if (!goalNodes.size && !goalSnaps.length) return null
     // 見積もり（目的地の候補までのいちばん近い直線 ÷ 速さの上限）
     const targets: [number, number][] = [...[...goalNodes].map((n) => this.node(n)), ...goalSnaps.map((s) => [s.x, s.y] as [number, number])]
-    const vmax = opts.cable ? this.vmaxCable : this.vmaxWalk
+    const vmax = opts.speed ?? (opts.cable ? this.vmaxCable : this.vmaxWalk)
     const h = (x: number, y: number) => {
       let d = Infinity
       for (const t of targets) d = Math.min(d, Math.hypot(t[0] - x, t[1] - y))

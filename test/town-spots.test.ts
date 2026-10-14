@@ -2,7 +2,7 @@
  * ワープ先（docs/design/map-split.md §8「6-5 で作った形」）: 名前の表（core/spots.ts）と、ワープの部品
  * （character/avatar/teleport.ts の townSpots・teleport・placeAtPoint）の基本。DOM なし。
  *
- * - 名前の表の立ち寄り先が地図の表にあり、外の立ち寄り先で、ゾーンが立つ所の点のゾーンと合う。ホバーの乗り場がある。ワープ先の名前・字が重ならない
+ * - 名前の表の立ち寄り先が地図の表にあり、外の立ち寄り先で、ゾーンが立つ所の点のゾーンと合う。ホバーの乗り場は無い（#9）。ワープ先の名前・字が重ならない
  * - 町の地図データを読む前のワープ先は名前の表の分だけで、緑電の停留所（地図データから。ホームを置く所は町の組み立てと同じ関数）を足すと、
  *   ホームのある停留所ごとに 1 つ増える
  * - 跳ぶと、立つ所・ゾーン・向きのとおりに置かれ、置き直した回数が増えて 'place' が出る。旅程の早送りの倍率と歩幅は戻る
@@ -18,9 +18,9 @@ const PKG = join(import.meta.dir, '..')
 const PROBE = `
 const P = ${JSON.stringify(PKG)}
 const fs = await import('node:fs')
-const { PLACE_SPOTS, HOVER_SPOTS, SPOT_KINDS } = await import(P + '/core/spots.ts')
+const spotsModule = await import(P + '/core/spots.ts')
+const { PLACE_SPOTS, SPOT_KINDS } = spotsModule
 const { TOWN_PLACES } = await import(P + '/core/places.ts')
-const { HOVER_DOCKS } = await import(P + '/core/hoverDocks.ts')
 const { zoneOfPoint } = await import(P + '/core/interiors.ts')
 const { townWalk } = await import(P + '/world/walk/townWalk.ts')
 const { setupTramNet, tramNet } = await import(P + '/world/outdoor/transit/trams.ts')
@@ -36,7 +36,7 @@ out.places = PLACE_SPOTS.map((s) => {
   const p = TOWN_PLACES[s.place]
   return { place: s.place, kind: s.kind, have: !!p, outdoor: p?.outdoor === true, zone: p ? (p.zone ?? 'lab') : null, pointZone: p ? zoneOfPoint(p.position[0], p.position[2]) : null }
 })
-out.hover = HOVER_SPOTS.map((s) => ({ dock: s.dock, have: !!HOVER_DOCKS[s.dock] }))
+out.exports = Object.keys(spotsModule).sort()
 const brief = (list) => list.map((s) => ({ id: s.id, kind: s.kind, label: s.label, place: s.place, zone: s.zone, x: s.x, z: s.z, heading: s.heading, refY: s.refY }))
 out.before = brief(T.townSpots())
 // 緑電の停留所のホーム（町の組み立て world/outdoor/landscape.ts と同じ関数 setupTramNet。車両・形は作らない）
@@ -93,23 +93,22 @@ describe('ワープ先（core/spots.ts・character/avatar/teleport.ts。6-5）',
     expect(r.exitCode).toBe(0)
   })
 
-  test('名前の表: 立ち寄り先は地図の表にあって外の立ち寄り先、ゾーンは立つ所の点のゾーンと同じ。ホバーの乗り場がある。種類は一覧の種類', () => {
+  test('名前の表: 立ち寄り先は地図の表にあって外の立ち寄り先、ゾーンは立つ所の点のゾーンと同じ。ホバーの乗り場は無い（#9）。種類は一覧の種類', () => {
     const kinds = v.kinds as string[]
-    expect(kinds).toEqual(['building', 'cable', 'wheel', 'hover', 'tram', 'waterbus'])
+    expect(kinds).toEqual(['building', 'cable', 'wheel', 'tram', 'waterbus'])
     const places = v.places as { place: string; kind: string; have: boolean; outdoor: boolean; zone: string | null; pointZone: string | null }[]
     // ラボの前・中のある建物 4 つ・ケーブルの 3 駅・観覧車
     expect(places.map((p) => p.place)).toEqual(['front', 'thompson-front', 'seizu-front', 'cafe-front', 'dome-gate', 'cable-summit-front', 'cable-kaedezaka-front', 'cable-fumoto-front', 'soranowa-front'])
     expect(places.filter((p) => !p.have || !p.outdoor)).toEqual([])
     expect(places.filter((p) => p.zone !== p.pointZone)).toEqual([])
     expect(places.every((p) => kinds.includes(p.kind))).toBe(true)
-    const hover = v.hover as { dock: string; have: boolean }[]
-    expect(hover.map((h) => h.dock)).toEqual(['lab', 'kitaguchi'])
-    expect(hover.every((h) => h.have)).toBe(true)
+    // ホバーはどこからでも呼べるので、乗り場のワープ先（HOVER_SPOTS）は無い
+    expect(v.exports).toEqual(['PLACE_SPOTS', 'SPOT_KINDS'])
   })
 
   test('町の地図データを読む前は名前の表の分だけ。緑電の停留所を足すと、ホームのある停留所ごとに 1 つ増える。名前・字は重ならず、位置と向きは数', () => {
     const before = v.before as Spot[]
-    expect(before.length).toBe(11)
+    expect(before.length).toBe(9)
     expect(before.filter((s) => s.kind === 'tram' || s.kind === 'waterbus')).toEqual([])
     const after = v.after as Spot[]
     const trams = after.filter((s) => s.kind === 'tram')

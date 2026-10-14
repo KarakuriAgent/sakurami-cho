@@ -71,8 +71,8 @@ export const TRAVEL_PLACES = {
   onodera: { label: '小野寺時計店の前（灯町二丁目 時計坂。祖父母の店。ルート E）', at: WAYPOINTS.onodera.at, face: [-650.6, -1861.0] },
   // ひらき通りの停留所の北の歩道（行きのホームの西のスロープの下の外。ガラス張りの公開ラボの並ぶ北の側を向く。§7 の 197）
   hiraki: { label: '学園地区 ひらき通りの停留所の前の歩道（緑電 4 系統。ルート F）', at: [777.0, -1417.4], face: [777.0, -1400.0] },
-  // 桜見駅 北口の駅前（道順の点 north。丘レーンの端・ホバーの乗り場のそば。駅舎の方を向く。§7 の 212）
-  kitaguchi: { label: '桜見駅 北口の駅前（丘レーンの端。ホバーの乗り場のそば）', at: WAYPOINTS.north.at, face: [-692.7, -1490.0] },
+  // 桜見駅 北口の駅前（道順の点 north。丘レーンの端。駅舎の方を向く。§7 の 212。ホバーの乗り場は #9 で無くした）
+  kitaguchi: { label: '桜見駅 北口の駅前（丘レーンの端）', at: WAYPOINTS.north.at, face: [-692.7, -1490.0] },
 } as const satisfies Record<string, { label: string; at: readonly [number, number]; face: readonly [number, number] }>
 
 export type TravelPlaceId = keyof typeof TRAVEL_PLACES

@@ -1,7 +1,6 @@
-import { HOVER_DOCKS } from '../../core/hoverDocks'
 import { zoneOfPoint, type ZoneId } from '../../core/interiors'
 import { townPlaces, type PlaceId } from '../../core/places'
-import { HOVER_SPOTS, PLACE_SPOTS, type SpotKind } from '../../core/spots'
+import { PLACE_SPOTS, type SpotKind } from '../../core/spots'
 import { SITE } from '../../core/town'
 import { interiors } from '../../world/outdoor/interior/interiors'
 import { site } from '../../world/outdoor/site/siteModel'
@@ -19,13 +18,13 @@ import type { Character } from './character'
  * ワープ（コードでは teleport。warp は時刻の早送り・カットの名前。docs/design/map-split.md §8 の段 6-5。例のアプリ town-walker が使う。kanon-lab は読まない）。
  * 作り込んだ建物の手前と、乗り物ののりばの手前へ一瞬で移る。
  *
- * - ワープ先の一覧 townSpots(): 地図の core の名前の表（core/spots.ts。立ち寄り先とホバーの乗り場）と、町を組み立てたあとの地図データの
+ * - ワープ先の一覧 townSpots(): 地図の core の名前の表（core/spots.ts の立ち寄り先）と、町を組み立てたあとの地図データの
  *   緑電の停留所（ホームの上）・運河バスの乗り場（石段の上の陸の側の敷石）。地図データを読むまでは、緑電・運河バスは入らない。
  *   緑電はホームのある停留所だけ（データの停留所の点が系統の線から遠く、ホームを置かない停留所は、緑電も止まらないので入れない）
  * - teleport(ch, spot): 町の中の移動（旅程）を取り消し、乗り物の早送り・カットをやめ、旅程の早送りの倍率と歩幅を戻し、WASD・クリックの歩きをやめてから、
  *   立ち寄り先なら placeAt（locomotion。kanon.place と同じ）、点なら placeAtPoint で置く。どちらも motion.placeSerial を増やして 'place' を出す
  * - 乗り物に乗っている途中（緑電・運河バス・ケーブル・観覧車のゴンドラ・ホバー）でも置ける。乗る仕組みは placeSerial が変わったのを次のコマの
- *   updateRiders（歩きを進める前）で見て、乗るのをやめる（降りたことにする: ride.car = null・phase = none。ホバーは飛ぶ途中なら行き先の乗り場に置く）
+ *   updateRiders（歩きを進める前）で見て、乗るのをやめる（降りたことにする: ride.car = null・phase = none。ホバーは飛ぶ途中なら、その下の地面に下ろして置く）
  */
 
 export interface TownSpot {
@@ -61,8 +60,6 @@ const WATERBUS_SPOT_B = 0.6
 
 /** 町の平面座標（x, y）→ シーンの x, z */
 const scene = (p: readonly [number, number]): [number, number] => [p[0], -p[1]]
-/** シーンの (x, z) から (tx, tz) を向く向き */
-const facing = (x: number, z: number, tx: number, tz: number) => Math.atan2(tx - x, tz - z)
 
 /**
  * ワープ先の一覧（並びは種類の並び（core/spots.ts の SPOT_KINDS）の中で、表・地図データの並び。呼ぶたびに作る）
@@ -74,11 +71,6 @@ export function townSpots(): TownSpot[] {
     const p = places[s.place]
     if (!p) continue
     out.push({ id: `${s.kind}:${s.place}`, kind: s.kind, label: p.label, place: s.place, x: p.position[0], z: p.position[2], heading: p.heading, refY: null, zone: p.zone ?? 'lab' })
-  }
-  for (const s of HOVER_SPOTS) {
-    const d = HOVER_DOCKS[s.dock]
-    const [x, z] = scene(d.access)
-    out.push({ id: `hover:${d.id}`, kind: 'hover', label: d.label, place: null, x, z, heading: facing(x, z, d.pad[0], d.pad[1]), refY: null, zone: zoneOfPoint(x, z) })
   }
   // 緑電の停留所: ホームの上の、線の向き（+）の端寄り（えきもりが立つ − の端の反対。スロープの下の道は、線路が道の外を通る停留所では
   // 歩ける所でないため）。幅の真ん中で、線路の方を向いて立つ

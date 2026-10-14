@@ -1,11 +1,11 @@
 import * as THREE from 'three'
 import { TOWN_PLACES } from 'sakurami-cho/core'
-import { canStand, directState, goTo, pickGround, placeAt, travelState, type CharacterVisual } from 'sakurami-cho/character'
+import { canStand, directState, goTo, hoverStatus, pickGround, placeAt, travelState, type CharacterVisual } from 'sakurami-cho/character'
 import type { FollowCamera, TownStatus } from 'sakurami-cho/world'
 import { DEBUG, town, townState, walker } from './town'
 import { clearVrm, setHeight, setNormalize, vrmState, type VrmState } from './vrm'
 import { groundAtScreen, jumpByKey, keyHook, walkAtScreen, walkToGroundPoint, walkUi } from './walk'
-import { alightWheel, boardWheel, DESTINATION_GROUPS, openTravel, setTravelOptions, stopTravel, travelTo, travelUi, type TravelOptions, type TravelUi } from './travel'
+import { alightWheel, boardWheel, callHover, DESTINATION_GROUPS, openTravel, setTravelOptions, stopTravel, travelTo, travelUi, type TravelOptions, type TravelUi } from './travel'
 import { putWalker, warpFrames, warpSpots, warpTo, warpUi, type WarpFrame, type WarpUi } from './teleport'
 import { clockUi, resetClock, runClock, setClockDate, setClockMinutes, setClockSpeed, stopClock, type ClockUi } from './clock'
 import { QUALITY, qualityUrl, type Quality } from './quality'
@@ -18,7 +18,8 @@ import { fullHook, mapDebugState, openMap, resetMapStats, setGround } from './to
  * クリックする・地面を拾う・立てるか、様子に WASD・クリックの歩きと案内。6-4: 行き先へ移る（旅程）・取り消す・進め方・行き先の一覧・観覧車に乗る・降りる、
  * 様子に旅程・乗っている乗り物・出来事・町の時刻。6-5: ワープする・ワープ先の一覧、様子にワープ（暗転・跳んだ先・直近のワープのコマの長さ）。
  * put は地図の placeAtPoint で置く（teleport.ts の putWalker）。6-6: 時刻のつまみ（画面と同じ口）、様子に時刻のつまみ・画質・外の光（太陽の向き・灯り）。
- * #8: 跳ぶ（スペースキーと同じ口）、様子に跳ぶ様子。#1: 町の地図（全体の地図を開く・閉じる・行き先を選ぶ・見え方・地面の画を敷く（見比べ用））、様子に町の地図
+ * #8: 跳ぶ（スペースキーと同じ口）、様子に跳ぶ様子。#1: 町の地図（全体の地図を開く・閉じる・行き先を選ぶ・見え方・地面の画を敷く（見比べ用））、様子に町の地図。
+ * #9: ホバーを呼ぶ（ボタンと同じ口）、様子にホバー
  */
 export interface WalkerDebug {
   /** 町の地図データを読み終えて（か、無いと分かって）、そのあと 30 コマ描いた */
@@ -67,6 +68,8 @@ export interface WalkerDebug {
   openList(open: boolean, group?: string): void
   /** 観覧車ソラノワに乗る・降りる（画面のボタンと同じ。降りるの time を省けば進め方の時間） */
   wheel: { board(): string | null; alight(time?: 'real' | 'cut' | 'fast'): string | null }
+  /** ホバーを呼ぶ（「ホバーを呼ぶ」のボタンと同じ。#9）。呼んだら null、だめなら理由。様子は state().hover */
+  hover(): string | null
   /** ワープする（一覧で選ぶのと同じ。fade を false にすると暗転せずにすぐ跳ぶ）。跳び始めたら null、だめなら理由。暗転が終わったかは state().teleport.fade */
   teleport(id: string, fade?: boolean): string | null
   /** ワープ先の一覧（地図の townSpots。呼んだときの物。緑電・運河バスは町の地図データを読んでから） */
@@ -102,6 +105,8 @@ export interface WalkerState {
   /** 旅程（画面の様子・地図の travelState・乗っている乗り物）と町の時刻（時・UTC のミリ秒。早送り・カットで進む） */
   travel: { ui: Omit<TravelUi, 'events'>; state: ReturnType<typeof travelState>; ride: { phase: string; vehicle: string | null; inside: boolean; boards: number; alights: number }; events: TravelUi['events'] }
   clock: { hours: number; utcMs: number; wallMs: number; ui: ClockUi }
+  /** ホバー（地図の hoverStatus。#9）: 様子・今の所（シーンの x, z）と向き・来るまでの秒・呼んだのが歩く人か */
+  hover: { phase: string; x: number; z: number; heading: number; arriveInSec: number | null; mine: boolean }
   /** このページの画質（URL の引数）と、外の光（太陽の方位・高度（度）・昼の明るさ・街灯の点き具合） */
   quality: Quality
   sun: { azimuth: number; elevation: number; daylight: number; street: number }
@@ -184,6 +189,10 @@ function state(): WalkerState {
       return { ui: rest, state: travelState(walker), ride: { phase: r.phase, vehicle: r.car?.vehicle.id ?? null, inside: r.inside, boards: r.serials.board, alights: r.serials.alight }, events }
     })(),
     clock: { hours: round(town.sun.time.hours), utcMs: town.sun.time.utcMs, wallMs: Date.now(), ui: clockUi() },
+    hover: (() => {
+      const h = hoverStatus()
+      return { phase: h.phase, x: round(h.x), z: round(h.z), heading: round(h.heading), arriveInSec: h.arriveInSec === null ? null : round(h.arriveInSec), mine: h.summoner === walker }
+    })(),
     quality: { ...QUALITY },
     sun: sunState(),
     teleport: (() => {
@@ -323,6 +332,7 @@ if (DEBUG) {
     destinations: () => DESTINATION_GROUPS.map((g) => ({ group: g.id, label: g.label, ids: g.items.map((d) => d.id) })),
     openList: (open, group) => openTravel(open, group ?? null),
     wheel: { board: () => boardWheel(), alight: (time) => alightWheel(time) },
+    hover: () => callHover(),
     teleport: (id, fade = true) => warpTo(id, fade),
     clock: { minutes: setClockMinutes, run: (sp) => runClock(sp), stop: stopClock, speed: setClockSpeed, now: resetClock, date: setClockDate },
     qualityUrl: (q) => qualityUrl(q, { time: null, date: null }),

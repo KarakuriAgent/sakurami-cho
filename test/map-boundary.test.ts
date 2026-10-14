@@ -241,6 +241,7 @@ const PUBLIC_API: Record<'core' | 'world' | 'character', readonly string[]> = {
     ...['driveRides', 'setWarpPermit', 'RideTime', 'advanceWheelTo', 'beginWheelBoarding', 'cancelWheelBoarding', 'requestWheelAlight', 'WHEEL_EXIT_OPEN_DEG', 'wheelBoardProblem', 'wheelProblemText', 'WheelProblem'],
     ...['cancelTravel', 'driveTravel', 'isTravelProblem', 'startTravel', 'traveling', 'travelProblemText', 'travelState', 'TravelCut', 'TravelPlan', 'TravelProblem', 'TravelRequest', 'TravelRouteId', 'TravelTime'],
     ...['canStand', 'directState', 'driveDirect', 'pickGround', 'setDirectInput', 'stopDirect', 'walkToPoint', 'jump', 'placeAtPoint', 'teleport', 'townSpots', 'TownSpot'],
+    ...['summonHover', 'hoverStatus', 'HoverStatus'],
   ],
 }
 
@@ -250,7 +251,7 @@ const PUBLIC_API: Record<'core' | 'world' | 'character', readonly string[]> = {
  */
 const CC_BY_NC_PATHS = [
   'assets/town/**',
-  ...['places', 'labPlan', 'routes', 'interiors', 'cableStations', 'hoverDocks', 'soranowa', 'travel', 'spots'].map((n) => `core/${n}.ts`),
+  ...['places', 'labPlan', 'routes', 'interiors', 'cableStations', 'soranowa', 'travel', 'spots'].map((n) => `core/${n}.ts`),
   ...['core/lab/plan.ts', 'core/lab/placements.ts', 'core/lab/kits/*.plan.ts'],
   ...['world/outdoor/interior/briefs/**', 'world/outdoor/named/kits/**', 'world/outdoor/interior/pictures.ts'],
 ] as const

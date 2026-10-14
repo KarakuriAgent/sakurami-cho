@@ -25,7 +25,7 @@ export function cue(id: OneShotId, x: number, y: number, z: number, gain = 1) {
 
 /**
  * 地図の出来事を音の合図にする（町の音の createTownSound が呼ぶ。やめる関数を返す）。強さと、1 つの出来事で鳴らす順:
- * えきもりの会釈 0.8・発車の合図 0.9、ホバーの回し始め 0.9、台に着いた 0.8（着いた音 → 止める音の順に 2 つ）
+ * えきもりの会釈 0.8・発車の合図 0.9、ホバーの回し始め 0.9、下りて止まった 0.8（着いた音 → 止める音の順に 2 つ）
  */
 export function listenTownCues(): () => void {
   const offs = [

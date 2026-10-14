@@ -41,7 +41,7 @@ export interface CabinSpec {
 
 /** 乗る便を探す問い（乗り場・行き先の向き）と答え */
 export interface BoardingQuery {
-  /** 乗り場（ケーブルは station.cable-* の id・ホバーは乗り場の id。観覧車は省く） */
+  /** 乗り場（ケーブルは station.cable-* の id。観覧車・ホバーは省く） */
   station?: string
   /** 行き先の乗り場（ケーブルの向きを決める） */
   toward?: string

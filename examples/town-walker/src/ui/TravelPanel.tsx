@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore } from 'react'
 import {
   alightWheel,
   boardWheel,
+  callHover,
   DESTINATION_GROUPS,
   openTravel,
   reachable,
@@ -24,6 +25,7 @@ import { WarpList } from './WarpList'
  * - 上: 町の時刻・今の移動（行き先・道のり・今の区間・乗っている乗り物・足した時間）・結果（着いた・取り消した・だめだった理由）・取り消す
  * - 札（仮）: 「行き先の一覧」（下の進め方・観覧車・行き先の組）と「ワープ」（ui/WarpList.tsx。6-5）を切り替える。案内から組を開いたときは行き先の一覧へ
  * - 進め方（たたむ）: 道順・乗り物・時間（カットの仕方・早送りの長さ）・乗っている間と待つ間・座るか立つか
+ * - ホバー: 様子（まだ呼んでいない・来る途中・横で待っている・乗っている）と「ホバーを呼ぶ」（travel.ts の callHover。呼んだら進め方の乗り物をホバーに）
  * - 観覧車ソラノワの乗り場にいるとき: 乗る・降りる
  * - 行き先: ゾーンごとの組（たたむ。クリックの案内から開いたときは、その組を開く）。確かめの道具は data-walker="dest-<名前>" で押す
  * - 出来事: 乗り降り・着いた・置き直した（新しい順）
@@ -102,6 +104,7 @@ function TravelList({ ui, isOpen, toggle }: { ui: TravelUi; isOpen: (id: string)
   const groups = DESTINATION_GROUPS.filter((g) => g.items.every(reachable))
   return (
     <>
+      <Hover ui={ui} />
       <Options o={ui.options} />
       {ui.wheel.here && <Wheel ui={ui} />}
       {groups.length < DESTINATION_GROUPS.length && <p className="hint">町の地図データが無いので、行き先はラボの中とまわりだけです</p>}
@@ -251,6 +254,29 @@ function Options({ o }: { o: TravelOptions }) {
         </select>
       </label>
     </details>
+  )
+}
+
+/** ホバーの様子と「ホバーを呼ぶ」。確かめの道具は data-walker="hover-call" で押す */
+function Hover({ ui }: { ui: TravelUi }) {
+  const h = ui.hover
+  const text =
+    h.phase === 'coming'
+      ? `来る途中（あと ${h.arriveIn ?? 0} 秒）`
+      : h.phase === 'parked'
+        ? (h.distance ?? 0) <= 20
+          ? '横で待っています'
+          : `${h.distance}m 離れた所に置いてあります`
+        : h.phase === 'riding'
+          ? '乗っています'
+          : 'まだ呼んでいません'
+  return (
+    <div className="wheel hover-call" data-walker="hover-status" data-phase={h.phase}>
+      <span>ホバー: {text}</span>
+      <button type="button" className="button small" data-walker="hover-call" disabled={h.phase === 'riding'} onClick={() => callHover()}>
+        ホバーを呼ぶ
+      </button>
+    </div>
   )
 }
 

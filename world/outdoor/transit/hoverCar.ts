@@ -372,38 +372,6 @@ function fan(g: GeoBuilder, fz: number) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 置き場の台（ラボの外。H の字の代わりに、緑の輪と小さな充電の柱）                           */
-/* -------------------------------------------------------------------------- */
-
-/** 置き場・乗り場の台（局所: 原点 = 台の上の真ん中。+z = ホバーの前）。private = 花音の私物の置き場（充電の柱と名前の札） */
-export function padGeometry(privatePad: boolean, depth = 0.06) {
-  const g = new GeoBuilder()
-  const R = 1.25
-  // 台（御影石の円盤。斜面では下を地面にめり込ませる）と、縁の緑の輪・前の向きの矢じり
-  g.cylinder([0, -depth, 0], R, depth + 0.01, 40, '#a9a59b', HM.paint, 0.15, true)
-  g.lathe(
-    [
-      [R - 0.11, 0.0125],
-      [R - 0.04, 0.0125],
-    ],
-    48,
-    new THREE.Matrix4(),
-    GREEN,
-    HM.paint,
-    0.3,
-    false,
-  )
-  g.tri([0, 0.0127, R - 0.18], [0.09, 0.0127, R - 0.34], [-0.09, 0.0127, R - 0.34], CREAM, HM.paint, 0.3)
-  if (privatePad) {
-    // 充電の柱（右後ろ。クリームの柱・緑の帽子・暖色の小さな灯り）
-    g.cylinder([-0.95, 0.0, -0.75], 0.07, 0.95, 14, CREAM, HM.paint, 0.6, false, 0.06)
-    g.cylinder([-0.95, 0.95, -0.75], 0.085, 0.05, 14, GREEN, HM.paint, 0.6)
-    g.box([-0.95, 0.78, -0.69], [0.05, 0.05, 0.02], '#ffc88a', HM.lamp, 2)
-  }
-  return g.build()
-}
-
-/* -------------------------------------------------------------------------- */
 /* シェーダー                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -539,7 +507,7 @@ function plateTexture(text: string) {
   return t
 }
 
-/** ホバーの描き方（1 台・乗り場の台）。uniforms を毎コマ書く */
+/** ホバーの描き方（1 台）。uniforms を毎コマ書く */
 export function createHoverMaterial() {
   return new THREE.ShaderMaterial({
     name: 'hover',
