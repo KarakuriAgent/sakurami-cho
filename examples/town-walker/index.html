@@ -2,7 +2,8 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <!-- 入口のページ（/）。素の HTML と CSS だけで、アプリのスクリプト・three・React・Web フォントは読まない（アプリは walk/index.html の /walk/）。
+    <!-- 入口のページ（/）。HTML と CSS と、使う VRM を選ぶ小さなスクリプト（src/landing.ts。選んだ VRM をこのブラウザの IndexedDB にしまう）だけで、
+         アプリのスクリプト・three・React・Web フォントは読まない（アプリは walk/index.html の /walk/）。
          画は landing/ の 2 枚（ビルドで assets/ へ名前に hash を付けて出す）。共有の画像は vite.config.ts が絶対の URL にする -->
     <!-- アイコンは置かない（/favicon.ico を取りに行かないように） -->
     <link rel="icon" href="data:," />
@@ -42,6 +43,10 @@
 
       * {
         box-sizing: border-box;
+      }
+
+      [hidden] {
+        display: none !important;
       }
 
       html {
@@ -165,10 +170,155 @@
         color: var(--text);
       }
 
+      .button.plain {
+        min-width: 0;
+        border-color: var(--line);
+        background: transparent;
+      }
+
+      .button.plain:hover {
+        border-color: var(--accent);
+        color: var(--text);
+      }
+
       .note {
         margin: 0 0 32px;
         color: var(--muted);
         font-size: 14px;
+      }
+
+      /* 使う VRM（スクリプトは landing.ts。data-mode が無い = スクリプトが動かない・調べ中、ready = 選べる、unavailable = IndexedDB が使えない） */
+      .vrm-pick {
+        margin: 0 0 18px;
+      }
+
+      .vrm-pick h2 {
+        margin-bottom: 6px;
+        font-size: 17px;
+      }
+
+      .vrm-pick p {
+        margin: 0;
+      }
+
+      .vrm-ui,
+      .vrm-off {
+        display: none;
+      }
+
+      .vrm-pick[data-mode] .vrm-plain {
+        display: none;
+      }
+
+      .vrm-pick[data-mode='ready'] .vrm-ui {
+        display: flex;
+      }
+
+      .vrm-pick[data-mode='unavailable'] .vrm-off {
+        display: block;
+      }
+
+      .vrm-ui {
+        gap: 16px;
+        align-items: flex-start;
+      }
+
+      .vrm-thumb {
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        width: 88px;
+        height: 88px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        font-size: 12px;
+        text-align: center;
+      }
+
+      .vrm-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .vrm-thumb img:not([hidden]) + span {
+        display: none;
+      }
+
+      .vrm-body {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      .vrm-name {
+        font-weight: 700;
+      }
+
+      .vrm-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        align-items: center;
+        margin: 6px 0;
+      }
+
+      .vrm-actions .small {
+        display: inline-block;
+        padding: 4px 14px;
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        background: rgba(244, 182, 110, 0.12);
+        color: var(--text);
+        font: inherit;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .vrm-actions .small:hover {
+        background: rgba(244, 182, 110, 0.24);
+      }
+
+      .vrm-actions .small:focus-within,
+      .vrm-actions .small:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .vrm-actions .small.quiet {
+        border-color: var(--line);
+        background: transparent;
+      }
+
+      .vrm-actions label {
+        font-size: 14px;
+      }
+
+      .vrm-actions input[type='number'] {
+        width: 4.5em;
+        font: inherit;
+      }
+
+      .vrm-settings {
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+        align-items: center;
+      }
+
+      .vrm-pick:not([data-has-vrm='1']) .vrm-settings {
+        display: none;
+      }
+
+      .vrm-message {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .vrm-message[data-error='1'] {
+        color: #ffb4a8;
       }
 
       /* 本文 */
@@ -282,9 +432,31 @@
         <img src="./landing/evening-lab.jpg" width="1200" height="630" alt="夕方の桜見町。丘の上のラボと、奥の天文台" fetchpriority="high" />
       </figure>
 
+      <section class="vrm-pick card" id="vrm-pick" aria-labelledby="vrm-pick-title">
+        <h2 id="vrm-pick-title">使う VRM</h2>
+        <p class="vrm-plain">VRM は、入ってから左上の「VRM を選ぶ」で読める（選ばなければ仮の体で歩く）。</p>
+        <p class="vrm-off">このブラウザでは、ここで VRM を選べない（ブラウザの中にしまう所 IndexedDB が使えない。プライベートのウィンドウなど）。入ってから左上の「VRM を選ぶ」で読める。</p>
+        <div class="vrm-ui">
+          <div class="vrm-thumb"><img id="vrm-thumb" alt="選んだ VRM のサムネイル" hidden /><span>VRM の<br />画</span></div>
+          <div class="vrm-body">
+            <p class="vrm-name" id="vrm-name">まだ選んでいません（選ばなければ仮の体で入る）</p>
+            <div class="vrm-actions">
+              <label class="small">VRM を選ぶ<input type="file" accept=".vrm" id="vrm-file" hidden /></label>
+              <button type="button" class="small quiet" id="vrm-forget" hidden>忘れる</button>
+              <span class="vrm-settings">
+                <label><input type="checkbox" id="vrm-normalize" checked /> 身長を合わせる</label>
+                <label>身長 <input type="number" id="vrm-height" min="50" max="250" step="1" value="165" /> cm</label>
+              </span>
+            </div>
+            <p class="vrm-message" id="vrm-message" aria-live="polite">VRM 0.x・1.0。このブラウザの中にしまい、どこへも送らない</p>
+          </div>
+        </div>
+      </section>
+
       <div class="enter">
-        <a class="button primary" href="/walk/">入る<small>高い画質（影・床の映り込みも描く）</small></a>
-        <a class="button secondary" href="/walk/?quality=low&amp;town=low">軽い画質で入る<small>ノート PC・内蔵の GPU 向け</small></a>
+        <a class="button primary" href="/walk/" data-enter>入る<small>高い画質（影・床の映り込みも描く）</small></a>
+        <a class="button secondary" href="/walk/?quality=low&amp;town=low" data-enter>軽い画質で入る<small>ノート PC・内蔵の GPU 向け</small></a>
+        <a class="button plain" href="/walk/?vrm=none" data-enter>VRM なしで入る<small>仮の体で（しまった VRM は残す）</small></a>
       </div>
       <p class="note">PC のブラウザで開くのがおすすめ（WebGL2 が要る）。最初の読み込みは約 40MB で、準備に 10〜50 秒ほどかかる（PC と回線による）。読み込み中は、段ごとの進み具合を出す。</p>
 
@@ -303,7 +475,7 @@
           <ul>
             <li>歩く: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> か矢印のキー（<kbd>Shift</kbd> で走る）。地面をクリックしても、そこへ歩く</li>
             <li>カメラ: ドラッグで回す・ホイールで寄る</li>
-            <li>VRM: 左上の「VRM を選ぶ」か、画面へ <code>.vrm</code> のファイルを落とす</li>
+            <li>VRM: 上の「使う VRM」で選んでから入るか、入ってから左上の「VRM を選ぶ」・画面へ <code>.vrm</code> のファイルを落とす</li>
             <li>右上の「行き先」: 行き先の一覧とワープ。左の「時刻」: 町の時刻と画質</li>
           </ul>
         </section>
@@ -321,7 +493,10 @@
       <div class="cols">
         <section>
           <h2>VRM について</h2>
-          <p>読み込んだ VRM は、このページの中（ブラウザの中）だけで使い、どこへも送らない。ページを閉じれば残らない。</p>
+          <p>
+            選んだ VRM は、このブラウザの中（IndexedDB）にしまって使い、どこへも送らない。しまった VRM は、読み直しても次に開いても使われ、
+            上の「忘れる」か、入ってから左上の「外す」を押すまで残る。入ってから選び直すと、しまってある物も入れ替わる。
+          </p>
         </section>
         <section>
           <h2>ソース</h2>
@@ -339,5 +514,6 @@
         <p>© 2026 株式会社0235</p>
       </footer>
     </main>
+    <script type="module" src="/src/landing.ts"></script>
   </body>
 </html>

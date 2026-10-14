@@ -5,7 +5,8 @@ import { clearVrm, loadVrmFile, setHeight, setNormalize, subscribeVrm, vrmState,
  * VRM を読むつまみ（左上）と、画面へのドラッグ＆ドロップ。読むのは vrm.ts（blob: の URL にして地図の見た目で読む）。
  * - ファイルを選ぶ（input type=file。確かめの道具は data-walker="vrm" で探す）か、画面のどこかへ落とす
  * - 身長を設定に合わせる・合わせない、設定の身長（cm）。変えたら同じファイルを読み直す
- * - 外す（仮の体に戻す）
+ * - 外す（仮の体に戻す。このブラウザにしまった VRM も消す）
+ * - 読めた VRM はこのブラウザにしまい（vrm.ts・vrmStore.ts）、読み直しても使う。しまえないブラウザでは、そのことを案内に出す
  * - 様子と案内（読み込み中・読んだ VRM の版と実測の身長・読めなかった理由）
  */
 export function VrmPanel() {
@@ -31,6 +32,7 @@ export function VrmPanel() {
           </button>
         )}
         <p className="hint">画面へ .vrm を落としても読みます（VRM 0.x・1.0）</p>
+        <p className="hint" data-walker="vrm-stored">{storedText(vrm)}</p>
         <label className="row">
           <input type="checkbox" checked={vrm.normalize} onChange={(e) => setNormalize(e.target.checked)} data-walker="normalize" />
           身長を合わせる
@@ -60,6 +62,20 @@ export function VrmPanel() {
       )}
     </>
   )
+}
+
+/** しまった VRM の案内の字 */
+function storedText(s: VrmState): string {
+  switch (s.stored) {
+    case 'unavailable':
+      return 'このブラウザにはしまえません（読み直すと消える）'
+    case 'skipped':
+      return 'しまった VRM は使わずに入りました（選ぶと入れ替える）'
+    case 'saved':
+      return 'このブラウザにしまい、読み直しても使います（「外す」で消す）'
+    default:
+      return '読めた VRM はこのブラウザにしまい、どこへも送りません'
+  }
 }
 
 /** 様子の字 */

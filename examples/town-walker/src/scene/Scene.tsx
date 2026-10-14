@@ -5,6 +5,7 @@ import { LabAtmosphere, RideDriver, TownClock, TownExposure, TownRoot, TownView 
 import { sceneHook, walkerState } from '../debug'
 import { loadingLabBuilt, loadingReady } from '../loading'
 import { town, townState, walker } from '../town'
+import { vrmPending } from '../vrm'
 import { Controls } from './Controls'
 import { FollowCam } from './FollowCam'
 import { WalkerDriver, WalkerView } from './Walker'
@@ -59,7 +60,7 @@ function Render() {
 }
 
 /**
- * 準備の合図（町の地図データを読み終えて（か、無いと分かって）から 30 コマ描いたら。?debug の __walker.ready と html の data-walker-ready）。
+ * 準備の合図（町の地図データを読み終えて（か、無いと分かって）、しまった VRM を読み終えて（か、無い・読めないと分かって）から 30 コマ描いたら。?debug の __walker.ready と html の data-walker-ready）。
  * 読み込み中の進み具合（../loading）にも、ラボを作り終えた（これが付いてから 2 コマ目。1 コマ目を描くときに素材のシェーダーを組み立てるので、それを含める）・
  * 準備ができた（進み具合を消す）を知らせる
  */
@@ -79,7 +80,7 @@ function ReadySignal() {
   useFrame(() => {
     walkerState.frames++
     if (++drawn.current === 2) loadingLabBuilt()
-    if (walkerState.ready || townState.status === 'idle' || townState.status === 'loading') return
+    if (walkerState.ready || townState.status === 'idle' || townState.status === 'loading' || vrmPending()) return
     if (++settled.current >= 30) {
       walkerState.ready = true
       document.documentElement.dataset.walkerReady = '1'

@@ -6,8 +6,9 @@ import { defineConfig, type Plugin } from 'vite'
 /**
  * 例のアプリ town-walker の Vite の設定（kanon-lab の docs/design/map-split.md §8）。
  *
- * - ページは 2 つ（複数ページ。build.rolldownOptions.input）: 入口 index.html（`/`。素の HTML と CSS だけで、アプリのスクリプト・three・React・
- *   フォントを読まない。画は landing/ の 2 枚を相対で読み、ビルドで assets/ へ名前に hash を付けて出す）と、アプリ walk/index.html（`/walk/`。src/main.tsx）
+ * - ページは 2 つ（複数ページ。build.rolldownOptions.input）: 入口 index.html（`/`。HTML と CSS と、VRM を選ぶ小さなスクリプト src/landing.ts だけで、
+ *   アプリのスクリプト・three・React・フォントを読まない。画は landing/ の 2 枚を相対で読み、ビルドで assets/ へ名前に hash を付けて出す）と、
+ *   アプリ walk/index.html（`/walk/`。src/main.tsx）。2 つが読む src/vrmStore.ts（選んだ VRM を IndexedDB にしまう所）は、ビルドで共通の小さな chunk になる
  * - アセット: publicDir を地図のパッケージの assets/（この例のアプリから ../../assets）に向ける。町の地図データ・テクスチャ・.vrma を写さずに、
  *   アセットの根（Vite の base）として出す（ビルドでは出力へ写す）。createTown の assetBase は import.meta.env.BASE_URL（src/town.ts）。
  *   base は `/` のままなので、`/walk/` のページからもアセットは `/town/…`・`/textures/…` で読む。入口の画は地図の assets/ に混ぜない（landing/）

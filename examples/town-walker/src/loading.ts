@@ -1,5 +1,6 @@
 import { TOWN_DATA } from 'sakurami-cho/core'
 import { onTownStatus, townState } from './town'
+import { subscribeVrm, vrmState } from './vrm'
 
 /**
  * 読み込み中の進み具合（画面の真ん中の段ごとの棒。初めの形は walk/index.html の #loading で、スクリプトが届くまではそこのインラインの JS が経過を数える）。
@@ -14,12 +15,14 @@ import { onTownStatus, townState } from './town'
  *   町の地図データ  地図の onStatus の loading から、Resource Timing で town/ の下（manifest.json のほか）を読み終えたバイトの合計。分母は manifest.json の
  *                   stats.bytes（書き出したファイルの大きさの合計。allTiles なので全部読む）
  *   町を組み立てる  町の地図データを読み終えてから、地図の onStatus が ready になるまで
+ *   VRM             このブラウザにしまった VRM（vrm.ts・vrmStore.ts）を調べてから、読み込んで ready になるまで（町の準備と並べて読む）。
+ *                   しまった物が無い・?vrm=none・IndexedDB が使えないときは省く（仮の体）。読めなければ失敗にして理由を出す（仮の体で始める）
  *
  * 町の地図データが無い・形の版が合わない・読めないときは「町の地図データ」の段に出し（くわしくは上の案内 ui/TownNotice.tsx）、組み立ては省く。
  * 途中で捕まえられなかった誤り（window の error・unhandledrejection）が出たら、そのとき進んでいた段に出す
  */
 
-type StepId = 'script' | 'fonts' | 'textures' | 'lab' | 'townData' | 'build'
+type StepId = 'script' | 'fonts' | 'textures' | 'lab' | 'townData' | 'build' | 'vrm'
 type StepState = 'wait' | 'active' | 'done' | 'fail' | 'skip'
 
 interface Boot {
@@ -35,6 +38,7 @@ const STEP_LABELS: Record<StepId, string> = {
   lab: 'ラボを作る',
   townData: '町の地図データ',
   build: '町を組み立てる',
+  vrm: 'VRM',
 }
 const ORDER = Object.keys(STEP_LABELS) as StepId[]
 
@@ -207,6 +211,26 @@ function onStatus(status: string) {
 }
 onTownStatus((status) => onStatus(status))
 if (townState.status !== 'idle') onStatus(townState.status)
+
+/* -------------------------------------------------------------------------- */
+/* VRM（vrm.ts の様子）                                                           */
+/* -------------------------------------------------------------------------- */
+
+function showVrm() {
+  if (boot.done) return
+  const v = vrmState()
+  const name = v.fileName ? `「${v.fileName}」` : ''
+  if (v.stored === 'checking') setStep('vrm', 'active', 'しまった VRM を調べています')
+  else if (v.status === 'loading') setStep('vrm', 'active', `${name}を読んでいます`)
+  else if (v.status === 'ready') setStep('vrm', 'done', `${name}${v.version === '0' ? 'VRM 0.x' : 'VRM 1.0'}・${seconds('vrm')}`)
+  else if (v.status === 'missing' || v.status === 'error') {
+    setStep('vrm', 'fail', '読めませんでした（仮の体で始めます）')
+    note(`${v.fromStore ? 'しまった ' : ''}VRM ${name}は、${v.message || '読めませんでした'}。仮の体で始めます。左上の「VRM を選ぶ」で選び直すか「外す」で消せます。`)
+  } else if (v.status === 'none')
+    setStep('vrm', 'skip', v.stored === 'skipped' ? '使わない（仮の体）' : v.stored === 'unavailable' ? 'しまえないブラウザ（入ってから選ぶ）' : 'なし（仮の体）')
+}
+subscribeVrm(showVrm)
+showVrm()
 
 /* -------------------------------------------------------------------------- */
 /* 捕まえられなかった誤り                                                          */

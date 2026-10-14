@@ -69,8 +69,9 @@
  *   - ワープの口（teleport・placeAtPoint・townSpots）を読むのは src/teleport.ts だけで、跳ぶ前に旅程を取り消し、跳んだら追うカメラを一度に置く（6-5）
  *   - 町の時刻と日付を変える口（town.setTime・setDate）を呼ぶのは src/clock.ts だけで、旅程の途中・乗っている間・ワープの暗転の間は変えない。画質は
  *     URL の引数から src/quality.ts が決めて町を作るときに渡す。町の地図データの状態は onStatus から聞き、案内は missing・outdated・error だけ（6-6）
- *   - ページは 2 つ（vite.config.ts の build.rolldownOptions.input）: 入口 index.html（/）は素の HTML と CSS だけで、スクリプト・外の CSS・Web フォントを
- *     読まない（画は landing/ の物だけ。「入る」は /walk/ と軽い画質の /walk/?quality=low&town=low）。アプリ walk/index.html（/walk/）は
+ *   - ページは 2 つ（vite.config.ts の build.rolldownOptions.input）: 入口 index.html（/）は HTML と CSS と、VRM を選ぶ小さなスクリプト src/landing.ts
+ *     だけで（landing.ts から読むのは src/vrmStore.ts だけ。three・React・地図のパッケージを読まない）、外の CSS・Web フォントを読まない（画は landing/
+ *     の物だけ。「入る」は /walk/ と軽い画質の /walk/?quality=low&town=low、「VRM なしで入る」は /walk/?vrm=none）。アプリ walk/index.html（/walk/）は
  *     src/main.tsx を 1 つ読み、読み込み中の進み具合（#loading の段）は src/loading.ts の段と同じ並び。アセットの根（base）は / のまま
  *
  * 許しの一覧は持たない（段 5 で 0 にした）。どうしても例外が要るときは、その見張りに一覧を足し、理由となくす段を書く。
@@ -496,7 +497,7 @@ function exampleMisuses(file: string, text: string, deps: ReadonlySet<string>): 
       else if (!spec.startsWith('node:') && !deps.has(packageNameOf(spec))) out.push(`${file} -> ${spec}（書いていない依存）`)
     }
   }
-  const body = html ? code.replace(/<script type="module" src="\/src\/main\.tsx"><\/script>/, '') : code
+  const body = html ? code.replace(/<script type="module" src="\/src\/(?:main\.tsx|landing\.ts)"><\/script>/, '') : code
   for (const m of body.matchAll(/(?<![\w.$-])(?:src|shared|server|public)\/|(?<![\w$-])public(?=['"`])|@kanon-lab\/|kanon\.vrm\b|gesture-[a-z_]+\.vrma|(?<![\w-])audio\//g)) {
     out.push(`${file}: ${m[0]}（kanon-lab の置き場所）`)
   }
@@ -889,7 +890,7 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
     expect(exampleFiles().filter((f) => /\.vrma\b/.test(codeOf(read(f))))).toEqual([])
   })
 
-  test('ページは 2 つ: 入口 index.html（/）は素の HTML と CSS だけ（スクリプト・外の CSS・Web フォントを読まない。画は landing/ の物）、アプリ walk/index.html（/walk/）は src/main.tsx を 1 つ読み、進み具合の段は src/loading.ts と同じ並び。base は / のまま', () => {
+  test('ページは 2 つ: 入口 index.html（/）は HTML と CSS と VRM を選ぶ小さなスクリプト src/landing.ts だけ（three・React・地図のパッケージ・外の CSS・Web フォントを読まない。画は landing/ の物）、アプリ walk/index.html（/walk/）は src/main.tsx を 1 つ読み、進み具合の段は src/loading.ts と同じ並び。base は / のまま', () => {
     const vite = codeOf(read(`${EXAMPLE_DIR}/vite.config.ts`))
     expect(vite).toMatch(
       /rolldownOptions: \{\s*input: \{\s*index: fileURLToPath\(new URL\('\.\/index\.html', import\.meta\.url\)\),\s*walk: fileURLToPath\(new URL\('\.\/walk\/index\.html', import\.meta\.url\)\),\s*\},/,
@@ -898,12 +899,25 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
     expect(vite).not.toMatch(/\bbase\s*:/)
     expect(codeOf(read(`${EXAMPLE_DIR}/src/quality.ts`))).toMatch(/const url = new URL\(location\.href\)/)
 
-    // 入口: スクリプト（src・module）・外の CSS・Web フォントを読まない。読む物は landing/ の画だけ（共有の画像も）。数十 KB まで
+    // 入口: スクリプトは VRM を選ぶ src/landing.ts の 1 つだけで、そこから読むのは src/vrmStore.ts だけ（three・React・地図のパッケージを読まない）。
+    // 外の CSS・Web フォントを読まない。読む物は landing/ の画だけ（共有の画像も）。数十 KB まで
     const landingRaw = read(`${EXAMPLE_DIR}/index.html`)
     expect(Buffer.byteLength(landingRaw)).toBeLessThan(30_000)
-    const landing = landingRaw.replace(/<!--[\s\S]*?-->/g, '')
-    expect(landing).not.toMatch(/<script\b[^>]*\b(?:src=|type="module")/)
+    const landingAll = landingRaw.replace(/<!--[\s\S]*?-->/g, '')
+    expect([...landingAll.matchAll(/<script\b[^>]*>/g)].map((m) => m[0])).toEqual(['<script type="module" src="/src/landing.ts">'])
+    const landing = landingAll.replace('<script type="module" src="/src/landing.ts"></script>', '')
     expect(landing).not.toMatch(/rel="(?:stylesheet|preload|modulepreload|prefetch|preconnect)"|@import|@font-face|fonts\.googleapis|\/src\//)
+    const landingScripts = new Set<string>()
+    const visitLanding = (f: string) => {
+      if (landingScripts.has(f)) return
+      landingScripts.add(f)
+      for (const spec of importsOf(read(f))) {
+        expect(spec.startsWith('./')).toBe(true)
+        visitLanding(`${posix.normalize(posix.join(dirname(f), spec))}.ts`)
+      }
+    }
+    visitLanding(`${EXAMPLE_DIR}/src/landing.ts`)
+    expect([...landingScripts].sort()).toEqual([`${EXAMPLE_DIR}/src/landing.ts`, `${EXAMPLE_DIR}/src/vrmStore.ts`])
     const local = [...landing.matchAll(/\b(?:src|srcset)="([^"]+)"|<meta (?:property="og:image"|name="twitter:image") content="([^"]+)"/g)].map((m) => m[1] ?? m[2]!)
     expect(local.length).toBeGreaterThanOrEqual(3)
     expect(local.filter((u) => !u.startsWith('./landing/'))).toEqual([])
@@ -913,9 +927,10 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
       // 画は 1 枚 200KB まで
       expect(statSync(join(ROOT, f)).size).toBeLessThan(200_000)
     }
-    // 「入る」2 つ・共有のカード・リポジトリ・ライセンスの案内
+    // 「入る」2 つと「VRM なしで入る」・共有のカード・リポジトリ・ライセンスの案内
     expect(landing).toContain('href="/walk/"')
     expect(landing).toContain('href="/walk/?quality=low&amp;town=low"')
+    expect(landing).toContain('href="/walk/?vrm=none"')
     for (const m of ['property="og:title"', 'property="og:description"', 'property="og:url" content="https://sakurami-cho.0235.app/"', 'name="twitter:card" content="summary_large_image"']) expect(landing).toContain(m)
     for (const w of ['https://github.com/kanon-claire-thompson/sakurami-cho', 'CC BY-NC 4.0', 'MIT', 'https://kanon.0235.co.jp/guidelines/']) expect(landing).toContain(w)
 
@@ -927,7 +942,7 @@ describe('例のアプリ（examples/town-walker。段 6）', () => {
     // 進み具合の段は src/loading.ts の STEP_LABELS と同じ名前・並び・字
     const loading = codeOf(read(`${EXAMPLE_DIR}/src/loading.ts`))
     const labels = [...(loading.match(/const STEP_LABELS: Record<StepId, string> = \{([^}]*)\}/)?.[1] ?? '').matchAll(/(\w+): '([^']+)'/g)].map((m) => `${m[1]} ${m[2]}`)
-    expect(labels.length).toBe(6)
+    expect(labels.length).toBe(7)
     const rows = [...walk.matchAll(/data-step="(\w+)"[^>]*>\s*<span class="step-name">([^<]+)<\/span>/g)].map((m) => `${m[1]} ${m[2]}`)
     expect(rows).toEqual(labels)
     // 引き継ぐ所: main.tsx が読み（フォントの段・描き始め）、準備の合図（scene/Scene.tsx）が消す
@@ -1151,9 +1166,11 @@ describe('見張りの仕組みそのもの', () => {
         `${f}: three-vrm-girl.vrm（VRM のファイルの名前）`,
       ].sort(),
     )
-    // index.html は自分の入口 /src/main.tsx だけ書ける（import は数えない）
+    // ページは自分の入口 /src/main.tsx・/src/landing.ts だけ書ける（import は数えない。どのページがどれを読むかはページの見張り）
     const html = '<script type="module" src="/src/main.tsx"></script>\n<!-- ../../src/ と書いても数えない -->\n<link href="/public/x.css" />'
     expect(exampleMisuses(`${EXAMPLE_DIR}/index.html`, html, deps)).toEqual([`${EXAMPLE_DIR}/index.html: public/（kanon-lab の置き場所）`])
+    const landingHtml = '<script type="module" src="/src/landing.ts"></script>\n<script type="module" src="/src/other.ts"></script>'
+    expect(exampleMisuses(`${EXAMPLE_DIR}/index.html`, landingHtml, deps)).toEqual([`${EXAMPLE_DIR}/index.html: src/（kanon-lab の置き場所）`])
     // 入口の index: 選んだ名前の export（複数行・型も）と export {} はよく、export *・コード・ほかの import は数える。react は export * と登録の import もよい
     const index = "/** 入口 */\nexport { a, b } from './a'\nexport type {\n  C,\n  D,\n} from './c'\nexport {}\nexport * from './e'\nimport './f'\nconst x = 1"
     expect(indexExtras('world', index)).toEqual(["world/index.ts: export * from './e'", "world/index.ts: import './f'", 'world/index.ts: const x = 1'])
