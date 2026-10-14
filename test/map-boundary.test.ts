@@ -23,10 +23,10 @@
  *     packages/sakurami-cho）を書かない（--root・--out・--src・--assets で受ける）。パッケージの scripts（sync:town・sync:anim・check:walk）も道具を呼び、
  *     根と書き出し先・読む所（assets/）を渡す（8-4）
  *   - 素材から .vrma を作る変換（tools/anim/convert.mjs。exports の ./tools/anim）は .ts を読まない（使う側が Node で動かすとき、Node は node_modules の
- *     下の .ts を読まない）。待機・歩きの書き出し先は character/avatar/visualConfig.ts の VISUAL_DEFAULTS.animations と同じ値（8-4）
+ *     下の .ts を読まない）。待機・歩き・跳ぶの書き出し先は character/avatar/visualConfig.ts の VISUAL_DEFAULTS.animations と同じ値（8-4）
  *   - 書き出したアセット（町の地図データ assets/town/・.vrma の assets/models/animations/）は git に入れる（地図のリポジトリだけで町が出るように。
  *     段 6 の前に決めた。§8）。.gitignore で外さず、git の作業ツリーなら書き出した物が全部 git に入っている（sync で作り直したら差としてコミットする）。
- *     .vrma は出典（assets/models/animations/CREDITS.md）にファイルごとに書く。パッケージに置く .vrma は、パッケージのコードが既定で使う待機・歩きまで
+ *     .vrma は出典（assets/models/animations/CREDITS.md）にファイルごとに書く。パッケージに置く .vrma は、パッケージのコードが既定で使う待機・歩き・跳ぶまで
  *   - package.json の形（exports・files・peer の範囲・sideEffects を書かない・scripts・devDependencies）と .gitignore、three などが例のアプリとパッケージで
  *     同じ本当の置き場所に解けること
  *   - パッケージの名前は sakurami-cho（段 8 の 8-1 で、前の @kanon のスコープの付いた名前から替えた）。前の名前の字を残さない
@@ -240,7 +240,7 @@ const PUBLIC_API: Record<'core' | 'world' | 'character', readonly string[]> = {
     ...['goTo', 'placeAt', 'stopWalking', 'updateLocomotion', 'configureNav', 'NavConfig'],
     ...['driveRides', 'setWarpPermit', 'RideTime', 'advanceWheelTo', 'beginWheelBoarding', 'cancelWheelBoarding', 'requestWheelAlight', 'WHEEL_EXIT_OPEN_DEG', 'wheelBoardProblem', 'wheelProblemText', 'WheelProblem'],
     ...['cancelTravel', 'driveTravel', 'isTravelProblem', 'startTravel', 'traveling', 'travelProblemText', 'travelState', 'TravelCut', 'TravelPlan', 'TravelProblem', 'TravelRequest', 'TravelRouteId', 'TravelTime'],
-    ...['canStand', 'directState', 'driveDirect', 'pickGround', 'setDirectInput', 'stopDirect', 'walkToPoint', 'placeAtPoint', 'teleport', 'townSpots', 'TownSpot'],
+    ...['canStand', 'directState', 'driveDirect', 'pickGround', 'setDirectInput', 'stopDirect', 'walkToPoint', 'jump', 'placeAtPoint', 'teleport', 'townSpots', 'TownSpot'],
   ],
 }
 
@@ -724,7 +724,7 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     expect(tools.flatMap((f) => toolMisuses(f, read(f)))).toEqual([])
   })
 
-  test('素材から .vrma を作る変換（tools/anim/convert.mjs。sakurami-cho/tools/anim）は .ts を読まない（Node は node_modules の下の .ts を読まない。8-4）。待機・歩きの書き出し先は VISUAL_DEFAULTS.animations と同じ値', async () => {
+  test('素材から .vrma を作る変換（tools/anim/convert.mjs。sakurami-cho/tools/anim）は .ts を読まない（Node は node_modules の下の .ts を読まない。8-4）。待機・歩き・跳ぶの書き出し先は VISUAL_DEFAULTS.animations と同じ値', async () => {
     const files = animToolFiles()
     expect(files).toEqual(expect.arrayContaining(['tools/anim/convert.mjs']))
     expect(files.filter((f) => !/\.m?js$/.test(f))).toEqual([])
@@ -733,21 +733,23 @@ describe('地図のパッケージ（入口ごとの決まり）', () => {
     expect(specs.filter((s) => !s.startsWith('node:') && packageNameOf(s) !== 'three')).toEqual([])
     // 値を 2 か所に書くので、食い違ったら落とす（.ts の側が元。道具の側は写し）
     const load = async <T>(path: string): Promise<T> => (await import(join(ROOT, path))) as T
-    const convert = await load<{ IDLE_OUTPUT: { dest: string }; WALK_OUTPUT: { dest: string } }>('tools/anim/convert.mjs')
-    const { VISUAL_DEFAULTS } = await load<{ VISUAL_DEFAULTS: { animations: { idle: string; walk: string } } }>('character/avatar/visualConfig.ts')
+    const convert = await load<{ IDLE_OUTPUT: { dest: string }; WALK_OUTPUT: { dest: string }; JUMP_OUTPUTS: { dest: string }[] }>('tools/anim/convert.mjs')
+    const { VISUAL_DEFAULTS } = await load<{ VISUAL_DEFAULTS: { animations: { idle: string; walk: string; jump: { start: string; loop: string; land: string } } } }>('character/avatar/visualConfig.ts')
     expect(convert.IDLE_OUTPUT.dest).toBe(VISUAL_DEFAULTS.animations.idle)
     expect(convert.WALK_OUTPUT.dest).toBe(VISUAL_DEFAULTS.animations.walk)
+    const jump = VISUAL_DEFAULTS.animations.jump
+    expect(convert.JUMP_OUTPUTS.map((o) => o.dest)).toEqual([jump.start, jump.loop, jump.land])
   })
 
-  test('書き出したアセット（町の地図データ・.vrma）は git に入っていて（sync で作り直したら差としてコミットする）、.vrma の出典がファイルごとにある。パッケージの .vrma は待機・歩きまで', () => {
+  test('書き出したアセット（町の地図データ・.vrma）は git に入っていて（sync で作り直したら差としてコミットする）、.vrma の出典がファイルごとにある。パッケージの .vrma は待機・歩き・跳ぶまで', () => {
     const town = 'assets/town'
     const anim = 'assets/models/animations'
     for (const f of ['manifest.json', 'walk.json', 'named.json', 'infra.json']) expect(existsSync(join(ROOT, town, f))).toBe(true)
     const pkgVrma = filesUnder(anim, /\.vrma$/)
     const written = [...filesUnder(town, /./), ...pkgVrma]
     expect(written.length).toBeGreaterThan(100)
-    // パッケージに置く .vrma は、パッケージのコードが既定で使う待機・歩きまで。花音の身ぶり（gesture-*）を地図へ戻さない・見比べる用の物を置かない
-    expect(pkgVrma.map((f) => posix.basename(f))).toEqual(['idle.vrma', 'walk.vrma'])
+    // パッケージに置く .vrma は、パッケージのコードが既定で使う待機・歩き・跳ぶまで。花音の身ぶり（gesture-*）を地図へ戻さない・見比べる用の物を置かない
+    expect(pkgVrma.map((f) => posix.basename(f)).sort()).toEqual(['idle.vrma', 'jump-land.vrma', 'jump-loop.vrma', 'jump-start.vrma', 'walk.vrma'])
     // パッケージの .gitignore で書き出した物を外さない（前の決め（5-9）はパッケージの .gitignore で外していた）
     const ignores = filesUnder('', /^\.gitignore$/, ['node_modules', '.git'])
     expect(ignores).toContain('.gitignore')

@@ -1,7 +1,7 @@
 # モーションの出典（assets/models/animations/）
 
-`assets/models/animations/` の `.vrma`（キャラクターの見た目が既定で使う待機・歩き）は、下の自由に使える素材のモーションから `tools/sync-anim.mjs` が作った物です
-（素材から `.vrma` を作る変換は `tools/anim/convert.mjs`。素材ごとの設定は `SOURCES`、どの素材のどのアニメーションを使うかは `IDLE_OUTPUT`・`WALK_OUTPUT`）。
+`assets/models/animations/` の `.vrma`（キャラクターの見た目が既定で使う待機・歩き・跳ぶ）は、下の自由に使える素材のモーションから `tools/sync-anim.mjs` が作った物です
+（素材から `.vrma` を作る変換は `tools/anim/convert.mjs`。素材ごとの設定は `SOURCES`、どの素材のどのアニメーションを使うかは `IDLE_OUTPUT`・`WALK_OUTPUT`・`JUMP_OUTPUTS`）。
 骨の向きを VRM の T ポーズの基準にそろえ、ループにつなぐ・震えをならす などの手を加えています（手の加え方は `tools/anim/convert.mjs` の頭のコメント）。
 
 ## 素材
@@ -22,6 +22,9 @@ CC0 の素材は表記が要らないが、感謝をこめて書いておく。
 |---|---|---|---|
 | `idle.vrma` | 待機のループ | StayStill（MIT） | `wei_lr_16` と `wei_rl_16`（16 番の人の左右への体重移動）をつないだ物 |
 | `walk.vrma` | 歩き（その場で歩くループ） | Universal Animation Library（CC0） | `Walk_Loop` |
+| `jump-start.vrma` | 跳ぶ: 踏み切り（しゃがんだ所から伸びて上がる。1 回） | Universal Animation Library（CC0） | `Jump_Start` |
+| `jump-loop.vrma` | 跳ぶ: 跳んでいる間（ループ） | Universal Animation Library（CC0） | `Jump_Loop` |
+| `jump-land.vrma` | 跳ぶ: 着く（脚を伸ばして着き、しゃがんで立つ。1 回） | Universal Animation Library（CC0） | `Jump_Land` |
 
 StayStill から作った `.vrma`（`idle.vrma`）には、glTF の `asset.copyright` にも著作権の表示（`Motion data from the StayStill dataset. Copyright (c) 2026 Eneko Atxa Landa. MIT License.`）を入れている。
 

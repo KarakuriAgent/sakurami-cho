@@ -9,15 +9,15 @@
 //   https://zenodo.org/records/18741736 ・ https://github.com/Enekoassets/StayStill
 //   待機（IDLE_OUTPUT）は、左右への体重移動（wei_lr と wei_rl）をつないで、切れ目なく繰り返す待機にする。
 //   動作のクリップ（見回す・伸びなど）を 1 回だけ再生する身ぶりに切り出すこともできる（OUTPUT の gesture）
-// - Quaternius「Universal Animation Library」無料の Standard 版（CC0）: 歩き（WALK_OUTPUT）は Walk_Loop
+// - Quaternius「Universal Animation Library」無料の Standard 版（CC0）: 歩き（WALK_OUTPUT）は Walk_Loop、跳ぶ（JUMP_OUTPUTS）は Jump_Start・Jump_Loop・Jump_Land
 // - Quaternius「Universal Animation Library 2」Standard 版（CC0）: 腕組みの Idle_FoldArms_Loop など
 //
 // 素材の zip は、HTTP の Range で目次と要るファイルだけを読む（StayStill の zip は 370MB あるが、読むのは数百 KB）。
 // 取り出したファイルは素材の置き場（cacheDir。tools/sync-anim.mjs は根の .cache/anim/）の <素材>/ に置き、次からはネットにつながない
 // （git に入れない）。Range に対応していないサーバーなら zip 全体を素材の置き場にダウンロードする。zip を手で素材の置き場に置いてもよい。
-// 書き出し先はアセットの根（assetRoot）からの相対（OUTPUT の dest。待機・歩きは character/avatar/visualConfig.ts の animations と同じ値を下の ANIMATION_PATHS に写す）。
+// 書き出し先はアセットの根（assetRoot）からの相対（OUTPUT の dest。待機・歩き・跳ぶは character/avatar/visualConfig.ts の animations と同じ値を下の ANIMATION_PATHS に写す）。
 // 書き出した .vrma は git に入れる（作り直したら差としてコミットする）。ファイルごとの素材とライセンスは、書き出した所の CREDITS.md に書く
-// （パッケージの待機・歩きは assets/models/animations/CREDITS.md。素材や作る物の表を変えたら、そちらも直す）。
+// （パッケージの待機・歩き・跳ぶは assets/models/animations/CREDITS.md。素材や作る物の表を変えたら、そちらも直す）。
 //
 // 置き換えの決まり（VRM Animation の仕様に合わせる）:
 // - .vrma の骨は T ポーズを基準にする。素材の基準の姿勢から、腕・脚・指はまっすぐの向き、親指は VRM の T ポーズの決まり
@@ -206,7 +206,8 @@ export const SOURCES = {
 
 /**
  * 作るアニメーション 1 つ（OUTPUT）の形。dest = 書き出し先（アセットの根からの相対）、source = 素材（SOURCES の id）と、次のどれか 1 つ:
- * - clip: 素材のアニメーションを 1 本そのまま使う（walk: true なら「その場で歩く」ループにして、足が滑らない速さを書く）
+ * - clip: 素材のアニメーションを 1 本そのまま使う（walk: true なら「その場で歩く」ループにして、足が滑らない速さを書く。
+ *   once: true なら 1 回だけ再生する物（跳ぶ踏み切り・着くなど。ループにしないので、始めと終わりのつなぎ目を見ない）
  * - loop: 素材のアニメーションを何本かつないで、切れ目なく繰り返すループにする
  *   segments = つなぐ順のアニメーション（from・to 秒で切り出せる）、blend = つなぎ目で前後を重ねて混ぜる長さ（秒）、
  *   smooth = 震えをならす強さ（ガウスのぼかしの幅、秒）
@@ -216,11 +217,15 @@ export const SOURCES = {
  */
 
 /**
- * 待機・歩きの書き出し先（アセットの根からの相対）。キャラクターの見た目が既定で読む character/avatar/visualConfig.ts の VISUAL_DEFAULTS.animations と同じ値の写し
+ * 待機・歩き・跳ぶの書き出し先（アセットの根からの相対）。キャラクターの見た目が既定で読む character/avatar/visualConfig.ts の VISUAL_DEFAULTS.animations と同じ値の写し
  * （この変換は .ts を読まない。使う側が git の依存などで入れて Node で動かすとき、Node は node_modules の下の .ts を読まないため。8-4。
  * 2 つの値が食い違うとテスト test/map-boundary.test.ts が落ちる）
  */
-const ANIMATION_PATHS = { idle: 'models/animations/idle.vrma', walk: 'models/animations/walk.vrma' }
+const ANIMATION_PATHS = {
+  idle: 'models/animations/idle.vrma',
+  walk: 'models/animations/walk.vrma',
+  jump: { start: 'models/animations/jump-start.vrma', loop: 'models/animations/jump-loop.vrma', land: 'models/animations/jump-land.vrma' },
+}
 
 /** 待機（キャラクターの見た目が既定で使う。character/avatar/visualConfig.ts の animations.idle）。身ぶりの立つ場所もこれで決まる */
 export const IDLE_OUTPUT = {
@@ -233,6 +238,17 @@ export const IDLE_OUTPUT = {
 
 /** 歩き（キャラクターの見た目が既定で使う。character/avatar/visualConfig.ts の animations.walk） */
 export const WALK_OUTPUT = { dest: ANIMATION_PATHS.walk, source: 'ual1', clip: 'Walk_Loop', walk: true }
+
+/**
+ * 跳ぶ（キャラクターの見た目が既定で使う。character/avatar/visualConfig.ts の animations.jump。跳ぶのは character/avatar/jump.ts）:
+ * 踏み切り（しゃがんだ所から伸びて上がる。1 回）・跳んでいる間（ループ）・着く（脚を伸ばして着き、しゃがんで立つ。1 回）。
+ * 見た目が段階に合わせて再生する所を決め、しゃがむ深さは混ぜる強さで浅くする（character/avatar/characterVisual.ts）
+ */
+export const JUMP_OUTPUTS = [
+  { dest: ANIMATION_PATHS.jump.start, source: 'ual1', clip: 'Jump_Start', once: true },
+  { dest: ANIMATION_PATHS.jump.loop, source: 'ual1', clip: 'Jump_Loop' },
+  { dest: ANIMATION_PATHS.jump.land, source: 'ual1', clip: 'Jump_Land', once: true },
+]
 
 // --- 1. 素材の zip から、要るファイルだけを取り出す ---
 
@@ -940,6 +956,10 @@ function report(out, o) {
   const n = anim.times.length
   const step = (i, j) => Math.max(...rig.bones.map((b) => anim.rotations[b][i].angleTo(anim.rotations[b][j]))) * (180 / Math.PI)
   // 1 回だけの身ぶり: 始めと終わりが、どれだけ立った姿勢に戻っているか（待機から入って待機へ抜けるので、小さいほどよい）
+  if (o.once) {
+    console.log('        1 回だけ再生する物（ループにしないので、つなぎ目は見ない）')
+    return
+  }
   if (o.gesture && !o.gesture.loop) {
     console.log(`        始めと終わりの姿勢の差: 回転 ${step(n - 1, 0).toFixed(1)}°・腰 ${(anim.hips[n - 1].distanceTo(anim.hips[0]) * 100).toFixed(1)} cm`)
     return

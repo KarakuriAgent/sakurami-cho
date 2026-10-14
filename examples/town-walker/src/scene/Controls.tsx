@@ -3,12 +3,12 @@ import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
 import { createKeyInput } from '../input/keys'
 import { watchClicks } from '../input/click'
-import { keyHook, subscribeWalk, updateMarker, walkAtScreen, walkByKeys, walkUi } from '../walk'
+import { jumpByKey, keyHook, subscribeWalk, updateMarker, walkAtScreen, walkByKeys, walkUi } from '../walk'
 
 const _fwd = new THREE.Vector3()
 
 /**
- * WASD・クリックで歩く（優先度 −59: 歩きを進める −58 の前に、このコマの入力を入れる）。
+ * WASD・クリックで歩く・スペースキーで跳ぶ（優先度 −59: 歩きを進める −58 の前に、このコマの入力を入れる）。
  * キーはページ全体（window）で受け、向きはカメラの見ている向きを水平にした物（= 追うカメラの向き yaw の逆。カメラは人の向きについて回らない）。
  * クリックは Canvas の上で、ドラッグ（追うカメラを回す）と見分ける（input/click.ts）。行き先には小さな印（仮）
  */
@@ -33,6 +33,7 @@ export function Controls() {
     if (keys) {
       camera.getWorldDirection(_fwd)
       walkByKeys(keys.direction(_fwd.x, _fwd.z), keys.run)
+      if (keys.takeJump()) jumpByKey()
     }
     updateMarker()
   }, -59)

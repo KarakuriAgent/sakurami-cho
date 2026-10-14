@@ -862,6 +862,32 @@ export class InteriorModel {
     return null
   }
 
+  /**
+   * 点 (x, z) に足元の高さ foot で立つ人の頭の上（跳ぶとき。character/avatar/jump.ts）: top = いちばん低い天井（シーンの y。部屋の天井（勾配・丸い天井は
+   * その点の高さ）・扉の上端・段の上の天井・頭の上の障害物（棚・上屋の屋根など。足元から 1m より上に下の面がある物）の下の面。無ければ Infinity）、
+   * door = 扉の通り抜けの中か。同じ床と見るのは、面の高さが足元から same m の内の物
+   */
+  headroom(x: number, z: number, foot: number, same: number): { top: number; door: boolean } {
+    let top = Infinity
+    let door = false
+    for (const r of this.rooms) {
+      if (r.floorY > foot + same || polyMargin(r.poly, x, z) < -0.02) continue
+      const c = this.ceilAt(r, x, z)
+      if (c > foot) top = Math.min(top, c)
+    }
+    for (const p of this.patches) {
+      if ((p.kind !== 'door' && p.kind !== 'stair') || outsideBox(p.box, x, z, 0.02) || polyMargin(p.poly, x, z) < -0.02) continue
+      if (Math.abs(this.patchY(p, x, z, false) - foot) > same) continue
+      top = Math.min(top, p.top)
+      if (p.kind === 'door' && polyMargin(p.poly, x, z) >= 0) door = true
+    }
+    for (const o of this.obstacles) {
+      if (o.y0 < foot + 1 || o.y0 > top || obstacleDist(o, x, z) > 0.1) continue
+      top = o.y0
+    }
+    return { top, door }
+  }
+
   /** 点が通り抜けられる空き（部屋・扉の通り抜け・窓の穴・段の上）か */
   private open(x: number, y: number, z: number) {
     if (this.roomAt(x, y, z, 0.03)) return true

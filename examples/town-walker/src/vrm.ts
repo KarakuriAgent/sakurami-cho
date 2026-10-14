@@ -4,7 +4,7 @@ import { clearStoredVrm, loadStoredVrm, saveStoredVrm, storeAvailable, updateSto
 
 /**
  * 歩く人の見た目（VRM）。使う人が選んだ・落としたファイルを blob: の URL にして、地図の見た目（createCharacterVisual）で読む。
- * VRM 0.x・1.0 のどちらも読める（0.x の向きは地図の側がそろえる）。待機・歩きの .vrma は地図のパッケージの既定（assets/models/animations/ の idle・walk）。
+ * VRM 0.x・1.0 のどちらも読める（0.x の向きは地図の側がそろえる）。待機・歩き・跳ぶ .vrma は地図のパッケージの既定（assets/models/animations/ の idle・walk・jump-*）。
  *
  * - 身長: 「身長を合わせる」なら、読んだ VRM の目の高さから測った身長を、設定の身長に合わせて体全体を拡大縮小する（ずれが 0.5% の内なら
  *   そのまま。地図の既定の決まり）。合わせないなら、VRM の元の大きさのまま。どちらかを変えたら、同じファイルを読み直す

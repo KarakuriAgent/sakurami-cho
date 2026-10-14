@@ -33,11 +33,12 @@ minor の版を上げる。
 | world | `configureLab` | ラボの差し込み口（什器の入力の値・差し込み口の中身・画面の描き方） |
 | world | `createFollowCamera`・型 `FollowCamera`・`FollowCameraOptions`・`FollowTarget` | 人を追うカメラ（下の「カメラ・直接の操作・ワープ」） |
 | character | `createCharacter`・型 `Character`・`CharacterOptions`・`CharacterSpawnPoint`・`CharacterDriver` | キャラクター（1 人ずつのインスタンス）と、毎コマ動かす所（`ch.drivers.motion`・`travel`）の型 |
-| character | `createCharacterVisual`・型 `CharacterVisual`・`CharacterVisualOptions`・`CharacterVisualStatus`・`CharacterVisualClip`・`VISUAL_DEFAULTS`・型 `VisualConfig` | 見た目（VRM と待機・歩き・身ぶりの `.vrma`）と既定の値。`CharacterVisual` の `start()`・`stop()`・`update()`・片付ける `dispose()` |
+| character | `createCharacterVisual`・型 `CharacterVisual`・`CharacterVisualOptions`・`CharacterVisualStatus`・`CharacterVisualClip`・`VISUAL_DEFAULTS`・型 `VisualConfig` | 見た目（VRM と待機・歩き・跳ぶ・身ぶりの `.vrma`）と既定の値。`CharacterVisual` の `start()`・`stop()`・`update()`・片付ける `dispose()` |
 | character | `updateLocomotion`・`placeAt`・`goTo`・`stopWalking`・`configureNav`・型 `NavConfig` | 歩きを毎コマ進める・立ち寄り先へ置く・歩かせる・止める・ラボのまわりの通り道（点と障害物）を差し替える |
 | character | `driveRides`・`setWarpPermit`・型 `RideTime`・`wheelBoardProblem`・`beginWheelBoarding`・`cancelWheelBoarding`・`requestWheelAlight`・`advanceWheelTo`・`WHEEL_EXIT_OPEN_DEG`・型 `WheelProblem`・`wheelProblemText` | 乗り物に乗っている間に人を動かす標準の順・町の時計を早送り・カットで進めてよい人・観覧車ソラノワに乗る・降りる。乗れない理由は種類（`code`）と値で返し、`wheelProblemText` が地図の既定の字を作る（使う側は種類ごとに自分の字にしてよい） |
 | character | `startTravel`・`driveTravel`・`cancelTravel`・`traveling`・`travelState`・型 `TravelRequest`・`TravelPlan`・`TravelTime`・`TravelCut`・`TravelRouteId`・型 `TravelProblem`・`isTravelProblem`・`travelProblemText` | 町の中の移動（旅程: ゾーンを出て町の道を歩き、乗り物にも乗る）を始める・毎コマ進める・取り消す・様子。作れない理由は種類（`code`）と値で返し（`isTravelProblem` で分ける）、`travelProblemText` が地図の既定の字を作る |
 | character | `setDirectInput`・`driveDirect`・`walkToPoint`・`pickGround`・`canStand`・`stopDirect`・`directState` | 人を直接動かす（WASD・クリック。下の「カメラ・直接の操作・ワープ」） |
+| character | `jump` | 跳ぶ（例のアプリのスペースキー。下の「カメラ・直接の操作・ワープ」） |
 | character | `townSpots`・`teleport`・`placeAtPoint`・型 `TownSpot` | ワープ（下の「カメラ・直接の操作・ワープ」） |
 | react | `TownClock`・`TownRoot`・`TownView`・`TownExposure`・`LabAtmosphere`・`LabSlot`・`CharacterView`・`RideDriver`・`useLab` などの hooks | R3F の薄い包み（`export *`） |
 
@@ -72,6 +73,7 @@ Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のあ
 | `world/followCamera.ts` | 人を追うカメラ `createFollowCamera(camera, { distance, minDistance, maxDistance, yaw, pitch, labObstacles })`。毎コマ `update(人, 目の高さ, dt)`（人の位置が決まったあと・町の `view` の前）。注視点は足元 ＋ 目の高さ、町の建物・木・擁壁・中のある建物の壁や家具・部屋の無い建物（楓坂駅の上屋とホーム）の外形の線・ラボの壁と家具と殻・地面と草むらにさえぎられたら手前へ寄せ、すぐ近くなら上から見下ろす向きへ逃がす。地面・床の 0.3m 上より下へ行かず、草むらの生える地形の上では地形の 0.65m 上より下へ行かない（土手に埋まったホームの上のように、カメラの床より少し上に地形があれば地形を床にする）。追う物の `ride`（Character をそのまま渡す）が車室の中なら、カメラを車室の壁・天井・床の内に収め（狭ければ向きも回す）、車室と一緒に運ぶ。`snap()`（次のコマで一度に置く。人の `'place'` で呼ぶ）・`orbit`・`zoom`・`connect(要素)`（ドラッグで回す・ホイールで寄る）。乗り物の車体はさえぎる物に入れていない |
 | `character/ride/drive.ts` | 乗り物に乗っている間に人を動かす標準の順 `driveRides`（観覧車 → ケーブル → 緑電 → 運河バス → ホバー。`ch.drivers.motion = driveRides`） |
 | `character/avatar/direct.ts` | 人を直接動かす（WASD・クリック）。`ch.drivers.travel = (c, t, dt) => driveTravel(c, t, dt) \|\| driveDirect(c, t, dt)`（旅程が先）。`setDirectInput(ch, 世界の向き \| null, 走る)`（カメラの向きから直すのは使う側）・`pickGround(線)`（地面・床の高さの関数でたどって拾う。建物・壁に当たれば null）・`walkToPoint(ch, x, z, y?)`（今いる所のグラフの中で道を作る。ゾーンをまたぐ・立てない所なら理由の字）・`canStand(ch, x, z, y?)`・`stopDirect`・`directState`。歩けるのは道・石段・橋・広場・ホームと乗り場・ラボの中と敷地・中のある建物の今の階の床と段・ゾーンの出入口の間で、建物・木の幹・擁壁で止まって沿ってすべる（段は 0.45m まで）。状態は Character ごとにこの中に持つ |
+| `character/avatar/jump.ts` | 跳ぶ。`jump(ch)`（跳び始めたら null、跳べなければ理由の字で何もしない。呼ばなければ跳ばない）。踏み切る前に 0.14 秒しゃがみ、足元の地面から 0.45m 上へ跳んで重さ（9.8m/s²）で落ち、着いて 0.3 秒しゃがむ。毎コマ進めるのは `updateLocomotion`（段階と高さは `ch.motion.jump`）。天井の低い所（ラボの扉・中のある建物の部屋と扉と段・橋の下）では、頭（VRM の実測の身長 + 6cm）が天井に当たらない高さまで。横の動きは跳んでいないときと同じ決まりで、立てるかは足元の地面から見る（段・壁・柵・擁壁を越えず、着くのは歩いて行ける所だけ）。跳んでいる間は上がれる段の高さの決まり（小さな段の体のなめらかな上げ下げ）を使わず、WASD で動いていたら踏み切ったときの速さと向きのまま進む。乗り物に乗っている・座っている・旅程の途中・旅程の早送りの途中・扉をくぐる途中は跳ばず、跳んでいる途中に乗り物・旅程が動き出した・置き直されたら地面に戻す。見た目は跳ぶ `.vrma`（踏み切り・跳んでいる間・着く）を段階に合わせて重ね、無ければコードの姿勢（しゃがむ → 伸びる → 着いてしゃがむ） |
 | `core/spots.ts` | ワープ先の名前の表（座標は写さない）: 種類 `SpotKind` と一覧の組の名前 `SPOT_KINDS`（建物・ケーブルの駅・観覧車・ホバーの乗り場・緑電の停留所・運河バスの乗り場）、立ち寄り先の手前 `PLACE_SPOTS`（ラボの前・中のある建物 4 つの前・ケーブルの 3 駅の前・ソラノワの乗り場の前）、ホバーの乗り場 `HOVER_SPOTS` |
 | `character/avatar/teleport.ts` | ワープ（コードでは teleport。warp は時刻の早送り・カットの名前）。`townSpots()`（名前の表の 11 と、町を組み立てたあとの地図データの緑電の停留所 37（ホームの上。地形に埋まっていない・木などにかからない所）・運河バスの乗り場 18（石段の上の陸の側の敷石）。位置・向き・ゾーン・足元の高さの目安）・`teleport(ch, spot)`（旅程の取り消し → 乗り物の早送り・カットをやめる → 旅程の早送りの倍率と歩幅を戻す → WASD・クリックの歩きをやめる → 立ち寄り先なら `placeAt`、点なら `placeAtPoint`。乗っている途中でもよく、乗る仕組みが次のコマで降りたことにする（ホバーは飛ぶ途中なら行き先の乗り場に置く））・`placeAtPoint(ch, x, z, heading, refY?)`（点へすぐ置く。`placeSerial` を増やして `'place'`） |
 
@@ -91,7 +93,7 @@ Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のあ
 <アセットの根>/
   town/                 町の地図データ（manifest.json・walk.json・named.json・infra.json・terrain/・ground/・tiles/）
   textures/             町・ラボ・敷地のテクスチャ（town/・lab_exterior/・concrete_floor/ など）
-  models/animations/    待機・歩きの .vrma（使う側の身ぶりなどの .vrma も、使う側のアセットの根のここに置ける）
+  models/animations/    待機・歩き・跳ぶ .vrma（使う側の身ぶりなどの .vrma も、使う側のアセットの根のここに置ける）
 ```
 
 - 町は `createTown({ assetBase, … })` で、アセットの根に当たる URL を受ける（末尾は `/`。既定は `'/'`）。読むのは `${assetBase}town/…`・`${assetBase}textures/…`
@@ -113,7 +115,7 @@ Orbitron の 500・700・900 を最大 3 秒待つ。町の看板・名前のあ
 |---|---|---|
 | `assets/textures/` | 入れる | CC0 の PBR テクスチャ（Poly Haven・ambientCG）。出典は [assets/textures/CREDITS.md](../assets/textures/CREDITS.md) |
 | `assets/town/` | 入れる | `tools/sync-town.mjs` が、設定資料の町の地図データ（このリポジトリには入れていない元のデータ）から書き出す（151 ファイル・約 25MB） |
-| `assets/models/animations/` | 入れる | `tools/sync-anim.mjs` が自由に使える素材から作る（キャラクターの見た目が既定で使う待機 `idle.vrma`・歩き `walk.vrma` の 2 つ）。出典は [assets/models/animations/CREDITS.md](../assets/models/animations/CREDITS.md) |
+| `assets/models/animations/` | 入れる | `tools/sync-anim.mjs` が自由に使える素材から作る（キャラクターの見た目が既定で使う待機 `idle.vrma`・歩き `walk.vrma` と、跳ぶ `jump-start.vrma`・`jump-loop.vrma`・`jump-land.vrma` の 5 つ）。出典は [assets/models/animations/CREDITS.md](../assets/models/animations/CREDITS.md) |
 
 ここに置くのは、パッケージのコードが既定で使う物と、例のアプリで使う物まで（使う側のキャラクターに固有の物は、使う側の public に置く）。
 

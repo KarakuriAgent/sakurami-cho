@@ -30,6 +30,8 @@ export { cancelTravel, driveTravel, isTravelProblem, startTravel, traveling, tra
 export type { TravelCut, TravelPlan, TravelProblem, TravelRequest, TravelRouteId, TravelTime } from './avatar/travel'
 // 人を直接動かす（WASD・クリック。例のアプリのために足した部品。段 6）
 export { canStand, directState, driveDirect, pickGround, setDirectInput, stopDirect, walkToPoint } from './avatar/direct'
+// 跳ぶ（例のアプリのスペースキーのために足した部品。#8。毎コマ進めるのは updateLocomotion）
+export { jump } from './avatar/jump'
 // ワープ（例のアプリのために足した部品。段 6）
 export { placeAtPoint, teleport, townSpots } from './avatar/teleport'
 export type { TownSpot } from './avatar/teleport'

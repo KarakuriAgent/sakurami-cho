@@ -4,7 +4,7 @@ import { subscribeTownStatus, townState, townStatus } from '../town'
 
 /**
  * 町の地図データの案内（上の真ん中。持ち主の決め: 出すのは、地図データが無い（missing）・形の版が合わない（outdated）・読めない（error）ときだけ。
- * 待機・歩きの .vrma は地図のパッケージの git に入っているので、無いときの案内は作らない。VRM の案内は左上のつまみ ui/VrmPanel.tsx）。
+ * 待機・歩き・跳ぶ .vrma は地図のパッケージの git に入っているので、無いときの案内は作らない。VRM の案内は左上のつまみ ui/VrmPanel.tsx）。
  * 画面を止めない（押しても下へは通さないが、閉じられる。町が無くても、ラボとそのまわりは歩ける）。状態は地図の onStatus（src/town.ts）
  */
 export function TownNotice() {

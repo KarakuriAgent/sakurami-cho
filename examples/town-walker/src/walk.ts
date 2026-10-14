@@ -1,12 +1,15 @@
 import * as THREE from 'three'
-import { directState, pickGround, setDirectInput, walkToPoint } from 'sakurami-cho/character'
+import { directState, jump, pickGround, setDirectInput, walkToPoint } from 'sakurami-cho/character'
 import { walker } from './town'
 import { nearestDestination, stopTravel } from './travel'
+import { warpUi } from './teleport'
 import type { KeyInput } from './input/keys'
 
 /**
  * 歩く人を直接動かす所（例のアプリ。地図の character の setDirectInput・walkToPoint・pickGround を使う）。
  * - キー（input/keys.ts）: 毎コマ、カメラの向きから出した世界の向きを setDirectInput へ。押し始めたら旅程（行き先の一覧。travel.ts の stopTravel）を取り消す
+ * - スペースキー（input/keys.ts）: 跳ぶ（地図の jump。乗り物・座っている・旅程の途中・扉をくぐる途中などは地図が断る。ワープの暗転の間はここで断る。
+ *   断られても案内は出さない。旅程は取り消さない）
  * - クリック（input/click.ts）: 画面の点からの線で地面を拾い（pickGround）、そこへ歩く（walkToPoint。今いる所の道のグラフの中だけ）。
  *   歩けないとき（立てない所・ゾーンをまたぐ・道が無い）は案内を出し、クリックした所の近くの行き先があれば「そこへ行く」（旅程）と
  *   行き先の一覧を開く口を添える（6-4）。歩き出したら旅程を取り消し、行き先に印を出す
@@ -60,6 +63,12 @@ export function walkByKeys(dir: { x: number; z: number } | null, run: boolean) {
   }
   pressing = !!dir
   setDirectInput(walker, dir, run)
+}
+
+/** スペースキー（scene/Controls.tsx の毎コマ。?debug の __walker.jump）: 跳ぶ。跳び始めたら null、跳べなければ理由 */
+export function jumpByKey(): string | null {
+  if (warpUi().fade !== 'none') return 'ワープの途中は跳べません'
+  return jump(walker)
 }
 
 /** 点（シーンの座標）へ歩く。歩き出したら null、歩けなければ理由（案内にも出す） */

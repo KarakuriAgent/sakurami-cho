@@ -10,7 +10,7 @@
 | 道具 | 動かし方 | 引数 |
 |---|---|---|
 | `tools/sync-town.mjs` | Node（型を外して `core/town.ts` を読む。`--disable-warning=ExperimentalWarning`・`--max-old-space-size=8192` を付ける） | `--out <アセットの根>`（必ず。`<アセットの根>/town/` を消して書き直す）・`--src <町の地図データのフォルダ>`（環境変数 `SAKURAMI_TOWN_SRC` が先）・`--root <根>` |
-| `tools/sync-anim.mjs` | Node（`tools/anim/convert.mjs` は `.ts` を読まない。待機・歩きの置き場所は `character/avatar/visualConfig.ts` の `animations` の写しで、食い違うとテストが落ちる。`--disable-warning=ExperimentalWarning` を付ける） | `--out <アセットの根>`（必ず。`<アセットの根>/models/animations/` に待機・歩きを書く）・`--root <根>`（素材の置き場 `<根>/.cache/anim/`） |
+| `tools/sync-anim.mjs` | Node（`tools/anim/convert.mjs` は `.ts` を読まない。待機・歩き・跳ぶの置き場所は `character/avatar/visualConfig.ts` の `animations` の写しで、食い違うとテストが落ちる。`--disable-warning=ExperimentalWarning` を付ける） | `--out <アセットの根>`（必ず。`<アセットの根>/models/animations/` に待機・歩き・跳ぶを書く）・`--root <根>`（素材の置き場 `<根>/.cache/anim/`） |
 | `tools/check-walk.mjs` | bun（`core/` の経路探索と道順を読む） | `--assets <アセットの根>`（必ず。`<アセットの根>/town/walk.json` を確かめる）・`--root <根>` |
 
 ## sync-town の部品

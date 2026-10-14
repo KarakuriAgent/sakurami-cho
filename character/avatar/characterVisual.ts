@@ -11,6 +11,7 @@ import { VRMLookAtQuaternionProxy } from '@pixiv/three-vrm-animation'
 import { estimateHeight, getBone, loadVrm, measureLowestPoint, releaseVrm } from './loadVrm'
 import { addBoneRotation, idleBasePose, poseQuaternion, setBone, type Pose } from './pose'
 import { applyFootIk, type FootIkState } from './footIk'
+import { applyJumpPose, createJumpClipWeights, createJumpLook, jumpClipWeights, jumpCodeAmounts, updateJumpLook } from './jumpPose'
 import { loadVrmAnimation } from './vrmAnimation'
 import { VISUAL_DEFAULTS, type VisualConfig } from './visualConfig'
 import type { Car } from '../../world/outdoor/transit/vehicle'
@@ -38,6 +39,9 @@ import type { Car } from '../../world/outdoor/transit/vehicle'
  * - 立ったままの全身の身ぶり（clips。花音は kanon.gesture の look_around など）: 読み込んだクリップを、層の clip が返す強さ・時刻で
  *   待機の上に重ねる（腰から下もモーションのまま）。その間は首・目のカメラへの追従を弱めて、モーションの頭の動きを打ち消さないようにする。
  *   待機の .vrma が無いとき（コードの動き）は読み込まない
+ * - 跳ぶ（ch.motion.jump。character/avatar/jump.ts）: 跳ぶ .vrma（踏み切り・跳んでいる間・着く。visualConfig.ts の animations.jump）が読めていれば、
+ *   段階に合わせて再生する所と強さを決めて待機・歩きの上に重ねる（character/avatar/jumpPose.ts。その分だけ待機・歩き・身ぶり・行動の腰から下を弱める）。
+ *   読めていない・待機の .vrma が無いときは、コードの姿勢（しゃがむ → 伸びる → 着いてしゃがむ）を重ねる。跳んでいる間は足の高さ合わせを弱める
  */
 
 /** 読み込みの状態（idle = まだ読み込んでいない・やめた。使う側へは loading 以降を知らせる） */
@@ -86,6 +90,8 @@ export interface CharacterVisualRig {
   codePose: THREE.Quaternion[]
   /** 立ったままの全身の身ぶり（読み込めたものだけ） */
   motions: Map<string, THREE.AnimationAction>
+  /** 跳ぶ（踏み切り・跳んでいる間・着く。3 本とも読めたときだけ） */
+  jump: { start: THREE.AnimationAction; loop: THREE.AnimationAction; land: THREE.AnimationAction } | null
 }
 
 /** キャラクターの見た目（Character の visual に付けると ch.updateVisual で進む） */
@@ -235,6 +241,9 @@ class VrmCharacterVisual implements CharacterVisual {
   private springCarry = -1
   // 足の高さ合わせの状態（足ごとのなめらかにした高さの差）
   private readonly footIk: FootIkState = { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null }
+  // 跳ぶ姿勢の様子と、跳ぶ .vrma の時刻と強さ（character/avatar/jumpPose.ts）
+  private readonly jumpLook = createJumpLook()
+  private readonly jumpWeights = createJumpClipWeights()
   // アニメーションの状態
   private readonly anim = { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0 }
   private readonly poses = { rest: createPose(), action: createPose(), out: createPose() }
@@ -278,6 +287,7 @@ class VrmCharacterVisual implements CharacterVisual {
     this.springCarry = -1
     Object.assign(this.footIk, { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null })
     Object.assign(this.anim, { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0 })
+    Object.assign(this.jumpLook, createJumpLook())
     setHand(this.hands.L, HANDS.relaxed)
     setHand(this.hands.R, HANDS.relaxed)
     this.status = 'loading'
@@ -330,6 +340,9 @@ class VrmCharacterVisual implements CharacterVisual {
       ])
       // 立ったままの全身の身ぶり（待機の .vrma があるときだけ。無ければコードの待機の上には重ねない）
       const motionClips = idleClip && clips ? await Promise.all(clips.map(async (c) => [c, await loadVrmAnimation(assetUrl(base, c.url), loaded)] as const)) : []
+      // 跳ぶ（待機の .vrma があるときだけ。3 本とも読めなければ、コードの姿勢）
+      const jumpSpec = cfg.animations.jump
+      const jumpClips = idleClip && jumpSpec ? await Promise.all([jumpSpec.start, jumpSpec.loop, jumpSpec.land].map((u) => loadVrmAnimation(assetUrl(base, u), loaded))) : null
       if (run !== this.run) {
         this.dropStale(run, loaded)
         return
@@ -350,11 +363,21 @@ class VrmCharacterVisual implements CharacterVisual {
           console.warn(`[sakurami-cho] 身ぶり ${spec.name} の .vrma（${loadedClip.clip.duration.toFixed(1)} 秒）が、身ぶりの長さ（GESTURE_MS）より長いので、終わりが切れます`)
         }
       }
+      // 跳ぶ: 再生する位置は毎フレーム直接入れる（mixer には進めさせない）
+      let jump: CharacterVisualRig['jump'] = null
+      if (mixer && jumpClips && jumpClips.every((c) => c)) {
+        const [start, loop, land] = jumpClips.map((c) => {
+          const action = mixer.clipAction(c!.clip).setEffectiveWeight(0).setEffectiveTimeScale(0)
+          action.play()
+          return action
+        })
+        jump = { start, loop, land }
+      }
       // 速さの情報が無い .vrma は、決まり（WALK_SPEED で歩くループ）どおりとみなす
       const walkSpeed = walkClip?.walkSpeed ?? WALK_SPEED
       if (mixer) {
         const speedNote = walkClip ? `（1 倍で ${walkSpeed.toFixed(2)} m/s）` : ''
-        console.info(`[sakurami-cho] VRM アニメーション: 待機 ${idle ? 'あり' : 'なし'} / 歩き ${walk ? 'あり' : 'なし'}${speedNote} / 身ぶり ${motions.size} 本`)
+        console.info(`[sakurami-cho] VRM アニメーション: 待機 ${idle ? 'あり' : 'なし'} / 歩き ${walk ? 'あり' : 'なし'}${speedNote} / 身ぶり ${motions.size} 本 / 跳ぶ ${jump ? 'あり' : 'なし（コードの姿勢）'}`)
       }
       const r: CharacterVisualRig = {
         hands: createHandsRig(loaded),
@@ -367,6 +390,7 @@ class VrmCharacterVisual implements CharacterVisual {
         ankleRest,
         codePose: this.animatedBones.map(() => new THREE.Quaternion()),
         motions,
+        jump,
       }
       this.rig = r
       // シーンに置き、表情を読み込んだ VRM につなぎ、層の読み込み時の準備を付けた順に（花音はペンダント → 表情 → 工具 → ?debug の道具。Object3D・material を作る順）
@@ -434,7 +458,12 @@ class VrmCharacterVisual implements CharacterVisual {
     let clip: MotionClipFrame | null = null
     for (let i = 0; i < layers.length && !clip; i++) clip = layers[i].clip?.(f) ?? null
     const motion = clip ? r.motions.get(clip.name) : undefined
-    const mw = motion && clip ? clip.weight * (1 - m.walk) : 0
+    // 跳ぶ: 跳ぶ .vrma があれば、その強さ（jw）の分だけ待機・歩き・身ぶり・行動の腰から下を弱める。無ければコードの姿勢（下の applyJumpPose）
+    updateJumpLook(this.jumpLook, m.jump, delta)
+    const jumpClips = r.mixer ? r.jump : null
+    const jw = jumpClips ? jumpClipWeights(this.jumpLook, m.jump, this.jumpWeights).total : 0
+    const jumpCode = jumpClips ? null : jumpCodeAmounts(this.jumpLook, m.jump)
+    const mw = motion && clip ? clip.weight * (1 - m.walk) * (1 - jw) : 0
 
     // --- 位置と向き（共通の歩きの制御から） ---
     group.position.copy(m.position)
@@ -459,6 +488,8 @@ class VrmCharacterVisual implements CharacterVisual {
     applyGait(pose, m.gait, m.walk, m.speed)
     // 歩きの .vrma は腰の上下の揺れを含むので、コードの歩きの上下の揺れは足さない
     if (r.walk) pose.bob = bobBeforeGait
+    // 跳ぶ姿勢（跳ぶ .vrma が無いときのコードの姿勢。しゃがむ → 伸びる → 着いてしゃがむ）
+    if (jumpCode) applyJumpPose(pose, jumpCode.crouch, jumpCode.tuck, character.body)
     // 層の身ぶり（付けた順に重ねる）
     for (let i = 0; i < layers.length; i++) layers[i].pose?.(pose, f)
     group.position.y += pose.bob
@@ -480,7 +511,8 @@ class VrmCharacterVisual implements CharacterVisual {
       // .vrma があれば: 行動・反応（身ぶりを含む）はその上に重ねる。立ち位置の待機（present）は .vrma の待機そのものなので重ねない。
       // 腰から下は、行動と層の lower の身ぶり（花音はスパチャで跳ねる cheer）のときだけ。ほかの身ぶりは上半身だけに重ねる
       // 立ったままの全身の身ぶりの間は、立ち寄り先での行動の姿勢より身ぶりを優先する
-      const actionW = (m.action === 'present' ? 0 : m.actionBlend) * (1 - mw)
+      // 跳んでいる間は、跳ぶ .vrma の強さの分だけ行動を弱める（腰から下は跳ぶ姿勢にする）。跳ぶ .vrma が無ければ、コードの跳ぶ姿勢を腰から下に重ねる
+      const actionW = (m.action === 'present' ? 0 : m.actionBlend) * (1 - mw) * (1 - jw)
       let overlay = actionW
       let lower = actionW
       for (let i = 0; i < layers.length; i++) {
@@ -488,8 +520,11 @@ class VrmCharacterVisual implements CharacterVisual {
         if (l.overlay) overlay = Math.max(overlay, l.overlay(f))
         if (l.lower) lower = Math.max(lower, l.lower(f))
       }
+      // 腰から下を重ねるのは、前からの決まりでは姿勢を重ねるとき（overlay）だけ。跳ぶコードの姿勢は、それとは別に腰から下へ
+      lower = overlay > 0.001 ? lower * (1 - jw) : 0
+      if (jumpCode) lower = Math.max(lower, Math.min(1, (jumpCode.crouch + jumpCode.tuck) * 3))
       const hips = vrm.humanoid.getNormalizedBoneNode('hips')
-      if (overlay > 0.001) {
+      if (overlay > 0.001 || lower > 0.001) {
         // 重ねる先 = コードだけのときの姿勢（腰は元の位置）を覚えておく
         applyBodyPose(vrm, pose)
         ANIMATED_BONES.forEach((name, i) => {
@@ -499,9 +534,9 @@ class VrmCharacterVisual implements CharacterVisual {
       }
       // 待機と歩きを歩きの強さで混ぜ、進む速さに合わせて再生の速さを変える（足が床を滑らないように）。
       // 立ったままの全身の身ぶりは、その上にその強さで重ねる（1 回だけ。繰り返すアニメーション（腕組み）は身ぶりの長さだけ繰り返す）
-      r.idle?.setEffectiveWeight((r.walk ? 1 - m.walk : 1) * (1 - mw))
+      r.idle?.setEffectiveWeight((r.walk ? 1 - m.walk : 1) * (1 - mw) * (1 - jw))
       if (r.walk) {
-        r.walk.setEffectiveWeight(m.walk * (1 - mw))
+        r.walk.setEffectiveWeight(m.walk * (1 - mw) * (1 - jw))
         // 町の中の移動の早送り（timeScale）では、その倍で。町の石段の上は踏面ごとに 1 歩（stride）になるよう、歩幅の比で速める
         r.walk.setEffectiveTimeScale(Math.max(0.2, m.speed / r.walkSpeed) * m.timeScale * (m.stride ? stepLength(m.speed) / m.stride : 1))
       }
@@ -516,12 +551,27 @@ class VrmCharacterVisual implements CharacterVisual {
         action.time = loops ? clip!.time % d : Math.min(clip!.time, d - 1e-4)
         action.setEffectiveWeight(mw)
       }
+      // 跳ぶ（3 本の再生する所と強さ。jumpPose.ts）
+      if (jumpClips) {
+        const jwt = this.jumpWeights
+        for (const [action, w] of [
+          [jumpClips.start, jwt.start],
+          [jumpClips.loop, jwt.loop],
+          [jumpClips.land, jwt.land],
+        ] as const) {
+          const d = action.getClip().duration
+          action.time = action === jumpClips.loop ? w.time % d : Math.min(w.time, d - 1e-4)
+          action.setEffectiveWeight(w.weight)
+        }
+      }
       r.mixer.update(delta)
-      if (overlay > 0.001) {
+      if (lower > 0.001) {
         ANIMATED_BONES.forEach((name, i) => {
           if (LOWER_BONES.has(name)) vrm.humanoid.getNormalizedBoneNode(name)?.quaternion.slerp(r.codePose[i], lower)
         })
         hips?.position.lerp(r.hipsRest, lower)
+      }
+      if (overlay > 0.001) {
         ANIMATED_BONES.forEach((name, i) => {
           if (LOWER_BONES.has(name)) return
           // 背骨の付け根では腰の回り（.vrma の待機の腰のひねりなど）を打ち消し、上半身の向きをコードの姿勢（腰は回さない）と同じにする。
@@ -538,8 +588,8 @@ class VrmCharacterVisual implements CharacterVisual {
       applyHandTwist(r.hands, hands.L, hands.R)
     }
 
-    // --- 足を地面の高さに合わせる（ラボの外の坂・石段。中の平らな床では何もしない） ---
-    applyFootIk(character, vrm, this.footIk, delta, r.ankleRest)
+    // --- 足を地面の高さに合わせる（ラボの外の坂・石段。中の平らな床では何もしない）。跳ぶ姿勢の間は、歩く間の膝を伸ばす直しを弱める ---
+    applyFootIk(character, vrm, this.footIk, delta, r.ankleRest, jumpCode ? Math.min(1, (jumpCode.crouch + jumpCode.tuck) * 3) : jw)
 
     // --- 視線と首: 行動の視線とカメラの方を混ぜ、層が見る先を書き換える（花音はコメントが来たらパネルを見る） ---
     const headBone = getBone(vrm, 'head')

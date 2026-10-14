@@ -8,6 +8,7 @@ import type { BodyMetrics, SeatSpec } from './body'
 import { CharacterEvents, type CharacterEventMap, type CharacterEventName } from './events'
 import { CharacterExpressions } from './expressions'
 import type { FloatState } from './float'
+import type { CharacterJump } from './jump'
 import { CharacterLayers } from './layers'
 import { setVrmRimBlend, type VrmRim } from './loadVrm'
 import type { TravelRun } from './travel'
@@ -75,6 +76,8 @@ export interface CharacterMotion {
   timeScale: number
   /** 歩幅を決めて歩くとき（町の石段の上は踏面の長さ。null なら速さから stepLength） */
   stride: number | null
+  /** 跳ぶ様子（character/avatar/jump.ts。跳ぶのは使う側が jump(ch) を呼んだときだけ。air の間は position.y が足元の地面から height だけ上） */
+  jump: CharacterJump
 }
 
 /** 歩きの途中の経路と、自分で巡るときの待ち（character/avatar/locomotion.ts が使う） */

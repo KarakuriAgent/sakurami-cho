@@ -49,12 +49,16 @@ export function legAngles(a: number, b: number, D: number) {
  * 3. 座っている間（行動 sit。座る姿勢を混ぜる強さで）は、腰は座面に載っているので下げず、足だけを足の下の床・地面へまっすぐ
  *    上げ下げする（低い所へは脚を伸ばし、高い所へは膝を曲げる）。傾いた車室（ケーブルカーの急な区間）で前に出した足の下の床が低くても、
  *    腰が座面に沈まない
+ * 4. 跳ぶ姿勢の間（jumpHold = 跳ぶ姿勢の強さ 0〜1。character/avatar/characterVisual.ts）は 2 の直しをその分だけ弱め（しゃがむ膝を伸ばさない）、
+ *    跳んでいる間（足が地面から離れている）は 1 の高さの差を 0 へ戻す（足を地面へ伸ばさない）
  * 脚は前後の面の中でだけ曲げる（太ももを前へ・膝を後ろへ）。太ももとすねの長さの違いも入れる。立っている脚は股関節から足首の線の上で足首を
  * 動かす。座っている脚は股関節から足首の線が前へ倒れているので、その線の上で動かすと足首が前へずれて床に届かない。足首の行き先（真上・真下）
  * へ届くよう、膝をその骨の曲がる軸のまわりに曲げ（骨の長さと向きのまま解く）、太ももを股関節のまわりに振る（reachSeated）
  */
-export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: number, ankleRest: number) {
+export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: number, ankleRest: number, jumpHold = 0) {
   const m = ch.motion
+  // 跳んでいる間（足が地面から離れている）は、足の下の地面に合わせない
+  const air = m.jump.phase === 'air'
   const k = 1 - Math.exp(-Math.min(delta, 0.1) * 14)
   const hips = vrm.humanoid.getNormalizedBoneNode('hips')
   const legs = [
@@ -76,7 +80,7 @@ export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: num
   const baseY = vrm.scene.parent ? vrm.scene.parent.getWorldPosition(_fc).y : 0
   for (const l of legs) {
     l.foot!.getWorldPosition(_fa)
-    const want = m.outside ? groundHeight(ch, _fa.x, _fa.z, true) - m.ground : 0
+    const want = m.outside && !air ? groundHeight(ch, _fa.x, _fa.z, true, m.position.y - m.jump.height) - m.ground : 0
     st[l.key] += (THREE.MathUtils.clamp(want, -0.3, 0.3) - st[l.key]) * k
   }
   // 座る姿勢の強さ（characterVisual が行動の姿勢を混ぜるのと同じ形）。座っている間は腰を下げない
@@ -112,7 +116,7 @@ export function applyFootIk(ch: Character, vrm: VRM, st: FootIkState, delta: num
       want = Math.max(want, contact * (Dt - Dn))
       limit = Math.min(limit, reach - Dn + Math.max(0, H[i] - 0.008))
     })
-    lift = THREE.MathUtils.clamp(Math.min(want, limit), 0, STANCE_LIFT_MAX) * THREE.MathUtils.smoothstep(m.walk, 0.02, 0.6)
+    lift = THREE.MathUtils.clamp(Math.min(want, limit), 0, STANCE_LIFT_MAX) * THREE.MathUtils.smoothstep(m.walk, 0.02, 0.6) * (1 - jumpHold)
   }
   st.lift = lift
   hips.position.y += (st.drop + lift) / scale

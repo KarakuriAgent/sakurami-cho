@@ -28,7 +28,9 @@ import type { Character } from './character'
  *   そのうえで、建物・木の幹・石段のわきの擁壁（townSolids.blocker）の中でなく、今の足元の高さから STEP m より高い・低い所へは行かない
  *   （芝生・斜面・水・線路の上は、どれにも入らないので出ない）
  * - 向きの入力: 入力の向きへ進み（加速・減速）、体はその向きへ回る。行けない所に当たったら、向きを少しずつ（20°・40°・60°）ずらして
- *   行ける向きへ沿ってすべる（速さはずらした角の cos 倍。壁へまっすぐ向かうときは止まる）。手を離したら止まる（少し滑ってから）
+ *   行ける向きへ沿ってすべる（速さはずらした角の cos 倍。壁へまっすぐ向かうときは止まる）。手を離したら止まる（少し滑ってから）。
+ *   跳んでいる間（character/avatar/jump.ts の air）は、踏み切ったときの速さと向きのまま進む（入力でも手を離しても変えない。行けない所に当たったら同じく沿ってすべる・止まる）。
+ *   立てるかは跳んでいる体の高さでなく足元の地面（motion.ground）から見るので、跳んでも段・壁・柵を越えない
  * - クリック: 今いる所のグラフの中だけ（ラボとそのまわり = nav.ts の findPath、中のある建物 = InteriorModel.findPath、町の道 = townWalk.route と polyline。
  *   町は、まっすぐ立てる所だけを通れる近い所（STRAIGHT_MAX m まで。広場の中など）なら、まっすぐ歩く）。
  *   ゾーンをまたぐ・グラフが見つからないときは、理由の字を返して歩かない（ゾーンをまたぐ移動は旅程の仕事。startTravel）
@@ -542,6 +544,11 @@ function driveInput(ch: Character, r: DirectRun, dt: number) {
     m.speed = 0
     return
   }
+  // 跳んでいる間は、踏み切ったときの速さと向きのまま進む（足が地面に着くまで速さも向きも変えない。character/avatar/jump.ts）
+  if (m.jump.phase === 'air') {
+    if (r.speed > STOP_SPEED) move(ch, r, r.dir.x, r.dir.y, dt)
+    return
+  }
   const want = r.run ? RUN : WALK
   r.speed += THREE.MathUtils.clamp(want - r.speed, -DECEL * dt, ACCEL * dt)
   move(ch, r, input.x, input.z, dt)
@@ -549,7 +556,8 @@ function driveInput(ch: Character, r: DirectRun, dt: number) {
 
 /** 手を離したあと、少し滑ってから止まる */
 function coast(ch: Character, r: DirectRun, dt: number) {
-  r.speed = Math.max(0, r.speed - DECEL * dt)
+  // 跳んでいる間は落とさない（手を離しても、着くまで今の速さのまま進む）
+  if (ch.motion.jump.phase !== 'air') r.speed = Math.max(0, r.speed - DECEL * dt)
   if (r.speed > STOP_SPEED) move(ch, r, r.dir.x, r.dir.y, dt)
 }
 

@@ -4,7 +4,7 @@ import { canStand, directState, goTo, pickGround, placeAt, travelState, type Cha
 import type { FollowCamera, TownStatus } from 'sakurami-cho/world'
 import { DEBUG, town, townState, walker } from './town'
 import { clearVrm, setHeight, setNormalize, vrmState, type VrmState } from './vrm'
-import { groundAtScreen, keyHook, walkAtScreen, walkToGroundPoint, walkUi } from './walk'
+import { groundAtScreen, jumpByKey, keyHook, walkAtScreen, walkToGroundPoint, walkUi } from './walk'
 import { alightWheel, boardWheel, DESTINATION_GROUPS, openTravel, setTravelOptions, stopTravel, travelTo, travelUi, type TravelOptions, type TravelUi } from './travel'
 import { putWalker, warpFrames, warpSpots, warpTo, warpUi, type WarpFrame, type WarpUi } from './teleport'
 import { clockUi, resetClock, runClock, setClockDate, setClockMinutes, setClockSpeed, stopClock, type ClockUi } from './clock'
@@ -16,7 +16,8 @@ import { QUALITY, qualityUrl, type Quality } from './quality'
  * 追うカメラの向き、カメラから頭までの見通し、VRM の設定（身長を合わせるか・身長・外す）。6-3: キーを押す（WASD）・点へ歩く・画面の点を
  * クリックする・地面を拾う・立てるか、様子に WASD・クリックの歩きと案内。6-4: 行き先へ移る（旅程）・取り消す・進め方・行き先の一覧・観覧車に乗る・降りる、
  * 様子に旅程・乗っている乗り物・出来事・町の時刻。6-5: ワープする・ワープ先の一覧、様子にワープ（暗転・跳んだ先・直近のワープのコマの長さ）。
- * put は地図の placeAtPoint で置く（teleport.ts の putWalker）。6-6: 時刻のつまみ（画面と同じ口）、様子に時刻のつまみ・画質・外の光（太陽の向き・灯り）
+ * put は地図の placeAtPoint で置く（teleport.ts の putWalker）。6-6: 時刻のつまみ（画面と同じ口）、様子に時刻のつまみ・画質・外の光（太陽の向き・灯り）。
+ * #8: 跳ぶ（スペースキーと同じ口）、様子に跳ぶ様子
  */
 export interface WalkerDebug {
   /** 町の地図データを読み終えて（か、無いと分かって）、そのあと 30 コマ描いた */
@@ -38,6 +39,8 @@ export interface WalkerDebug {
    * sim なら ms は歩きを進めた時間（walkTime。コマが遅いときも同じだけ歩く）で、離したあと止まるまで（最大 3 秒）待つ
    */
   press(keys: string, ms: number, run?: boolean, sim?: boolean): Promise<WalkerState>
+  /** 跳ぶ（スペースキーと同じ口）。跳び始めたら null、跳べなければ理由。跳ぶ様子は state().walker.jump */
+  jump(): string | null
   /** 点（シーンの x, z と、省ければ足元に近い地面の高さ y）へ歩く（クリックと同じ。地面は拾わない）。歩けなければ理由 */
   walkTo(x: number, z: number, y?: number): string | null
   /** Canvas の上の点（左上からの CSS の px）をクリックする（地面を拾って歩く）。拾った点と、歩けなければ理由 */
@@ -82,12 +85,12 @@ export interface WalkerState {
   /** 描いたコマの数と、歩きを進めた時間の合計（秒。コマごとの dt は 0.1 秒まで） */
   frames: number
   walkTime: number
-  /** 歩く人（足元の位置・足元の地面・そこに立てるか（canStand）・向き・速さ・歩幅・時間の倍率（旅程の早送り）・ゾーン・階・動きの段階・今いる立ち寄り先・外か・建物の中か・置き直した回数） */
-  walker: { position: V3; ground: number; stand: boolean; heading: number; speed: number; stride: number | null; timeScale: number; zone: string; level: number; phase: string; stopId: string | null; outside: boolean; indoor: boolean; placeSerial: number }
+  /** 歩く人（足元の位置・足元の地面・そこに立てるか（canStand）・向き・速さ・歩幅・時間の倍率（旅程の早送り）・ゾーン・階・動きの段階・今いる立ち寄り先・外か・建物の中か・置き直した回数・跳ぶ様子（段階・地面からの高さ・跳んだ回数）） */
+  walker: { position: V3; ground: number; stand: boolean; heading: number; speed: number; stride: number | null; timeScale: number; zone: string; level: number; phase: string; stopId: string | null; outside: boolean; indoor: boolean; placeSerial: number; jump: { phase: string; height: number; serial: number } }
   /** WASD・クリックの歩き（地図の directState: 向きの入力・走るか・行き先と残り・動かしているか）と、出している案内の字 */
   direct: ReturnType<typeof directState> & { notice: string | null }
-  /** VRM（vrm.ts の様子と、地図の見た目の状態・待機と歩きの .vrma・頭の位置・縁の光の素材の数） */
-  vrm: VrmState & { visual: string | null; idleClip: boolean; walkClip: boolean; anchorsReady: boolean; head: V3; rimMaterials: number }
+  /** VRM（vrm.ts の様子と、地図の見た目の状態・待機と歩きと跳ぶ .vrma・頭の位置・縁の光の素材の数） */
+  vrm: VrmState & { visual: string | null; idleClip: boolean; walkClip: boolean; jumpClip: boolean; anchorsReady: boolean; head: V3; rimMaterials: number }
   /** 追うカメラ（位置・注視点・向き・仰ぎ・上へ逃がした仰ぎ・欲しい離れ・今の離れ・寄せた理由） */
   camera: { position: V3; target: V3; yaw: number; pitch: number; lift: number; distance: number; current: number; blocker: string | null } | null
   /** 旅程（画面の様子・地図の travelState・乗っている乗り物）と町の時刻（時・UTC のミリ秒。早送り・カットで進む） */
@@ -142,6 +145,7 @@ function state(): WalkerState {
       outside: m.outside,
       indoor: m.indoor,
       placeSerial: m.placeSerial,
+      jump: { phase: m.jump.phase, height: round(m.jump.height), serial: m.jump.serial },
     },
     direct: { ...directState(walker), notice: walkUi().notice },
     vrm: {
@@ -149,6 +153,7 @@ function state(): WalkerState {
       visual: visual?.status ?? null,
       idleClip: !!visual?.rig?.idle,
       walkClip: !!visual?.rig?.walk,
+      jumpClip: !!visual?.rig?.jump,
       anchorsReady: walker.anchors.ready,
       head: r3(walker.anchors.head),
       rimMaterials: walker.rim.tuned.length,
@@ -284,6 +289,7 @@ if (DEBUG) {
       while (performance.now() < end && directState(walker).active) await sleep(50)
       return state()
     },
+    jump: () => jumpByKey(),
     walkTo: (x, z, y) => walkToGroundPoint(x, z, y),
     click(px, py) {
       const s = screenPoint(px, py)

@@ -8,7 +8,7 @@
 
 export const VISUAL_DEFAULTS = {
   /**
-   * 待機・歩きのアニメーション（VRM Animation = .vrma、assetBase からの相対パス。`pnpm sync:anim` が書き出す）。
+   * 待機・歩き・跳ぶのアニメーション（VRM Animation = .vrma、assetBase からの相対パス。`pnpm sync:anim` が書き出す）。
    * ファイルがあれば @pixiv/three-vrm-animation で再生し、無ければコードで作った動き（character/avatar/body.ts）を使う。
    * 歩きは 1.1m/s 前後で歩くループにしておく（再生速度を歩く速さに合わせる）。
    * 指は腕と同じ決まり: 歩いている間などはアニメーションの指（無ければコードの手の形）を使い、
@@ -17,6 +17,15 @@ export const VISUAL_DEFAULTS = {
   animations: {
     idle: 'models/animations/idle.vrma',
     walk: 'models/animations/walk.vrma',
+    /**
+     * 跳ぶ（character/avatar/jump.ts。使う側が jump を呼んだときだけ）: 踏み切り（start。しゃがんだ所から伸びて上がる）・跳んでいる間（loop）・着く（land）。
+     * 待機の .vrma があって、この 3 つが読めたときに使う。無い・読めないときは、コードで作った姿勢（しゃがむ → 伸びる → 着いてしゃがむ）
+     */
+    jump: {
+      start: 'models/animations/jump-start.vrma',
+      loop: 'models/animations/jump-loop.vrma',
+      land: 'models/animations/jump-land.vrma',
+    },
   },
 
   /**
@@ -90,7 +99,8 @@ export const VISUAL_DEFAULTS = {
 
 /** 見た目の共通の設定の形（欄ごとに置き換えられる） */
 export interface VisualConfig {
-  animations: { idle: string; walk: string }
+  /** jump を省けば、跳ぶ姿勢はコードで作った物 */
+  animations: { idle: string; walk: string; jump?: { start: string; loop: string; land: string } }
   normalizeHeight: boolean
   allowedHeightError: number
   eyeHeightRatio: number

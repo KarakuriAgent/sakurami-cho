@@ -8,6 +8,7 @@ import { findPath, segmentClear, smoothPath } from './nav'
 import { riderFloorAt } from '../ride/rider'
 import { townWalk } from '../../world/walk/townWalk'
 import type { Character, CharacterMotion } from './character'
+import { endJump, stepJump } from './jump'
 
 /**
  * キャラクターの移動（状態は Character が持つ。character/avatar/character.ts）。
@@ -299,6 +300,9 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
     nav.curve = null
     m.outside = true
     m.indoor = false
+    // 跳んでいる途中で乗り物が動かし始めたら、跳ぶのをやめる（高さは乗る仕組みが決める）
+    endJump(ch)
+    m.jump.y = m.position.y
     finishFrame(ch, t, dt)
     return
   }
@@ -401,18 +405,22 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
     const g = stopGround(ch, m.stopId)
     m.position.y = g.y
   }
-  // 床・地面の高さ（立ち位置の台に上る。外は地面に沿う。建物の中は今の階の床と階段）
-  const g = groundHeight(ch, m.position.x, m.position.z)
-  if ((m.zone !== 'lab' || traveling) && Math.abs(g - m.ground) < 0.45) {
-    // 上がり框・扉の敷居の小さな段は、体をなめらかに上げ下げする（足は IK で段に合わせる）
+  // 床・地面の高さ（立ち位置の台に上る。外は地面に沿う。建物の中は今の階の床と階段）。階・橋の上と下は、跳んでいる間も足元の地面の高さから選ぶ
+  const air = m.jump.phase === 'air'
+  const g = groundHeight(ch, m.position.x, m.position.z, false, m.position.y - m.jump.height)
+  if (!air && (m.zone !== 'lab' || traveling) && Math.abs(g - m.ground) < 0.45) {
+    // 上がり框・扉の敷居の小さな段は、体をなめらかに上げ下げする（足は IK で段に合わせる）。跳んでいる間は使わない（体は重さだけで動く。character/avatar/jump.ts）
     m.ground += (g - m.ground) * (1 - Math.exp(-dt * 16))
   } else m.ground = g
-  m.position.y = m.ground + placeLift(m.position.x, m.position.z)
+  // 跳ぶ（使う側が jump を呼んだときだけ。足元の地面からの高さ m.jump.height を決める）
+  const base = m.ground + placeLift(m.position.x, m.position.z)
+  stepJump(ch, dt, base)
+  m.position.y = base + m.jump.height
   m.outside = !insideLab(m.position.x, m.position.z)
   if (m.zone !== 'lab' && m.zone !== 'town') {
     const model = interiors.models.get(m.zone)
-    m.indoor = !!model?.roomAt(m.position.x, m.position.y + 1.0, m.position.z, -0.1)
-    if (model) m.level = model.levelAt(m.position.x, m.position.z, m.position.y)
+    m.indoor = !!model?.roomAt(m.position.x, base + 1.0, m.position.z, -0.1)
+    if (model) m.level = model.levelAt(m.position.x, m.position.z, base)
   } else m.indoor = false
   finishFrame(ch, t, dt)
 }

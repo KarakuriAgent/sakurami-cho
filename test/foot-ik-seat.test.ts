@@ -13,6 +13,7 @@ import * as THREE from 'three'
 import type { VRM } from '@pixiv/three-vrm'
 import type { Character } from '../character/avatar/character.ts'
 import { applyFootIk, type FootIkState } from '../character/avatar/footIk.ts'
+import { createJump } from '../character/avatar/jump.ts'
 import { defineVehicle, type Car } from '../world/outdoor/transit/vehicle.ts'
 
 /** 太もも・すねの長さ、股関節の左右の間の半分、座面の高さ、座面から股関節まで */
@@ -116,6 +117,7 @@ function settle(pitch: number, heading: number, sit: boolean) {
     action: sit ? 'sit' : 'present',
     actionBlend: 1,
     seat: sit ? { height: SEAT_H, shift: -0.4, hands: 'lap' } : null,
+    jump: createJump(ground),
   }
   const ch = { motion, ride: { phase: 'riding', car } } as unknown as Character
   const st: FootIkState = { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null }

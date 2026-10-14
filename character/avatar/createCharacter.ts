@@ -9,6 +9,7 @@ import { site } from '../../world/outdoor/site/siteModel'
 import { createBodyMetrics } from './body'
 import { Character, type CharacterAnchors, type CharacterKind, type CharacterMotion } from './character'
 import { createFloatState } from './float'
+import { createJump } from './jump'
 import { createVrmRim } from './loadVrm'
 import { createTravelRun } from './travel'
 import { VISUAL_DEFAULTS, type VrmMtoonConfig } from './visualConfig'
@@ -80,6 +81,7 @@ export function createCharacter(o: CharacterOptions): Character {
     placeSerial: 0,
     timeScale: 1,
     stride: null,
+    jump: createJump(position.y),
   }
   const [gx, gy, gz] = o.anchorGuess?.position ?? motion.position.toArray()
   const gh = o.anchorGuess?.height ?? DEFAULT_HEIGHT

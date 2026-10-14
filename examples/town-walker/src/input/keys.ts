@@ -1,6 +1,7 @@
 /**
- * キーボードで歩く（WASD・矢印。Shift で走る）。押しているキーを覚え、カメラの向き（水平の前）から世界の向きを出す（walk.ts が毎コマ地図の
- * setDirectInput へ渡す。追うカメラは人の向きについて回らないので、W はいつも画面の奥）。
+ * キーボードで歩く（WASD・矢印。Shift で走る）・跳ぶ（スペースキー）。押しているキーを覚え、カメラの向き（水平の前）から世界の向きを出す（walk.ts が毎コマ地図の
+ * setDirectInput へ渡す。追うカメラは人の向きについて回らないので、W はいつも画面の奥）。スペースキーは押した回を数え、walk.ts が毎コマ取り出して跳ぶ
+ * （押しっぱなしの繰り返しは数えない。ページが動く・フォーカスのあるボタンが押されることはさせない）。
  *
  * - キーは押した所（KeyboardEvent.code）で見る（キーボードの並び・IME に左右されない）
  * - フォーカスが入力欄（input・textarea・select・contenteditable）にあるときは取らない（VRM の身長の欄など）
@@ -20,6 +21,8 @@ const MOVES: Record<string, [forward: number, right: number]> = {
   ArrowLeft: [0, -1],
 }
 const RUN_KEYS = new Set(['ShiftLeft', 'ShiftRight'])
+/** 跳ぶキー */
+const JUMP_KEY = 'Space'
 
 export interface KeyInput {
   /** 走るキー（Shift）を押しているか */
@@ -28,6 +31,8 @@ export interface KeyInput {
   readonly active: boolean
   /** カメラの水平の前（fx, fz。長さは見ない）から、押しているキーの世界の向き（x = 東、z = 南）。押していなければ（打ち消し合えば）null */
   direction(fx: number, fz: number): { x: number; z: number } | null
+  /** 前に聞いてから跳ぶキー（スペース）を押したか（聞いたら消す。何回押しても 1 回） */
+  takeJump(): boolean
   /** 確かめ用: キー（KeyW・ShiftLeft など）を ms ミリ秒だけ押したことにする（離したら解ける。Infinity なら release で離すまで） */
   hold(code: string, ms: number): Promise<void>
   /** 確かめ用: キーを離したことにする */
@@ -45,8 +50,15 @@ function typing(t: EventTarget | null) {
 
 export function createKeyInput(target: Window): KeyInput {
   const held = new Set<string>()
+  let jumped = false
   const down = (e: KeyboardEvent) => {
     if (e.ctrlKey || e.altKey || e.metaKey || typing(e.target)) return
+    if (e.code === JUMP_KEY) {
+      if (!e.repeat) jumped = true
+      // ページが動かないように・フォーカスのあるボタンが押されないように
+      e.preventDefault()
+      return
+    }
     if (!(e.code in MOVES) && !RUN_KEYS.has(e.code)) return
     held.add(e.code)
     // 矢印でページが動かないように
@@ -54,14 +66,19 @@ export function createKeyInput(target: Window): KeyInput {
   }
   const up = (e: KeyboardEvent) => {
     held.delete(e.code)
+    // ボタンはスペースキーを離したときに押されるので、離すのも止める
+    if (e.code === JUMP_KEY && !e.ctrlKey && !e.altKey && !e.metaKey && !typing(e.target)) e.preventDefault()
   }
-  const clear = () => held.clear()
+  const clear = () => {
+    held.clear()
+    jumped = false
+  }
   const hidden = () => {
-    if (document.visibilityState === 'hidden') held.clear()
+    if (document.visibilityState === 'hidden') clear()
   }
   // 押したまま入力欄へ移ったら離したことにする
   const focus = (e: FocusEvent) => {
-    if (typing(e.target)) held.clear()
+    if (typing(e.target)) clear()
   }
   target.addEventListener('keydown', down)
   target.addEventListener('keyup', up)
@@ -98,6 +115,11 @@ export function createKeyInput(target: Window): KeyInput {
       const k = Math.hypot(x, z)
       return { x: x / k, z: z / k }
     },
+    takeJump() {
+      const j = jumped
+      jumped = false
+      return j
+    },
     hold(code, ms) {
       held.add(code)
       if (!Number.isFinite(ms)) return Promise.resolve()
@@ -117,7 +139,7 @@ export function createKeyInput(target: Window): KeyInput {
       target.removeEventListener('blur', clear)
       target.removeEventListener('focusin', focus)
       document.removeEventListener('visibilitychange', hidden)
-      held.clear()
+      clear()
     },
   }
 }
