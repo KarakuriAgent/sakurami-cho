@@ -29,7 +29,9 @@ import type { Character } from './character'
  *   （芝生・斜面・水・線路の上は、どれにも入らないので出ない）
  * - 向きの入力: 入力の向きへ進み（加速・減速）、体はその向きへ回る。行けない所に当たったら、向きを少しずつ（20°・40°・60°）ずらして
  *   行ける向きへ沿ってすべる（速さはずらした角の cos 倍。壁へまっすぐ向かうときは止まる）。手を離したら止まる（少し滑ってから）。
- *   跳んでいる間（character/avatar/jump.ts の air）は、踏み切ったときの速さと向きのまま進む（入力でも手を離しても変えない。行けない所に当たったら同じく沿ってすべる・止まる）。
+ *   跳んでいる間（character/avatar/jump.ts の air）は、踏み切ったときの速さと向きを保ち（手を離しても落とさない）、入力の向きへ地面より弱く
+ *   （AIR_ACCEL）速さを足して少しだけ向きと速さを変えられる（空中の操作。速さの上限は踏み切ったときの速さと歩きの速さの大きい方。
+ *   止まって跳んでから少し前へずらすこともできる）。行けない所に当たったら同じく沿ってすべる・止まる。クリックで歩く道は跳んでいても道に沿って進む。
  *   立てるかは跳んでいる体の高さでなく足元の地面（motion.ground）から見るので、跳んでも段・壁・柵を越えない
  * - クリック: 今いる所のグラフの中だけ（ラボとそのまわり = nav.ts の findPath、中のある建物 = InteriorModel.findPath、町の道 = townWalk.route と polyline。
  *   町は、まっすぐ立てる所だけを通れる近い所（STRAIGHT_MAX m まで。広場の中など）なら、まっすぐ歩く）。
@@ -44,6 +46,11 @@ const RUN = 2.6
 /** 加速・減速（m/s²）。手を離したあとの減速は強め */
 const ACCEL = 3.2
 const DECEL = 6
+/**
+ * 跳んでいる間の、入力の向きへの加速（m/s²。地面の ACCEL の半分）。跳んでいるのは 0.6〜0.7 秒なので、止まって跳べば 0.3m ほど前へずらせ、
+ * 走って跳んで横へ押せば向きが 20° ほど変わる（着く所をねらって直せるが、空中で曲がりきれるほどではない）
+ */
+const AIR_ACCEL = 1.6
 /** クリックで歩くとき、着く手前で落とす減速（m/s²。locomotion の DECEL と同じ） */
 const ARRIVE_DECEL = 1.0
 /** 体を回す速さ（比例の係数と最大 rad/s） */
@@ -516,6 +523,8 @@ export function driveDirect(ch: Character, t: number, dt: number): boolean {
   if (!r.active) {
     leavePlace(ch)
     r.speed = m.phase === 'walk' ? m.speed : 0
+    // 進んでいた向きを引き継ぐ（立ち寄り先へ歩く途中に跳んで、空中で入力したときも今の向きから変える）
+    if (r.speed > 0 && Math.hypot(m.moveDir.x, m.moveDir.z) > 1e-3) r.dir.set(m.moveDir.x, m.moveDir.z).normalize()
   }
   r.active = true
   if (r.input) driveInput(ch, r, dt)
@@ -537,21 +546,38 @@ export function driveDirect(ch: Character, t: number, dt: number): boolean {
 function driveInput(ch: Character, r: DirectRun, dt: number) {
   const m = ch.motion
   const input = r.input!
-  // 行動の姿勢（座る・作業）を解いてから歩き出す（locomotion の turnStart と同じ）
-  if (m.actionBlend > 0.35 && r.speed < 0.2) {
+  // 行動の姿勢（座る・作業）を解いてから歩き出す（locomotion の turnStart と同じ。跳んでいる間は待たない）
+  if (m.jump.phase !== 'air' && m.actionBlend > 0.35 && r.speed < 0.2) {
     turnToward(ch, Math.atan2(input.x, input.z), dt, 4.5, 3)
     m.phase = 'turnStart'
     m.speed = 0
     return
   }
-  // 跳んでいる間は、踏み切ったときの速さと向きのまま進む（足が地面に着くまで速さも向きも変えない。character/avatar/jump.ts）
+  // 跳んでいる間は、踏み切ったときの速さと向きに、入力の向きへ弱く速さを足す（空中の操作。character/avatar/jump.ts）
   if (m.jump.phase === 'air') {
+    airControl(r, input, Math.max(m.jump.vh, WALK), dt)
     if (r.speed > STOP_SPEED) move(ch, r, r.dir.x, r.dir.y, dt)
+    else m.phase = 'idle'
     return
   }
   const want = r.run ? RUN : WALK
   r.speed += THREE.MathUtils.clamp(want - r.speed, -DECEL * dt, ACCEL * dt)
   move(ch, r, input.x, input.z, dt)
+}
+
+/** 跳んでいる間の速さ（r.dir × r.speed）に、入力の向きへ AIR_ACCEL で足す（速さは cap を越えない。越えている分は落とさず、向きだけ変わる） */
+function airControl(r: DirectRun, input: { x: number; z: number }, cap: number, dt: number) {
+  const before = r.speed
+  let vx = r.dir.x * r.speed + input.x * AIR_ACCEL * dt
+  let vz = r.dir.y * r.speed + input.z * AIR_ACCEL * dt
+  const v = Math.hypot(vx, vz)
+  const lim = Math.max(cap, Math.min(before, v))
+  if (v > lim) {
+    vx *= lim / v
+    vz *= lim / v
+  }
+  r.speed = Math.min(v, lim)
+  if (r.speed > 1e-6) r.dir.set(vx / r.speed, vz / r.speed)
 }
 
 /** 手を離したあと、少し滑ってから止まる */

@@ -10,13 +10,15 @@ import type { Character } from './character'
  * 跳ぶのは使う側が jump(ch) を呼んだときだけ（呼ばなければ跳ばない。決まりは足さない）。
  *
  * - 段階（ch.motion.jump.phase）: none → crouch（踏み切る前にしゃがむ JUMP_CROUCH 秒）→ air（跳んでいる）→ land（着いてしゃがむ JUMP_LAND 秒）→ none
- * - 高さ: 足元の地面から JUMP_HEIGHT m（踏み切る速さ √(2gh)、重さ GRAVITY）。天井の低い所（ラボの扉・中のある建物の部屋と扉と段・橋の下）では、
+ * - 高さ: 足元の地面から、踏み切ったときの横の速さで決める（止まって・歩いて JUMP_HEIGHT m、走って JUMP_HEIGHT_RUN m。間はなめらかに。jumpHeightFor）。
+ *   踏み切る速さ √(2gh)、重さ GRAVITY。遠くへは、空中の時間が延びる分だけ自然に伸びる（横の速さは足さない）。天井の低い所（ラボの扉・中のある建物の部屋と扉と段・橋の下）では、
  *   頭（VRM の実測の身長 + HAIR。VRM が無ければ BODY_GUESS）が天井の HEAD_CLEAR 下に届く高さまでにし、跳んでいる間に低い天井の下へ入ったら、
  *   そこで止めて落ち始める（headroom）
  * - 横の動きは跳んでいないときと同じ決まり（WASD・クリックの direct.ts、立ち寄り先への歩き・旅程の locomotion）。立てるか（direct.ts の canStand）は
  *   跳んでいる体の高さではなく足元の地面（motion.ground）から見るので、跳んでも段・壁・柵・擁壁を越えて、歩けない所へは入らない（着くのは歩いて行ける所だけ）。
  *   跳んでいる間（air）は、上がれる段の高さの決まり（足元の地面の小さな段を、体をなめらかに上げ下げしてつなぐ）を使わず、体は重さだけで動き、
- *   足元の地面に届いたら着く（下りの段の上へ出たら、その下の地面まで落ちる）。WASD で歩いて・走っていたら、跳んでいる間は今の速さと向きのまま進む（direct.ts）
+ *   足元の地面に届いたら着く（下りの段の上へ出たら、その下の地面まで落ちる）。WASD の跳んでいる間は、踏み切ったときの速さを保ち、入力で地面より弱く
+ *   向きと速さを変えられる（空中の操作。上限は踏み切ったときの速さと歩きの速さの大きい方。direct.ts）。クリックで歩く道・旅程の途中は道に沿って進む
  * - 跳べないとき（何もしない。理由の字を返す）: 歩く人でない・乗り物に乗っている（乗り込み・降りるの途中も）・座っている・町の中の移動（旅程）の途中・
  *   旅程の早送りの途中・扉をくぐる途中（ラボの見学エントランスと通用口・中のある建物の扉の中）・頭の上が低すぎる・もう跳んでいる。
  *   時刻の早送り・カットは旅程と乗り物の間だけなので、その 2 つの決まりで止まる。使う側のワープの暗転の間（例のアプリ）は使う側が呼ばない
@@ -41,6 +43,8 @@ export interface CharacterJump {
   vy: number
   /** 踏み切ったときの速さ（m/s。天井で低くした分も入る。見た目が上りと下りを分ける） */
   v0: number
+  /** 踏み切ったときの横の速さ（m/s。高さを決め、空中の操作の速さの上限になる） */
+  vh: number
   /** 着いたときの落ちる速さ（m/s。見た目が着いてしゃがむ深さに使う） */
   impact: number
   /** 跳び始めた回数（見た目が新しい跳びを見分ける） */
@@ -49,8 +53,12 @@ export interface CharacterJump {
   placeSerial: number
 }
 
-/** 跳ぶ高さ（足元の地面から m。決めた 0.4〜0.5m の真ん中） */
+/** 跳ぶ高さ（足元の地面から m）: 止まって・歩いて（決めた 0.4〜0.5m の真ん中）と、走って */
 export const JUMP_HEIGHT = 0.45
+export const JUMP_HEIGHT_RUN = 0.6
+/** 高さを上げ始める・上げ終える横の速さ（m/s。direct.ts の歩き WALK と走り RUN） */
+const JUMP_SPEED_WALK = 1.3
+const JUMP_SPEED_RUN = 2.6
 /** 重さ（m/s²） */
 export const GRAVITY = 9.8
 /** 踏み切る前にしゃがむ長さ・着いてしゃがむ長さ（秒） */
@@ -75,7 +83,13 @@ const DOOR_REACH = 0.3
 
 /** 跳んでいない様子（createCharacter が motion.jump に入れる） */
 export function createJump(y = 0): CharacterJump {
-  return { phase: 'none', t: 0, height: 0, y, vy: 0, v0: 0, impact: 0, serial: 0, placeSerial: 0 }
+  return { phase: 'none', t: 0, height: 0, y, vy: 0, v0: 0, vh: 0, impact: 0, serial: 0, placeSerial: 0 }
+}
+
+/** 踏み切ったときの横の速さ speed（m/s）で跳ぶ高さ（m。天井で止める前） */
+export function jumpHeightFor(speed: number) {
+  const k = Math.min(1, Math.max(0, (speed - JUMP_SPEED_WALK) / (JUMP_SPEED_RUN - JUMP_SPEED_WALK)))
+  return JUMP_HEIGHT + (JUMP_HEIGHT_RUN - JUMP_HEIGHT) * k * k * (3 - 2 * k)
 }
 
 /** 頭のてっぺんの、足元からの高さ（m） */
@@ -160,6 +174,7 @@ export function jump(ch: Character): string | null {
   j.height = 0
   j.vy = 0
   j.v0 = 0
+  j.vh = 0
   j.impact = 0
   j.y = ch.motion.position.y
   j.serial++
@@ -199,8 +214,9 @@ export function stepJump(ch: Character, dt: number, base: number) {
       j.y = base
       j.height = 0
       if (j.t < JUMP_CROUCH) break
-      // 踏み切る: 頭の上の天井までの高さで速さを決める（天井が低ければ低く。届かないほど低ければ跳ばずに戻る）
-      const rise = Math.min(JUMP_HEIGHT, riseAt(ch, m.position.x, m.position.z, base))
+      // 踏み切る: 横の速さで高さを決め（走っていれば高く）、頭の上の天井までの高さで抑える（天井が低ければ低く。届かないほど低ければ跳ばずに戻る）
+      j.vh = Math.max(0, m.speed)
+      const rise = Math.min(jumpHeightFor(j.vh), riseAt(ch, m.position.x, m.position.z, base))
       if (rise < MIN_RISE) {
         endJump(ch)
         break

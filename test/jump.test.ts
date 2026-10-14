@@ -2,11 +2,15 @@
  * 跳ぶ（character/avatar/jump.ts。例のアプリのスペースキー。#8）:
  *
  * - その場で跳ぶ: 足元の地面から 0.45m 上がって、同じ所の地面へ着く（ラボの前・テラス・ラボの中・見晴らし台・百段石段・トンプソン家の中と前）
- * - 走りながら跳ぶ: 跳んでいる間は踏み切ったときの速さと向きのまま進む
+ * - 走りながら跳ぶ: 同じ向きへ押していれば、跳んでいる間は踏み切ったときの速さと向きのまま進む。手を離しても急に止まらない
+ * - 空中の操作: 止まって跳んでから押すと少しずれる（歩きの速さまで）。走って跳んで横・後ろへ押すと、向きと速さが少し変わる
+ *   （踏み切ったときの速さと歩きの速さの大きい方を越えない）。押してから離せば、そのときの速さを着くまで保つ
+ * - 走りながら跳ぶと高い: 止まって・歩いて 0.45m、走って 0.6m、間は踏み切ったときの横の速さでなめらかに（jumpHeightFor）。走っても天井で止まる
  * - 着く所は歩ける所だけ: いろいろな所から、いろいろな向きへ歩いて・走って跳ぶ（種を決めた乱数）。どのコマも立てる所（canStand）にいて、
  *   着いた所も立てる所で、足元は地面の上
  * - 柵・壁の前で越えない: テラスの手すり・ラボの北の壁・南のガラス壁・西の壁・トンプソン家のリビングの南の壁・百段石段のわきへ向かって、
- *   跳びながら歩いても、跳ばずに歩くより先へは出ない
+ *   跳びながら走っても、斜めに走って跳び空中でまっすぐ押し込んでも、跳ばずに走るより先へは出ない
+ * - 着く所の乱数の確かめでは、跳んでいる間にときどき入力の向きを変える・離す
  * - 天井で止まる: ラボの中（背の高い体）・トンプソン家の屋根裏で、頭が天井の 5cm 下より上へ行かない。跳んでいる間にラボの見学エントランスの扉の下へ
  *   入ったら、扉の上端の 5cm 下で止まる。天井まで余白が無ければ跳ばない
  * - 跳ばないとき: 乗り物に乗っている・座っている・旅程の途中・扉をくぐる途中・もう跳んでいる。跳んでいる途中に旅程が動き出した・
@@ -167,6 +171,129 @@ while (m.jump.phase !== 'land') {
 out.run = { runSpeed: r3(runSpeed), speedMin: r3(Math.min(...speeds)), speedMax: r3(Math.max(...speeds)), coastMin: r3(Math.min(...coast)), coastMax: r3(Math.max(...coast)), stand: stand() }
 for (let i = 0; i < 60; i++) step()
 
+// 空中で向きを変える（空中の操作）
+const toAir = () => {
+  while (m.jump.phase !== 'air') step()
+}
+/** 跳んでいる間を進める（each はコマごと）。速さ・向きの列と、横に進んだ所 */
+const airFrames = (each) => {
+  const sp = []
+  const dir = []
+  let ok = true
+  const x0 = m.position.x
+  const z0 = m.position.z
+  while (m.jump.phase === 'air') {
+    each?.(sp.length)
+    const px = m.position.x
+    const pz = m.position.z
+    step()
+    if (m.jump.phase === 'air') {
+      sp.push(m.speed)
+      dir.push(Math.atan2(m.position.x - px, m.position.z - pz))
+    }
+    if (!stand()) ok = false
+  }
+  return { sp, dir, ok, dx: m.position.x - x0, dz: m.position.z - z0 }
+}
+const settle = () => {
+  D.setDirectInput(ch, null)
+  for (let i = 0; i < 60; i++) step()
+}
+out.steer = { still: [], run: [], walkCap: null, release: null }
+// 止まって跳び、跳んでから押す（前・横へ少しずらせる。速さは歩きの速さまで）
+for (const [at, dir] of [['front', [1, 0]], ['terrace', [-1, 0]], ['lookout', [0, 1]], ['thompson-front', [1, 0]], ['thompson-living', [-1, 0]], [slope, [0, 1]]]) {
+  put(at)
+  J.jump(ch)
+  toAir()
+  const p0 = m.position.clone()
+  const f = airFrames(() => D.setDirectInput(ch, { x: dir[0], z: dir[1] }, true))
+  out.steer.still.push({ at: typeof at === 'string' ? at : 'point', moved: r3((m.position.x - p0.x) * dir[0] + (m.position.z - p0.z) * dir[1]), max: r3(Math.max(...f.sp)), ok: f.ok && stand() })
+  settle()
+}
+// 走って（東へ）跳び、空中で横・後ろへ押す: 向きが少し変わり、速さは踏み切ったときの速さを越えない
+for (const [name, push] of [['left', [0, 1]], ['right', [0, -1]], ['back', [-1, 0]], ['diag', [0.7071, 0.7071]]]) {
+  put('front')
+  D.setDirectInput(ch, { x: 1, z: 0 }, true)
+  for (let i = 0; i < 60; i++) step()
+  J.jump(ch)
+  toAir()
+  const vh = m.jump.vh
+  const f = airFrames(() => D.setDirectInput(ch, { x: push[0], z: push[1] }, true))
+  const turn = Math.abs(Math.atan2(Math.sin(f.dir[f.dir.length - 1] - Math.PI / 2), Math.cos(f.dir[f.dir.length - 1] - Math.PI / 2)))
+  out.steer.run.push({ name, vh: r3(vh), max: r3(Math.max(...f.sp)), min: r3(Math.min(...f.sp)), turnDeg: r3((turn * 180) / Math.PI), ok: f.ok })
+  settle()
+}
+// 歩いて跳び、空中で走る入力にしても、歩きの速さを越えない
+put('front')
+D.setDirectInput(ch, { x: 1, z: 0 }, false)
+for (let i = 0; i < 60; i++) step()
+J.jump(ch)
+toAir()
+{
+  const vh = m.jump.vh
+  const f = airFrames(() => D.setDirectInput(ch, { x: 0.7071, z: 0.7071 }, true))
+  out.steer.walkCap = { vh: r3(vh), max: r3(Math.max(...f.sp)) }
+}
+settle()
+// 走って跳び、空中で横へ押してから離す: 離したあとは着くまで速さが変わらない（急に止まらない）
+put('front')
+D.setDirectInput(ch, { x: 1, z: 0 }, true)
+for (let i = 0; i < 60; i++) step()
+J.jump(ch)
+toAir()
+{
+  const f = airFrames((n) => D.setDirectInput(ch, n < 12 ? { x: 0, z: 1 } : null, true))
+  const after = f.sp.slice(13)
+  out.steer.release = { n: after.length, min: r3(Math.min(...after)), max: r3(Math.max(...after)), first: r3(f.sp[0]) }
+}
+settle()
+// 止まって跳び、空中で押してから離す: 足した速さを着くまで保つ
+put('front')
+J.jump(ch)
+toAir()
+{
+  const f = airFrames((n) => D.setDirectInput(ch, n < 15 ? { x: 1, z: 0 } : null, true))
+  const after = f.sp.slice(16)
+  out.steer.stillRelease = { n: after.length, min: r3(Math.min(...after)), max: r3(Math.max(...after)) }
+}
+settle()
+
+// 走って跳ぶと高い: 踏み切ったときの横の速さと、上がった高さ（止まって・歩いて 0.45m、走って 0.6m、間はなめらか）
+out.height = []
+for (const [run, wait] of [[false, 0], [false, 60], [true, 25], [true, 32], [true, 40], [true, 70]]) {
+  put('front')
+  if (wait) {
+    D.setDirectInput(ch, { x: 1, z: 0 }, run)
+    for (let i = 0; i < wait; i++) step()
+  }
+  const y0 = m.ground
+  J.jump(ch)
+  toAir()
+  const vh = m.jump.vh
+  let peak = 0
+  let air = 0
+  while (m.jump.phase === 'air') {
+    step()
+    if (m.jump.phase === 'air') air += DT
+    peak = Math.max(peak, m.jump.height)
+  }
+  void y0
+  out.height.push({ run, wait, vh: r3(vh), peak: r3(peak), want: r3(J.jumpHeightFor(vh)), air: r3(air), stand: stand() })
+  settle()
+}
+// 天井で止める決まりは、走って跳んでも効く（ラボの中の背の高い体・跳んでいる間に入った扉の下）
+out.runCeiling = {}
+put('holotable')
+ch.anchors.measuredHeight = 5.5
+D.setDirectInput(ch, { x: 1, z: 0 }, true)
+for (let i = 0; i < 70; i++) step()
+J.jump(ch)
+toAir()
+out.runCeiling.lab = { vh: r3(m.jump.vh), ...finish(m.ground) }
+D.setDirectInput(ch, null)
+ch.anchors.measuredHeight = 0
+for (let i = 0; i < 60; i++) step()
+
 // 着く所は歩ける所だけ（種を決めた乱数で、いろいろな所から・向きへ・速さで）
 const rnd = mulberry32(8)
 const spots = ['front', 'terrace', 'holotable', 'window', 'workshop', 'lookout', 'parabola', 'thompson-front', 'thompson-living', 'thompson-attic', 'thompson-garage', 'seizu-front', 'cafe-front', 'cafe-terrace', 'dome-gate', 'dome-terrace', 'soranowa-platform', 'cable-summit-platform', 'cable-kaedezaka-platform', 'cable-fumoto-platform', stairs, slope]
@@ -183,6 +310,11 @@ for (let n = 0; n < 88; n++) {
     if (i === wait || i === wait + 70) {
       if (J.jump(ch) === null) out.random.jumps++
     }
+    // 空中で、ときどき入力の向きを変える・離す（空中の操作）
+    if (m.jump.phase === 'air' && rnd() < 0.08) {
+      const b = rnd() * Math.PI * 2
+      D.setDirectInput(ch, rnd() < 0.2 ? null : { x: Math.sin(b), z: Math.cos(b) }, rnd() < 0.5)
+    }
     const before = m.jump.phase
     step()
     if (!stand()) out.random.bad.push({ at: typeof at === 'string' ? at : 'point', i, x: r3(m.position.x), z: r3(m.position.z), phase: m.jump.phase })
@@ -197,14 +329,19 @@ for (let n = 0; n < 88; n++) {
 }
 
 // 柵・壁の前で越えない: 跳ばずに歩くときと、跳びながら歩くときの、向きへ進んだ長さのいちばん大きい所
-const along = (at, dir, jumping) => {
+const along = (at, dir, jumping, steer = 0) => {
   put(at)
   const p0 = m.position.clone()
   let best = 0
   let ok = true
-  D.setDirectInput(ch, { x: dir[0], z: dir[1] }, true)
+  // steer: 地面では向きを steer ラジアンずらして走り、跳んでいる間は柵・壁へまっすぐ押し込む（空中の操作で越えようとする）
+  const c = Math.cos(steer)
+  const sn = Math.sin(steer)
+  const side = { x: dir[0] * c + dir[1] * sn, z: -dir[0] * sn + dir[1] * c }
+  D.setDirectInput(ch, steer ? side : { x: dir[0], z: dir[1] }, true)
   for (let i = 0; i < 240; i++) {
     if (jumping) J.jump(ch)
+    if (steer) D.setDirectInput(ch, m.jump.phase === 'air' ? { x: dir[0], z: dir[1] } : side, true)
     step()
     best = Math.max(best, (m.position.x - p0.x) * dir[0] + (m.position.z - p0.z) * dir[1])
     if (!stand()) ok = false
@@ -225,7 +362,16 @@ for (const [name, at, dir] of [
 ]) {
   const w = along(at, dir, false)
   const j = along(at, dir, true)
-  out.barriers.push({ name, walk: w.best, jump: j.best, ok: w.ok && j.ok })
+  // 斜めに走って跳び、空中で柵・壁へまっすぐ押し込む（比べるのは、同じ向きに斜めに走って跳ばないとき）
+  const steer = []
+  let ok = w.ok && j.ok
+  for (const a of [0.6, -0.6]) {
+    const sw = along(at, dir, false, a)
+    const sj = along(at, dir, true, a)
+    steer.push({ walk: sw.best, jump: sj.best })
+    ok &&= sw.ok && sj.ok
+  }
+  out.barriers.push({ name, walk: w.best, jump: j.best, steer, ok })
 }
 
 // 天井で止まる
@@ -315,8 +461,17 @@ describe('跳ぶ（character/avatar/jump.ts。#8）', () => {
   const v = (r.exitCode === 0 ? JSON.parse(r.stdout.toString().trim().split('\n').pop()!) : {}) as {
     inPlace: { at: string; zone: string; problem: string | null; peak: number; air: number; room: number; drift: number; dy: number; onGround: number; stand: boolean; phase: string }[]
     run: { runSpeed: number; speedMin: number; speedMax: number; coastMin: number; coastMax: number; stand: boolean }
+    steer: {
+      still: { at: string; moved: number; max: number; ok: boolean }[]
+      run: { name: string; vh: number; max: number; min: number; turnDeg: number; ok: boolean }[]
+      walkCap: { vh: number; max: number }
+      release: { n: number; min: number; max: number; first: number }
+      stillRelease: { n: number; min: number; max: number }
+    }
+    height: { run: boolean; wait: number; vh: number; peak: number; want: number; air: number; stand: boolean }[]
+    runCeiling: { lab: { vh: number; peak: number; room: number } }
     random: { trials: number; jumps: number; landed: number; bad: unknown[] }
-    barriers: { name: string; walk: number; jump: number; ok: boolean }[]
+    barriers: { name: string; walk: number; jump: number; steer: { walk: number; jump: number }[]; ok: boolean }[]
     ceiling: {
       labTall: { peak: number; room: number }
       labTooTall: [string | null, string]
@@ -371,7 +526,81 @@ describe('跳ぶ（character/avatar/jump.ts。#8）', () => {
     for (const b of v.barriers) {
       expect({ name: b.name, ok: b.ok }).toEqual({ name: b.name, ok: true })
       expect(b.jump).toBeLessThanOrEqual(b.walk + 0.05)
+      for (const s of b.steer) expect(s.jump).toBeLessThanOrEqual(Math.max(b.walk, s.walk) + 0.05)
     }
+  })
+
+  test('空中で少し向きを変えられる: 止まって跳んでから押すと少しずれ（歩きの速さまで）、走って跳んで横へ押すと向きが少し変わる（踏み切ったときの速さを越えない）', () => {
+    const s = v.steer
+    expect(s.still.length).toBe(6)
+    for (const p of s.still) {
+      expect({ at: p.at, ok: p.ok }).toEqual({ at: p.at, ok: true })
+      expect(p.moved).toBeGreaterThan(0.15)
+      expect(p.moved).toBeLessThan(0.5)
+      expect(p.max).toBeLessThanOrEqual(1.3 + 1e-3)
+    }
+    expect(s.run.length).toBe(4)
+    for (const p of s.run) {
+      expect({ name: p.name, ok: p.ok }).toEqual({ name: p.name, ok: true })
+      expect(p.vh).toBeGreaterThan(2.4)
+      expect(p.max).toBeLessThanOrEqual(p.vh + 1e-3)
+    }
+    const by = Object.fromEntries(s.run.map((p) => [p.name, p]))
+    // 横へ押すと向きが変わるが、曲がりきれるほどではない
+    for (const k of ['left', 'right', 'diag']) {
+      expect(by[k].turnDeg).toBeGreaterThan(8)
+      expect(by[k].turnDeg).toBeLessThan(35)
+    }
+    // 後ろへ押すと遅くなるが、止まりはしない
+    expect(by.back.min).toBeLessThan(by.back.vh - 0.5)
+    expect(by.back.min).toBeGreaterThan(1)
+    expect(by.back.turnDeg).toBeLessThan(1)
+    // 歩いて跳べば、空中で走る入力にしても歩きの速さまで
+    expect(s.walkCap.vh).toBeGreaterThan(1.2)
+    expect(s.walkCap.max).toBeLessThanOrEqual(1.3 + 1e-3)
+  })
+
+  test('空中でキーを離しても急に止まらない: 離したあとは着くまで速さが変わらない', () => {
+    const s = v.steer
+    expect(s.release.n).toBeGreaterThan(10)
+    expect(s.release.first).toBeGreaterThan(2.4)
+    expect(s.release.min).toBeGreaterThan(2.4)
+    expect(s.release.max - s.release.min).toBeLessThan(0.001)
+    expect(s.stillRelease.n).toBeGreaterThan(10)
+    expect(s.stillRelease.min).toBeGreaterThan(0.3)
+    expect(s.stillRelease.max - s.stillRelease.min).toBeLessThan(0.001)
+  })
+
+  test('走りながら跳ぶと高い: 止まって・歩いて 0.45m、走って 0.6m、間は横の速さでなめらかに上がる（空中の時間も延びる）', () => {
+    const h = v.height
+    expect(h.length).toBe(6)
+    for (const p of h) {
+      expect(p.stand).toBe(true)
+      expect(Math.abs(p.peak - p.want)).toBeLessThan(0.005)
+    }
+    expect(h[0].peak).toBeGreaterThan(0.44)
+    expect(h[0].peak).toBeLessThanOrEqual(0.451)
+    expect(h[1].vh).toBeLessThanOrEqual(1.301)
+    expect(h[1].peak).toBeLessThanOrEqual(0.451)
+    const run = h[5]
+    expect(run.vh).toBeGreaterThan(2.55)
+    expect(run.peak).toBeGreaterThan(0.59)
+    expect(run.peak).toBeLessThanOrEqual(0.601)
+    // √(2 × 0.6 / 9.8) × 2 = 0.70 秒
+    expect(run.air).toBeGreaterThan(0.67)
+    expect(run.air).toBeLessThan(0.73)
+    // 走り出してからの速さが上がるほど高い（途中の速さは間の高さ）
+    const mids = h.slice(2, 5)
+    expect(mids.some((p) => p.peak > 0.46 && p.peak < 0.59)).toBe(true)
+    for (let i = 3; i < h.length; i++) expect(h[i].peak).toBeGreaterThanOrEqual(h[i - 1].peak - 1e-3)
+  })
+
+  test('走って跳んでも天井で止まる（ラボの中の背の高い体）', () => {
+    const c = v.runCeiling.lab
+    expect(c.vh).toBeGreaterThan(2)
+    expect(c.peak).toBeGreaterThan(0.18)
+    expect(c.peak).toBeLessThan(0.2)
+    expect(c.room).toBeGreaterThan(0.049)
   })
 
   test('天井で止まる: 頭が天井の 5cm 下より上へ行かない（ラボの中の背の高い体・屋根裏・跳んでいる間に入った扉の下）。余白が無ければ跳ばない', () => {
