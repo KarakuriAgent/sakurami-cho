@@ -181,9 +181,9 @@ export interface InteriorDecor {
 export interface DecorContext {
   model: InteriorModel
   uniforms: InteriorUniforms
-  surface: THREE.ShaderMaterial
-  glow: THREE.ShaderMaterial
-  glass: THREE.ShaderMaterial
+  surface: THREE.Material
+  glow: THREE.Material
+  glass: THREE.Material
   depth: THREE.Material
 }
 
