@@ -102,15 +102,29 @@ const sharedTextures = () =>
 const floorTextures = () => Object.fromEntries(['map', 'normalMap', 'roughnessMap'].map((k) => [k, new THREE.Texture()]))
 
 /** 映り込みを撮るのに使う所だけの、何も描かない renderer の代わり（撮った時の様子を書き残す） */
+/** WebGPURenderer の形の偽の renderer（床の映り込み: reflector() の撮る所とぼかしが使う口だけ）。描き先の移り変わりを targets に記録する */
 function fakeRenderer(onRender: (scene: THREE.Object3D, camera: THREE.Camera) => void) {
   return {
     autoClear: true,
-    xr: { enabled: false },
-    shadowMap: { autoUpdate: true },
-    state: { buffers: { depth: { setMask() {} } } },
+    coordinateSystem: THREE.WebGPUCoordinateSystem,
+    current: null as unknown,
+    mrt: null as unknown,
     targets: [] as unknown[],
+    getDrawingBufferSize(v: THREE.Vector2) {
+      return v.set(1280, 720)
+    },
+    getRenderTarget() {
+      return this.current
+    },
     setRenderTarget(t: unknown) {
+      this.current = t
       this.targets.push(t)
+    },
+    getMRT() {
+      return this.mrt
+    },
+    setMRT(m: unknown) {
+      this.mrt = m
     },
     clear() {},
     render(scene: THREE.Object3D, camera: THREE.Camera) {
@@ -143,14 +157,19 @@ describe('ラボの殻（4-4）', () => {
     const [room, , , entrance] = shell.object.children
     expect(room.children[0]).toBe(shell.floor.mesh)
     expect(entrance.children.length).toBe(1)
-    const m = shell.floor.mesh.material as THREE.MeshStandardMaterial & { mirror: number; mixStrength: number; tDiffuse: THREE.Texture | null }
-    expect(m.constructor.name).toBe('MeshReflectorMaterial')
-    expect([m.mirror, m.mixStrength, m.roughness, m.metalness]).toEqual([0.8, 7, 0.62, 0])
-    expect(m.defines).toMatchObject({ USE_BLUR: '', USE_DEPTH: '' })
-    expect(m.defines?.USE_DISTORTION).toBeUndefined()
+    // 映り込みの素材（WebGPU への移行の第 2 段から、MeshStandardNodeMaterial に TSL の reflector() とぼかしの式を足した物）。値は前の MeshReflectorMaterial と同じ
+    type U = Record<'mirror' | 'mixBlur' | 'mixStrength' | 'mixContrast' | 'minDepthThreshold' | 'maxDepthThreshold' | 'depthScale' | 'depthToBlurRatioBias', { value: number }>
+    const m = shell.floor.mesh.material as THREE.MeshStandardMaterial & { uniforms: U; colorNode: unknown; isNodeMaterial?: boolean }
+    expect(m.name).toBe('labFloorReflector')
+    expect(m.isNodeMaterial).toBe(true)
+    expect(m.colorNode).not.toBeNull()
+    const u = m.uniforms
+    expect([u.mirror.value, u.mixStrength.value, u.mixBlur.value, u.mixContrast.value, m.roughness, m.metalness]).toEqual([0.8, 7, 0.9, 1, 0.62, 0])
+    expect([u.minDepthThreshold.value, u.maxDepthThreshold.value, u.depthScale.value, u.depthToBlurRatioBias.value]).toEqual([0.25, 1.4, 0.8, 0.4])
     expect(m.map).toBe(floor.map)
-    expect(m.tDiffuse).not.toBeNull()
     expect(m.color.getHexString()).toBe(new THREE.Color('#a3abb4').getHexString())
+    // 鏡の面の向きを決める物（reflector() の target）は床の子
+    expect(shell.floor.mesh.children.length).toBe(1)
     // 床のテクスチャの下ごしらえ（色だけ sRGB）
     expect([floor.map.colorSpace, floor.normalMap.colorSpace, floor.map.anisotropy]).toEqual([THREE.SRGBColorSpace, THREE.NoColorSpace, 16])
     expect([shell.floor.mesh.receiveShadow, shell.floor.mesh.rotation.x]).toEqual([true, -Math.PI / 2])
@@ -229,7 +248,7 @@ describe('ラボの殻（4-4）', () => {
     expect(color.r).toBeCloseTo(W.WASH_COLOR.r * 0.3, 12)
   })
 
-  test('毎コマ: 見学エントランスの扉を進める（注目点が扉の前なら開く）。床の映り込みは WebGPU への移行の第 2 段まで撮らない', async () => {
+  test('毎コマ: 床を隠して映り込みを撮ってから、見学エントランスの扉を進める（注目点が扉の前なら開く）', async () => {
     const { shell } = await makeShell('high')
     const D = await load<DoorMod>(`${LAB}/shell/entranceDoor.ts`)
     const P = await load<PlanMod>(`${LAB_CORE}/plan.ts`)
@@ -251,10 +270,13 @@ describe('ラボの殻（4-4）', () => {
       if (s === scene) seen.push({ floorVisible: shell.floor.mesh.visible, open: D.entranceDoor.open })
     })
     shell.update(0.05, { time: 1, camera, renderer, scene })
-    // WebGPU への移行の第 1 段: 床の映り込みは撮らない（前は床を隠して場面を 1 回撮り、ぼかしを 5 回描いて撮る先を戻していた。前の撮り方は
-    // WebGL の state を直に触るので WebGPURenderer では呼べない。第 2 段で TSL の reflector() に置き換えたら、ここも戻す）
-    expect(seen).toEqual([])
+    // 場面を 1 回撮る（床を隠して。TSL の reflector() の撮る所）。そのあとぼかしを 5 回描き（描き先は撮る先の外の 3 枚）、最後に撮る先を戻す
+    expect(seen).toEqual([{ floorVisible: false, open: 0 }])
     expect(shell.floor.mesh.visible).toBe(true)
+    expect((shell.floor.mesh.material as THREE.Material).visible).toBe(true)
+    expect(renderer.targets.length).toBe(2 + 5 + 1)
+    expect(renderer.targets.at(-1)).toBeNull()
+    expect(renderer.autoClear).toBe(true)
     expect(D.entranceDoor.open).toBeCloseTo(0.05 / P.ENTRANCE_DOOR.openSeconds, 12)
     // 扉の組（西・東）は外へ逆向きに回る
     const leaves = shell.object.children[3].children[0].children[1].children

@@ -1,86 +1,23 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { Fn, If, abs, cameraPosition, clamp, dot, float, floor, fract, normalWorld, normalize, positionWorld, pow, sin, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import { PALETTE } from '../palette'
-import { GLSL_HASH, sharedTime } from './shared'
+import { hash11, sharedTime } from './shared'
 
 /**
- * ホログラム用の自作シェーダー。
+ * ホログラム用の自作の材質（TSL）。
  * フレネル（輪郭が明るい）+ 走査線 + 流れる光の帯 + ちらつき を加算合成で描く。
  * depthWrite=false なので奥の物体を隠さない。ホロテーブル・浮遊 UI パネル・ガイドなどで使い回す。
  *
  * mapTexture を渡すと Canvas などで描いた UI をホログラムとして表示できる（テクスチャの rgb × color、alpha が不透明度）。
  * three だけの物。R3F の JSX（<hologramMaterial>）で使う登録（extend）は react/labElements.ts（段 4 の 4-2）。
+ *
+ * WebGPU への移行（第 2 段）: GLSL の ShaderMaterial から NodeMaterial（fragmentNode に前の gl_FragColor と同じ式）へ。
+ * インスタンスの行列は three が positionWorld・normalWorld に入れる。値は前と同じく uniforms.<名前>.value と getter / setter で読み書きする
  */
 
-const vertexShader = /* glsl */ `
-varying vec3 vWorldPos;
-varying vec3 vWorldNormal;
-varying vec2 vUv;
-
-void main() {
-  vUv = uv;
-  vec4 localPos = vec4(position, 1.0);
-  vec3 localNormal = normal;
-  #ifdef USE_INSTANCING
-    localPos = instanceMatrix * localPos;
-    localNormal = mat3(instanceMatrix) * localNormal;
-  #endif
-  vec4 worldPos = modelMatrix * localPos;
-  vWorldPos = worldPos.xyz;
-  vWorldNormal = normalize(mat3(modelMatrix) * localNormal);
-  gl_Position = projectionMatrix * viewMatrix * worldPos;
-}
-`
-
-const fragmentShader = /* glsl */ `
-uniform float uTime;
-uniform vec3 uColor;
-uniform float uIntensity;
-uniform float uOpacity;
-uniform float uFresnelPower;
-uniform float uFresnelStrength;
-uniform float uBase;
-uniform float uScanDensity;
-uniform float uScanSpeed;
-uniform float uFlicker;
-uniform float uSweep;
-uniform sampler2D uMap;
-uniform float uUseMap;
-
-varying vec3 vWorldPos;
-varying vec3 vWorldNormal;
-varying vec2 vUv;
-
-${GLSL_HASH}
-
-void main() {
-  vec3 viewDir = normalize(cameraPosition - vWorldPos);
-  vec3 n = normalize(vWorldNormal);
-  float ndv = clamp(abs(dot(n, viewDir)), 0.0, 1.0);
-  float fresnel = pow(clamp(1.0 - ndv, 0.0, 1.0), uFresnelPower);
-
-  // 細かい走査線（ワールド Y 基準なので、パーツ同士で線がそろう）
-  float scan = 0.72 + 0.28 * sin(vWorldPos.y * uScanDensity - uTime * uScanSpeed);
-  // ゆっくり上へ流れる明るい帯
-  float sweep = smoothstep(0.9, 1.0, fract(vWorldPos.y * 0.55 - uTime * 0.22)) * uSweep;
-  // ときどき入るちらつき
-  float h = hash11(floor(uTime * 18.0));
-  float flicker = 1.0 - uFlicker * (0.55 * step(0.93, h) + 0.2 * h);
-
-  vec3 color = uColor;
-  float alpha;
-  if (uUseMap > 0.5) {
-    vec4 tex = texture2D(uMap, vUv);
-    color *= tex.rgb;
-    alpha = tex.a * (0.8 + 0.2 * scan) + uBase * scan + sweep * tex.a;
-  } else {
-    alpha = (uBase + uFresnelStrength * fresnel) * scan + sweep;
-  }
-  alpha *= flicker * uOpacity;
-
-  gl_FragColor = vec4(color * uIntensity, clamp(alpha, 0.0, 1.0));
-  #include <colorspace_fragment>
-}
-`
+/** mapTexture が無いときに読む 1 画素の白（uUseMap = 0 なので色には効かない） */
+const BLANK = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1)
+BLANK.needsUpdate = true
 
 export interface HologramParameters {
   color?: THREE.ColorRepresentation
@@ -96,32 +33,71 @@ export interface HologramParameters {
   mapTexture?: THREE.Texture | null
 }
 
-export class HologramMaterial extends THREE.ShaderMaterial {
+function hologramUniforms(params: HologramParameters) {
+  return {
+    uTime: sharedTime,
+    uColor: uniform(new THREE.Color(params.color ?? PALETTE.cyan)) as unknown as THREE.UniformNode<'vec3', THREE.Color>,
+    uIntensity: uniform(params.intensity ?? 2.2),
+    uOpacity: uniform(params.opacity ?? 1),
+    uFresnelPower: uniform(params.fresnelPower ?? 2.2),
+    uFresnelStrength: uniform(params.fresnelStrength ?? 0.9),
+    uBase: uniform(params.base ?? 0.08),
+    uScanDensity: uniform(params.scanDensity ?? 160),
+    uScanSpeed: uniform(params.scanSpeed ?? 6),
+    uFlicker: uniform(params.flicker ?? 0.25),
+    uSweep: uniform(params.sweep ?? 0.35),
+    uMap: texture(params.mapTexture ?? BLANK),
+    uUseMap: uniform(params.mapTexture ? 1 : 0),
+  }
+}
+
+export class HologramMaterial extends THREE.NodeMaterial {
+  static get type() {
+    return 'HologramMaterial'
+  }
+
+  readonly uniforms: ReturnType<typeof hologramUniforms>
+  /** 線で描く（WebGPURenderer は NodeMaterial の wireframe を読む。前の ShaderMaterial と同じ口。KB-001 の分解図の内部構造） */
+  declare wireframe: boolean
+
   constructor(params: HologramParameters = {}) {
-    super({
-      uniforms: {
-        uTime: sharedTime,
-        uColor: { value: new THREE.Color(params.color ?? PALETTE.cyan) },
-        uIntensity: { value: params.intensity ?? 2.2 },
-        uOpacity: { value: params.opacity ?? 1 },
-        uFresnelPower: { value: params.fresnelPower ?? 2.2 },
-        uFresnelStrength: { value: params.fresnelStrength ?? 0.9 },
-        uBase: { value: params.base ?? 0.08 },
-        uScanDensity: { value: params.scanDensity ?? 160 },
-        uScanSpeed: { value: params.scanSpeed ?? 6 },
-        uFlicker: { value: params.flicker ?? 0.25 },
-        uSweep: { value: params.sweep ?? 0.35 },
-        uMap: { value: params.mapTexture ?? null },
-        uUseMap: { value: params.mapTexture ? 1 : 0 },
-      },
-      vertexShader,
-      fragmentShader,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    })
+    super()
+    const u = hologramUniforms(params)
+    this.uniforms = u
+    this.wireframe = false
+    this.transparent = true
+    this.depthWrite = false
+    this.blending = THREE.AdditiveBlending
+    this.side = THREE.DoubleSide
+    this.toneMapped = false
+    this.fog = false
+    this.lights = false
+    this.fragmentNode = Fn(() => {
+      const viewDir = normalize(cameraPosition.sub(positionWorld))
+      const n = normalize(normalWorld)
+      const ndv = clamp(abs(dot(n, viewDir)), 0.0, 1.0)
+      const fresnel = pow(clamp(ndv.oneMinus(), 0.0, 1.0), u.uFresnelPower)
+      const wy = positionWorld.y.toVar()
+      // 細かい走査線（ワールド Y 基準なので、パーツ同士で線がそろう）
+      const scan = sin(wy.mul(u.uScanDensity).sub(u.uTime.mul(u.uScanSpeed))).mul(0.28).add(0.72).toVar()
+      // ゆっくり上へ流れる明るい帯
+      const sweep = smoothstep(0.9, 1.0, fract(wy.mul(0.55).sub(u.uTime.mul(0.22)))).mul(u.uSweep).toVar()
+      // ときどき入るちらつき
+      const h = hash11(floor(u.uTime.mul(18.0))).toVar()
+      const flicker = float(1.0).sub(u.uFlicker.mul(step(0.93, h).mul(0.55).add(h.mul(0.2))))
+      const color = vec3(u.uColor).toVar()
+      const alpha = float(0).toVar()
+      If(u.uUseMap.greaterThan(0.5), () => {
+        const tex = u.uMap.sample(uv()).toVar()
+        color.mulAssign(tex.rgb)
+        alpha.assign(tex.a.mul(scan.mul(0.2).add(0.8)).add(u.uBase.mul(scan)).add(sweep.mul(tex.a)))
+      }).Else(() => {
+        alpha.assign(u.uBase.add(u.uFresnelStrength.mul(fresnel)).mul(scan).add(sweep))
+      })
+      alpha.mulAssign(flicker.mul(u.uOpacity))
+      return vec4(color.mul(u.uIntensity), clamp(alpha, 0.0, 1.0))
+    })()
+    this.name = 'hologram'
   }
 
   get color(): THREE.Color {
@@ -187,13 +163,13 @@ export class HologramMaterial extends THREE.ShaderMaterial {
   }
   /**
    * UI などを描いたテクスチャ。three.js 標準の `map` と名前が衝突すると
-   * 余計な define が付くため別名にしている。
+   * 余計な処理が付くため別名にしている。無いときは uUseMap = 0（読むのは 1 画素の白）
    */
   get mapTexture(): THREE.Texture | null {
-    return this.uniforms.uMap.value
+    return this.uniforms.uUseMap.value > 0.5 ? this.uniforms.uMap.value : null
   }
   set mapTexture(v: THREE.Texture | null) {
-    this.uniforms.uMap.value = v
+    this.uniforms.uMap.value = v ?? BLANK
     this.uniforms.uUseMap.value = v ? 1 : 0
   }
 }

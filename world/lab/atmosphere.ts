@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { mulberry32 } from '../../core/random'
 import { addLabLightDimmer } from '../labLight'
-import { DustMaterial, LightShaftMaterial } from '../materials/effects'
+import { LightShaftMaterial, createDust } from '../materials/effects'
 import { LAB_SPOTS, zp } from './lighting/lightTable'
 import { LAB_PLACEMENTS, type LabPlacement } from '../../core/lab/placements'
 import { PLACE, ROOM, type Vec3 } from '../../core/lab/plan'
@@ -80,9 +80,8 @@ export const LAB_SHAFTS: readonly ShaftSpec[] = [
   { kit: 'gallery', from: S.gallery.from, to: zp(PLACE.gallery, [0, 0, 0.9]), radius: 1.3, color: '#e8f0ff', intensity: 0.035, roomLight: true },
 ]
 
-/** 空中を舞うほこり（renderOrder 6。カリングしない） */
+/** 空中を舞うほこり（renderOrder 6。カリングしない）。Sprite を粒の数だけ並べる（WebGPU の点は 1px だけ。effects.ts の createDust） */
 function dust(count: number, pixelRatio: number) {
-  const geometry = new THREE.BufferGeometry()
   const pos = new Float32Array(count * 3)
   const seed = new Float32Array(count)
   const rnd = mulberry32(2350)
@@ -92,18 +91,16 @@ function dust(count: number, pixelRatio: number) {
     pos[i * 3 + 2] = ROOM.centerZ + (rnd() - 0.5) * ROOM.depth * 0.95
     seed[i] = rnd()
   }
-  geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-  geometry.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1))
-  // 粒は部屋全体に散らばるのでカリングしない
-  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 20)
-  const material = new DustMaterial()
+  const points = createDust(pos, seed)
+  const material = points.material
   material.uniforms.uPixelRatio.value = pixelRatio
   material.uniforms.uOpacity.value = 0.22
-  ;(material.uniforms.uBoundsMin.value as THREE.Vector3).fromArray([-ROOM.halfWidth, 0, ROOM.north])
-  ;(material.uniforms.uBoundsMax.value as THREE.Vector3).fromArray([ROOM.halfWidth, ROOM.height, ROOM.south])
-  const points = new THREE.Points(geometry, material)
+  material.uniforms.uBoundsMin.value.fromArray([-ROOM.halfWidth, 0, ROOM.north])
+  material.uniforms.uBoundsMax.value.fromArray([ROOM.halfWidth, ROOM.height, ROOM.south])
+  // 粒は部屋全体に散らばるのでカリングしない
   points.frustumCulled = false
   points.renderOrder = 6
+  points.name = 'lab:dust'
   return points
 }
 
@@ -137,12 +134,12 @@ export function createLabAtmosphere(o: { quality: 'high' | 'low'; pixelRatio: nu
       return () => offs.forEach((off) => off())
     },
     setPixelRatio(dpr) {
-      ;(points.material as DustMaterial).uniforms.uPixelRatio.value = dpr
+      points.material.uniforms.uPixelRatio.value = dpr
     },
     dispose() {
       for (const { shaft } of shafts) shaft.dispose()
-      points.geometry.dispose()
-      ;(points.material as DustMaterial).dispose()
+      // Sprite の形（板 1 枚）は three の Sprite が共有する物なので捨てない
+      points.material.dispose()
     },
   }
 }

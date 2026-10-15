@@ -91,7 +91,7 @@ CI（GitHub Actions）が push と pull request のたびに、型の確かめ�
 - それ以外のコードは **MIT**（[LICENSE-CODE](LICENSE-CODE)。Copyright (c) 2026 株式会社0235）
 - 他の人の素材は、その出典（CREDITS）とファイルの頭の注記のライセンス: `assets/textures/` は CC0（[assets/textures/CREDITS.md](assets/textures/CREDITS.md)）、
   `assets/models/animations/` は MIT・CC0（[assets/models/animations/CREDITS.md](assets/models/animations/CREDITS.md)）、
-  `world/lab/shell/reflector/` は drei から写した MIT（ファイルの頭の注記）
+  `world/lab/shell/floor.ts` の床の映り込みのぼかしと混ぜ方は drei から写した MIT（ファイルの頭の注記）
 
 CC BY-NC 4.0 にする物（町の地図データと、設定資料をコードの形で書いた物）:
 

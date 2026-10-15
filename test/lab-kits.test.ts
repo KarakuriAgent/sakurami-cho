@@ -422,12 +422,15 @@ function stationParts(kit: Kit) {
   const [, , castor, pollux, ring, core] = station.children as THREE.Group[]
   return { station, cables, danger, castor: castor!, pollux: pollux!, ring: ring!, core: core! }
 }
+/** 自作の材質（TSL）の値の一覧（material.uniforms.<名前>.value。前の ShaderMaterial と同じ書き方） */
+type UniformsMaterial = THREE.Material & { uniforms: Record<string, { value: unknown } | undefined> }
+
 /** 光の芯（FlowMaterial）の mesh（作った順） */
 function flowCores(o: THREE.Object3D) {
   const out: THREE.Mesh[] = []
   o.traverse((x) => {
     const m = (x as THREE.Mesh).material as THREE.Material | undefined
-    if (m && !Array.isArray(m) && (m as THREE.ShaderMaterial).uniforms?.uDensity) out.push(x as THREE.Mesh)
+    if (m && !Array.isArray(m) && (m as UniformsMaterial).uniforms?.uDensity) out.push(x as THREE.Mesh)
   })
   return out
 }
@@ -499,10 +502,10 @@ describe('基地局のキット（4-6）', () => {
     // 管: 光の芯の強さに flash（linkColor のある 7 本とも）
     fx.flash = 0
     kit.update(0, frame(3))
-    const before = flowCores(kit.object).map((m) => (m.material as THREE.ShaderMaterial).uniforms.uIntensity!.value as number)
+    const before = flowCores(kit.object).map((m) => (m.material as UniformsMaterial).uniforms.uIntensity!.value as number)
     fx.flash = 1
     kit.update(0, frame(3))
-    const after = flowCores(kit.object).map((m) => (m.material as THREE.ShaderMaterial).uniforms.uIntensity!.value as number)
+    const after = flowCores(kit.object).map((m) => (m.material as UniformsMaterial).uniforms.uIntensity!.value as number)
     after.forEach((v, i) => expect(v).toBeCloseTo(before[i]! * (1 + 1.5), 12))
     lab.dispose()
   })
@@ -543,7 +546,7 @@ describe('基地局のキット（4-6）', () => {
     expect(b.min.z).toBeCloseTo(a.min.z - 0.002, 9)
     const shell = core.children.find((c) => Array.isArray((c as THREE.Mesh).material)) as THREE.Mesh<THREE.BufferGeometry, THREE.Material[]>
     const mats = shell.material as THREE.Material[] & { transparent?: boolean; depthWrite?: boolean }
-    expect(mats.map((m) => m.type)).toEqual(['MeshPhysicalMaterial', 'ShaderMaterial'])
+    expect(mats.map((m) => m.type)).toEqual(['MeshPhysicalMaterial', 'HologramMaterial'])
     expect([mats.transparent, mats.depthWrite]).toEqual([true, false])
     expect(shell.geometry.groups.map((g) => g.materialIndex)).toEqual([0, 1])
     expect(shell.geometry.groups[0]!.start).toBe(0)
@@ -970,7 +973,7 @@ describe('開発デスクのキット（4-8）', () => {
     const { wing, center, left, right, panels } = deskParts(kit)
     const screenOf = (g: THREE.Group) => ((g.children[2] as THREE.Mesh).material as THREE.MeshStandardMaterial).emissiveMap
     expect([wing, center, left, right].map(screenOf)).toEqual([kit.screens.wing, kit.screens.center, kit.screens.left, kit.screens.right].map((s) => s!.texture))
-    const holoMap = (g: THREE.Group) => ((g.children[0] as THREE.Mesh).material as THREE.ShaderMaterial).uniforms.uMap!.value
+    const holoMap = (g: THREE.Group) => ((g.children[0] as THREE.Mesh).material as UniformsMaterial).uniforms.uMap!.value
     expect(panels.map(holoMap)).toEqual([kit.screens.holoDiagnostics, kit.screens.holoPipeline, kit.screens.holoNetwork].map((s) => s!.texture))
     // 最初の更新で全部描き、そのあとは回数ごと（1/12 秒たった画面だけ）
     kit.update(0.02, frame(1))

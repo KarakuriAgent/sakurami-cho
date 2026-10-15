@@ -1,19 +1,50 @@
-import * as THREE from 'three'
-import type { WebGPURenderer } from 'three/webgpu'
+import * as THREE from 'three/webgpu'
+import { Fn, clamp, materialColor, materialRoughness, max, min, mix, reflector, smoothstep, texture, uniform, uv, vec2, vec4 } from 'three/tsl'
 import { ROOM } from '../../../core/lab/plan'
 import type { LabFloorTextures } from '../textures'
-import { BlurPass } from './reflector/BlurPass'
-import { MeshReflectorMaterial } from './reflector/MeshReflectorMaterial'
 
 /**
  * ラボの床（docs/design/map-split.md §6 の「段 4」・4-4。前の Room.tsx の Floor）。品質が high なら、濡れたコンクリートのような、
- * なめらかにぼけた映り込み（drei の MeshReflectorMaterial を reflector/ に写した物）。low ならふつうの PBR の床。
+ * なめらかにぼけた映り込み（前は drei の MeshReflectorMaterial を写した物）。low ならふつうの PBR の床。
  *
- * 映り込みを描く手順は、drei の core/MeshReflectorMaterial.js（React の部品）の beforeRender と useFrame をそのまま写した:
- * 床を隠す → 床で折り返したカメラ（斜めの近い面で床の下を切る）で場面を撮る（xr と影の地図の自動更新を止める。autoClear でなければ消す）
- * → ぼかす → 戻す。撮る先（1024 px・HalfFloat・深さのテクスチャ）とぼかしは作る時に 1 回だけ作る（drei の useMemo と同じ。値は変えない）。
- * 毎コマ、殻の更新の初め（照明と町の遠景のあと、什器・KB-001・配信の部品の更新より前。案の E2・E3）に renderReflection を呼ぶ。
- * 映るのは、什器などの前のコマの姿と、光と花音の今のコマの姿（前と同じ）
+ * WebGPU への移行（第 2 段）: 映り込みは TSL の reflector()（three の ReflectorNode）で撮り、ぼかし（drei の BlurPass・ConvolutionMaterial の
+ * 4 点の Kawase。深さで中心へ寄せる）は QuadMesh と NodeMaterial で同じ式に、床の色の混ぜ方（drei の MeshReflectorMaterial の
+ * emissivemap_fragment の後ろに足していた式）は colorNode で同じ式にした。
+ *
+ * 描く順は前と同じ: 毎コマ、殻の更新の初め（照明と町の遠景のあと、什器・KB-001・配信の部品の更新より前。案の E2・E3）に renderReflection を呼び、
+ * 床を隠す → 床で折り返したカメラ（斜めの近い面で床の下を切る）で場面を撮る → ぼかす → 戻す。reflector() は既定では床を描くときに撮るが、
+ * そうするとぼかしを挟めないので、撮る所（ReflectorBaseNode.updateBefore）をここから呼び、自動では撮らない（updateBeforeType = NONE）。
+ * 映るのは、什器などの前のコマの姿と、光と花音の今のコマの姿（前と同じ）。
+ *
+ * ぼかし（convolutionMaterial）と床の色の混ぜ方（createReflector の colorNode）は、drei（@react-three/drei 10.7.9）の materials/ConvolutionMaterial.js・
+ * BlurPass.js・MeshReflectorMaterial.js の式を写した物（MIT License, Copyright (c) 2020 react-spring。全文は下）。
+ *
+ * 前と違う所: 撮る先の大きさは描画の大きさ（reflector() の決まり。前は 1024 px の正方形）。ぼかしの幅は前と同じく画面の割合（blur の 520・260 px 分）
+ * なので、見た目のぼけ方は変わらない。折り返したカメラは前と同じく 0 番のレイヤーだけを見る（遠景のレイヤー OUTDOOR_LAYER などは映さない）
+ */
+
+/*
+ * MIT License（drei から写した所: convolutionMaterial・createReflector の colorNode の式）
+ *
+ * Copyright (c) 2020 react-spring
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
 /** 映り込みの値（前の Room.tsx の MeshReflectorMaterial に渡していた物） */
@@ -39,7 +70,7 @@ const REFLECTOR = {
 export interface LabFloor {
   readonly mesh: THREE.Mesh
   /** 床の映り込みを描く（high のときだけ。low なら何もしない） */
-  renderReflection(renderer: WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera): void
+  renderReflection(renderer: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera): void
   /** 撮る先・ぼかし・素材・形を捨てる（床のテクスチャは使う側の物なので捨てない） */
   dispose(): void
 }
@@ -59,16 +90,15 @@ export function createLabFloor(o: { textures: LabFloorTextures; quality: 'high' 
       },
     }
   }
-  const reflector = createReflector(o.textures.map)
-  const mesh = floorMesh(geometry, reflector.material)
+  const reflection = createReflector(o.textures.map)
+  const mesh = floorMesh(geometry, reflection.material)
+  mesh.add(reflection.target)
   return {
     mesh,
-    // WebGPU への移行（第 1 段）: 映り込みを撮る所（reflector.render）は WebGL の state を直に触るので、WebGPURenderer では呼ばない。
-    // 床は MeshReflectorMaterial の元の MeshStandardMaterial の見た目（映り込み無し）で出る。第 2 段で TSL の reflector() に置き換える
-    renderReflection: () => undefined,
+    renderReflection: (renderer, scene, camera) => reflection.render(mesh, renderer, scene, camera),
     dispose() {
       geometry.dispose()
-      reflector.dispose()
+      reflection.dispose()
     },
   }
 }
@@ -81,152 +111,163 @@ function floorMesh(geometry: THREE.BufferGeometry, material: THREE.Material) {
   return mesh
 }
 
+/** ぼかしの 1 回分（drei の ConvolutionMaterial と同じ式。4 点を斜めに読み、深さで中心へ寄せる。kernel は回ごとの広がり） */
+type Tex = THREE.TextureNode<'vec4'>
+
+function convolutionMaterial(input: Tex, depth: Tex, kernel: number, u: ReturnType<typeof blurUniforms>) {
+  const m = new THREE.NodeMaterial()
+  m.name = 'labFloorBlur'
+  m.depthTest = false
+  m.depthWrite = false
+  m.blending = THREE.NoBlending
+  m.toneMapped = false
+  m.fog = false
+  m.lights = false
+  m.fragmentNode = Fn(() => {
+    const vUv = uv().toVar()
+    const dUv = u.texelSize.mul(kernel).add(u.texelSize.mul(0.5)).toVar()
+    // USE_DEPTH（depthScale > 0）のとき: 近い物ほどぼかさない
+    const d = depth.sample(vUv).r
+    const depthFactor = clamp(smoothstep(u.minDepthThreshold, u.maxDepthThreshold, d.oneMinus()).mul(u.depthScale).add(0.25), 0.0, 1.0).toVar()
+    const tap = (dx: number, dy: number) => input.sample(mix(vec2(vUv.x.add(dUv.x.mul(dx)), vUv.y.add(dUv.y.mul(dy))), vUv, depthFactor))
+    return tap(-1, 1).add(tap(1, 1)).add(tap(1, -1)).add(tap(-1, -1)).mul(0.25)
+  })()
+  return m
+}
+
+function blurUniforms(R: typeof REFLECTOR) {
+  return {
+    /** 1 / ぼかしの幅（drei の setTexelSize(1 / width, 1 / height)） */
+    texelSize: uniform(new THREE.Vector2(1 / R.blur[0], 1 / R.blur[1])),
+    minDepthThreshold: uniform(R.minDepthThreshold),
+    maxDepthThreshold: uniform(R.maxDepthThreshold),
+    depthScale: uniform(R.depthScale),
+  }
+}
+
 /**
- * 映り込みの素材と、描く手順（drei の core/MeshReflectorMaterial.js の写し）。
- * 法線マップで映り込みを歪ませる（波打ったノイズになる）・ラフネスマップでぼかし量がまだらになるので、反射の側には色マップの色ムラだけを使う
+ * 映り込みの素材と、描く手順。法線マップで映り込みを歪ませる（波打ったノイズになる）・ラフネスマップでぼかし量がまだらになるので、
+ * 反射の側には色マップの色ムラだけを使う（前と同じ）
  */
 function createReflector(map: THREE.Texture) {
   const R = REFLECTOR
-  const blur = R.blur
-  const hasBlur = blur[0] + blur[1] > 0
-  const blurX = blur[0]
-  const blurY = blur[1]
-  // drei の useState の物
-  const reflectorPlane = new THREE.Plane()
-  const normal = new THREE.Vector3()
-  const reflectorWorldPosition = new THREE.Vector3()
-  const cameraWorldPosition = new THREE.Vector3()
-  const rotationMatrix = new THREE.Matrix4()
-  const lookAtPosition = new THREE.Vector3(0, 0, -1)
-  const clipPlane = new THREE.Vector4()
-  const view = new THREE.Vector3()
-  const target = new THREE.Vector3()
-  const q = new THREE.Vector4()
-  const textureMatrix = new THREE.Matrix4()
-  const virtualCamera = new THREE.PerspectiveCamera()
+  const hasBlur = R.blur[0] + R.blur[1] > 0
+  // 撮る所（ReflectorBaseNode）。深さも撮る（近い物ほどくっきり映す）
+  const refl = reflector({ depth: true, resolutionScale: 1 })
+  const base = refl.reflector
+  base.updateBeforeType = 'none'
+  // 折り返したカメラは 0 番のレイヤーだけを見る（前の drei は new PerspectiveCamera() の既定のレイヤー）
+  const getVirtualCamera = base.getVirtualCamera.bind(base)
+  base.getVirtualCamera = (camera: THREE.Camera) => {
+    const v = getVirtualCamera(camera)
+    v.layers.set(0)
+    return v
+  }
+  const depthNode = refl.getDepthNode()
 
-  // drei の useMemo の物（撮る先・ぼかし）
-  const parameters = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, type: THREE.HalfFloatType }
-  const fbo1 = new THREE.WebGLRenderTarget(R.resolution, R.resolution, parameters)
-  fbo1.depthBuffer = true
-  fbo1.depthTexture = new THREE.DepthTexture(R.resolution, R.resolution)
-  fbo1.depthTexture.format = THREE.DepthFormat
-  fbo1.depthTexture.type = THREE.UnsignedShortType
-  const fbo2 = new THREE.WebGLRenderTarget(R.resolution, R.resolution, parameters)
-  const blurpass = new BlurPass({
-    resolution: R.resolution,
-    width: blurX,
-    height: blurY,
-    minDepthThreshold: R.minDepthThreshold,
-    maxDepthThreshold: R.maxDepthThreshold,
-    depthScale: R.depthScale,
-    depthToBlurRatioBias: R.depthToBlurRatioBias,
+  // ぼかし（drei の BlurPass: kernel [0, 1, 2, 2, 3] の 5 回。4 回を A・B に交互に描き、最後を out へ）
+  const rtOptions = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, generateMipmaps: false }
+  const targetA = new THREE.RenderTarget(1, 1, rtOptions)
+  const targetB = new THREE.RenderTarget(1, 1, rtOptions)
+  const out = new THREE.RenderTarget(1, 1, rtOptions)
+  const bu = blurUniforms(R)
+  const KERNEL = [0, 1, 2, 2, 3]
+  const firstInput = texture(new THREE.Texture()) as Tex
+  // 深さは撮る先の DepthTexture に替える（形の上でも深さのテクスチャにしておく。シェーダーの宣言が深さのテクスチャになる）
+  const blurDepth = texture(new THREE.DepthTexture(1, 1)) as Tex
+  const passes = KERNEL.map((k, i) => {
+    const input = i === 0 ? firstInput : (texture((i - 1) % 2 === 0 ? targetA.texture : targetB.texture) as Tex)
+    const dest = i === KERNEL.length - 1 ? out : i % 2 === 0 ? targetA : targetB
+    return { material: convolutionMaterial(input, blurDepth, k, bu), dest }
   })
+  const quad = new THREE.QuadMesh(passes[0]!.material)
 
-  // 素材（R3F が JSX の値を入れていた順: drei の reflectorProps → 渡した値）
-  const material = new MeshReflectorMaterial()
-  material.mirror = R.mirror
-  material.textureMatrix = textureMatrix
-  material.mixBlur = R.mixBlur
-  material.tDiffuse = fbo1.texture
-  material.tDepth = fbo1.depthTexture
-  material.tDiffuseBlur = fbo2.texture
-  material.hasBlur = hasBlur
-  material.mixStrength = R.mixStrength
-  material.minDepthThreshold = R.minDepthThreshold
-  material.maxDepthThreshold = R.maxDepthThreshold
-  material.depthScale = R.depthScale
-  material.depthToBlurRatioBias = R.depthToBlurRatioBias
-  material.distortion = R.distortion
-  material.mixContrast = R.mixContrast
-  const defines = material.defines!
-  if (hasBlur) defines.USE_BLUR = ''
-  if (R.depthScale > 0) defines.USE_DEPTH = ''
+  // 床の素材（MeshStandardMaterial に drei の MeshReflectorMaterial の式を足した物）
+  const material = new THREE.MeshStandardNodeMaterial()
+  material.name = 'labFloorReflector'
   material.map = map
   material.color.set(R.color)
   material.roughness = R.roughness
   material.metalness = R.metalness
-
-  /** 折り返したカメラと、映り込みを貼る行列を決める（drei の beforeRender） */
-  const beforeRender = (parent: THREE.Object3D, camera: THREE.Camera) => {
-    reflectorWorldPosition.setFromMatrixPosition(parent.matrixWorld)
-    cameraWorldPosition.setFromMatrixPosition(camera.matrixWorld)
-    rotationMatrix.extractRotation(parent.matrixWorld)
-    normal.set(0, 0, 1)
-    normal.applyMatrix4(rotationMatrix)
-    reflectorWorldPosition.addScaledVector(normal, R.reflectorOffset)
-    view.subVectors(reflectorWorldPosition, cameraWorldPosition)
-    // Avoid rendering when reflector is facing away
-    if (view.dot(normal) > 0) return
-    view.reflect(normal).negate()
-    view.add(reflectorWorldPosition)
-    rotationMatrix.extractRotation(camera.matrixWorld)
-    lookAtPosition.set(0, 0, -1)
-    lookAtPosition.applyMatrix4(rotationMatrix)
-    lookAtPosition.add(cameraWorldPosition)
-    target.subVectors(reflectorWorldPosition, lookAtPosition)
-    target.reflect(normal).negate()
-    target.add(reflectorWorldPosition)
-    virtualCamera.position.copy(view)
-    virtualCamera.up.set(0, 1, 0)
-    virtualCamera.up.applyMatrix4(rotationMatrix)
-    virtualCamera.up.reflect(normal)
-    virtualCamera.lookAt(target)
-    virtualCamera.far = (camera as THREE.PerspectiveCamera).far // Used in WebGLBackground
-    virtualCamera.updateMatrixWorld()
-    virtualCamera.projectionMatrix.copy(camera.projectionMatrix)
-    // Update the texture matrix
-    textureMatrix.set(0.5, 0.0, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0)
-    textureMatrix.multiply(virtualCamera.projectionMatrix)
-    textureMatrix.multiply(virtualCamera.matrixWorldInverse)
-    textureMatrix.multiply(parent.matrixWorld)
-    // Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
-    // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
-    reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition)
-    reflectorPlane.applyMatrix4(virtualCamera.matrixWorldInverse)
-    clipPlane.set(reflectorPlane.normal.x, reflectorPlane.normal.y, reflectorPlane.normal.z, reflectorPlane.constant)
-    const projectionMatrix = virtualCamera.projectionMatrix
-    q.x = (Math.sign(clipPlane.x) + projectionMatrix.elements[8]) / projectionMatrix.elements[0]
-    q.y = (Math.sign(clipPlane.y) + projectionMatrix.elements[9]) / projectionMatrix.elements[5]
-    q.z = -1.0
-    q.w = (1.0 + projectionMatrix.elements[10]) / projectionMatrix.elements[14]
-    // Calculate the scaled plane vector
-    clipPlane.multiplyScalar(2.0 / clipPlane.dot(q))
-    // Replacing the third row of the projection matrix
-    projectionMatrix.elements[2] = clipPlane.x
-    projectionMatrix.elements[6] = clipPlane.y
-    projectionMatrix.elements[10] = clipPlane.z + 1.0
-    projectionMatrix.elements[14] = clipPlane.w
+  const u = {
+    mirror: uniform(R.mirror),
+    mixBlur: uniform(R.mixBlur),
+    mixStrength: uniform(R.mixStrength),
+    mixContrast: uniform(R.mixContrast),
+    minDepthThreshold: uniform(R.minDepthThreshold),
+    maxDepthThreshold: uniform(R.maxDepthThreshold),
+    depthScale: uniform(R.depthScale),
+    depthToBlurRatioBias: uniform(R.depthToBlurRatioBias),
   }
+  // 値（前の MeshReflectorMaterial の mirror・mixStrength などと同じ意味）は material.uniforms.<名前>.value で読み書きできる
+  Object.assign(material, { uniforms: u })
+  const blurTexture = texture(out.texture, refl.uvNode)
+  material.colorNode = Fn(() => {
+    const diffuse = vec4(materialColor as unknown as THREE.Node<'vec4'>).toVar()
+    const baseC = refl.toVar()
+    const blur = blurTexture.toVar()
+    const merge = baseC.toVar()
+    // USE_DEPTH: 近い物ほどくっきり（深さの .r × .a。深さのテクスチャの a は 1）
+    const depthFactor = max(0.0001, min(1.0, smoothstep(u.minDepthThreshold, u.maxDepthThreshold, depthNode.r.oneMinus()).mul(u.depthScale))).toVar()
+    if (hasBlur) {
+      blur.mulAssign(min(1.0, depthFactor.add(u.depthToBlurRatioBias)))
+      merge.mulAssign(min(1.0, depthFactor.add(0.5)))
+      const blurFactor = min(1.0, u.mixBlur.mul(materialRoughness))
+      merge.assign(mix(merge, blur, blurFactor))
+    } else {
+      merge.mulAssign(depthFactor)
+    }
+    const newMerge = merge.rgb.sub(0.5).mul(u.mixContrast).add(0.5)
+    return vec4(diffuse.rgb.mul(min(1.0, u.mirror).oneMinus().add(newMerge.mul(u.mixStrength))), diffuse.a)
+  })()
 
+  const size = new THREE.Vector2()
   return {
     material,
-    /** 映り込みを撮る（drei の useFrame。向こうを向いていても撮る所も同じ） */
-    render(parent: THREE.Object3D, gl: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera) {
+    /** 床の向きを決める物（床の mesh の子にする。reflector() の決まり: 物の +z が鏡の面の法線） */
+    target: refl.target,
+    /** 映り込みを撮ってぼかす（床を隠して撮り、撮る先・MRT・自動の消去を戻す） */
+    render(parent: THREE.Object3D, gl: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera) {
+      parent.updateMatrixWorld()
+      const prevVisible = parent.visible
       parent.visible = false
-      const currentXrEnabled = gl.xr.enabled
-      const currentShadowAutoUpdate = gl.shadowMap.autoUpdate
-      beforeRender(parent, camera)
-      gl.xr.enabled = false
-      gl.shadowMap.autoUpdate = false
-      gl.setRenderTarget(fbo1)
-      gl.state.buffers.depth.setMask(true)
-      if (!gl.autoClear) gl.clear()
-      gl.render(scene, virtualCamera)
-      if (hasBlur) blurpass.render(gl, fbo1, fbo2)
-      gl.xr.enabled = currentXrEnabled
-      gl.shadowMap.autoUpdate = currentShadowAutoUpdate
-      parent.visible = true
-      gl.setRenderTarget(null)
+      try {
+        // material は reflector() が撮る間だけ隠す物（床は親ごと隠しているので、ここでは同じ床の素材を渡す）
+        base.updateBefore({ scene, camera, renderer: gl, material } as never)
+      } finally {
+        parent.visible = prevVisible
+      }
+      if (!hasBlur) return
+      const rt = base.renderTargets.get(base.getVirtualCamera(camera))
+      if (!rt) return
+      firstInput.value = rt.texture
+      blurDepth.value = rt.depthTexture ?? blurDepth.value
+      size.set(rt.width, rt.height)
+      for (const t of [targetA, targetB, out]) if (t.width !== size.x || t.height !== size.y) t.setSize(size.x, size.y)
+      const prevTarget = gl.getRenderTarget()
+      const prevMRT = gl.getMRT()
+      const prevAuto = gl.autoClear
+      gl.setMRT(null)
+      gl.autoClear = true
+      try {
+        for (const p of passes) {
+          quad.material = p.material
+          gl.setRenderTarget(p.dest)
+          quad.render(gl)
+        }
+      } finally {
+        gl.setRenderTarget(prevTarget)
+        gl.setMRT(prevMRT)
+        gl.autoClear = prevAuto
+      }
     },
     dispose() {
-      fbo1.depthTexture?.dispose()
-      fbo1.dispose()
-      fbo2.dispose()
-      blurpass.renderTargetA.dispose()
-      blurpass.renderTargetB.dispose()
-      blurpass.convolutionMaterial.dispose()
-      blurpass.screen.geometry.dispose()
+      refl.dispose()
+      depthNode.dispose()
+      targetA.dispose()
+      targetB.dispose()
+      out.dispose()
+      for (const p of passes) p.material.dispose()
       material.dispose()
     },
   }

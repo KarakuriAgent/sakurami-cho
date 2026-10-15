@@ -204,7 +204,7 @@ describe('ラボの素材・部品・画面の three の形（段 4 の 4-2）',
     expect(p.object.children.length).toBe(3)
     expect([sleeve.material === mats.tintedGlass, sleeve.renderOrder, core.renderOrder]).toEqual([true, 2, 0])
     expect([collars.material === mats.steel, collars.castShadow, collars.receiveShadow, collars.count]).toEqual([true, false, true, 5])
-    const flow = core.material as THREE.ShaderMaterial
+    const flow = core.material as THREE.Material & { uniforms: Record<string, { value: unknown } | undefined> }
     expect(flow.uniforms.uIntensity!.value).toBe(2)
     ch.link = 1
     ch.flash = 1
@@ -213,7 +213,7 @@ describe('ラボの素材・部品・画面の three の形（段 4 の 4-2）',
     expect((flow.uniforms.uColor!.value as THREE.Color).getHexString()).toBe('00ff66')
     // linkColor が無ければ何もしない・継ぎ手 0 なら付けない
     const still = F.flowPipe({ points: [[0, 0, 0], [0, 2, 0]], color: '#00ffff' }, mats, ch)
-    const stillFlow = (still.object.children[1] as THREE.Mesh).material as THREE.ShaderMaterial
+    const stillFlow = (still.object.children[1] as THREE.Mesh).material as THREE.Material & { uniforms: Record<string, { value: unknown } | undefined> }
     const before = [stillFlow.uniforms.uIntensity!.value, stillFlow.uniforms.uSpeed!.value, (stillFlow.uniforms.uColor!.value as THREE.Color).getHex()]
     still.update()
     expect([stillFlow.uniforms.uIntensity!.value, stillFlow.uniforms.uSpeed!.value, (stillFlow.uniforms.uColor!.value as THREE.Color).getHex()]).toEqual(before)
