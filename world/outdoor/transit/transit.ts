@@ -22,7 +22,7 @@ import { buildTransitInfraSteps, railBallast, transitLights, type InfraContext }
 import { createTransitMaterial, createWireMaterial, transitUniforms } from './transitMaterial'
 import { vehicleShapes } from './vehicles'
 import { OUTDOOR_LAYER } from '../layers'
-import { PLAIN_DEPTH_VERTEX, depthMaterial } from '../town/shadows'
+import { depthMaterial } from '../town/shadows'
 
 /**
  * 町の交通（緑電・ヒノテツ・丘ノ上ケーブル・運河バス・連絡船・港の小舟・浮遊レーンの浮遊機）と、その動かない物（線路・架線・停留所・信号・街灯の柱）。
@@ -103,7 +103,7 @@ export function createTransit(infra: TownInfra, tiles: TownTile[], skipLight: In
   }
   // 近くの動かない物（作り直す）
   const wireMat = createWireMaterial('#2a2c2e')
-  const plainDepth = depthMaterial(PLAIN_DEPTH_VERTEX)
+  const plainDepth = depthMaterial()
   const signMat = createNamedSignMaterial(signAtlas.tex)
   const glassMat = createSiteGlassMaterial()
   let near: THREE.Object3D[] = []

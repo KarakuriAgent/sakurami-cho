@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js'
+import { RectAreaLightNode } from 'three/webgpu'
+import { RectAreaLightTexturesLib } from 'three/examples/jsm/lights/RectAreaLightTexturesLib.js'
 import { labLight } from '../../labLight'
 import type { Vec3 } from '../../../core/lab/plan'
 
@@ -8,8 +9,8 @@ import type { Vec3 } from '../../../core/lab/plan'
  * 使う側の差し込み口の光（kanon-lab の配信の立ち位置のキー・フィル・リム）も、これで作る。
  */
 
-// 面光源（RectAreaLight）を WebGL で使うための初期化（1 回だけ）
-RectAreaLightUniformsLib.init()
+// 面光源（RectAreaLight）を WebGPU（RectAreaLightNode）で使うための初期化（1 回だけ。前は WebGL の RectAreaLightUniformsLib.init()）
+RectAreaLightNode.setLTC(RectAreaLightTexturesLib.init())
 
 /**
  * 部屋の照明の明るさ（labLight.value）から、光の倍率を求める。dim は配信中に部屋の照明と一緒に落とす割合

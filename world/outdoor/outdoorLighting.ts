@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { ROOM } from '../../core/lab/plan'
 import { outdoor } from '../environment/daylight'
-import { SUN_SHADOW_LAYER, setSunOnlyCasters } from '../environment/sunShadow'
+import { SUN_SHADOW_LAYER } from '../environment/sunShadow'
 import { setExteriorGlassOpacity } from './exteriorGlass'
 import { site } from './site/siteModel'
 import { lampHeads } from './site/siteMeshes'
@@ -21,11 +21,17 @@ import { townEvents, townFocus, townHighQuality, townOptions, type TownFrame } f
  *   「暗い部屋に光のライン」の見た目から離れるのと、画素ごとの計算が重いため）。花音の VRM（MToon）の正面は白く平らに飛ばない
  * - 外に面したガラスの不透明度（昼は少し暗くして、外が明るすぎないように）
  *
- * 太陽が地平線の下に沈んで空の光も無くなる間（夜）は、太陽と空の光のライトを消す（画素ごとの影の計算をしない）。
- * ライトの数が変わるとシェーダーが変わるので、起動のあとで「もう一方」の組み合わせのシェーダーも先に作っておく（夕方・朝に止まらないように）
+ * 太陽が地平線の下に沈んで空の光も無くなる間（夜）は、太陽と空の光のライトの強さを 0 にする。ライトは消さずに置いたまま
+ * （WebGPU は visible の切り替えでライトのノードを作り直し、そのコマが 70〜90ms 止まる。強さの切り替えなら 1ms 未満。sakurami-cho#31 の試作）。
+ *
+ * 太陽の影（WebGPU。sakurami-cho#31 の試作「町の影の仕組み」の 3）: WebGPU の影は影のカメラのレイヤー（shadow.camera.layers）で影を落とす物を選ぶので、
+ * sun.shadow.camera.layers を SUN_SHADOW_LAYER だけにする。前の WebGL の形（1px の描き先・影だけ描くカメラ・ふだんの描画の中の入れ子の描画
+ * （trigger の onBeforeRender）・太陽の影の間だけ殻に影を落とさせる setSunOnlyCasters・太陽を点ける前に影の地図を作る処理・もう一方のライトの
+ * 組み合わせの先のコンパイル）は無くした。影の地図は autoUpdate = false のまま、太陽が出ている間は毎コマ needsUpdate で描き直す
+ * （ふだんの描画の初めに three が描く）
  *
  * three の形（5-5。前の OutdoorLighting.tsx）: 光は outdoorLights() でモジュールに 1 つだけ作り（作り直さず、捨てない）、objects（太陽 → 太陽の target →
- * 空の光 → trigger）をこの順で場面の直下に置く（ラボの照明のあと）。毎コマ update(f) を呼ぶ（町の毎コマの段
+ * 空の光）をこの順で場面の直下に置く（ラボの照明のあと）。毎コマ update(f) を呼ぶ（町の毎コマの段
  * town.update（world/createTown.ts）の中で、遠景の update のあと。外にいる度合い outsideness を同じコマの中で知らせる）
  */
 
@@ -39,12 +45,6 @@ const _view = new THREE.Matrix4()
 const _p = new THREE.Vector3()
 const _lastDir = new THREE.Vector3()
 
-/**
- * このコマで太陽の影を描き直すか（pending）、太陽を点ける前に影の地図を作るか（create）と、ふだんの描画のカメラ
- * （床の映り込みなど別のカメラの描画では描かない）
- */
-const sunShadow: { pending: boolean; create: boolean; camera: THREE.Camera | null } = { pending: false, create: false, camera: null }
-
 /** 外の光を作る（最初の 1 回だけ） */
 function createLights() {
   const sun = new THREE.DirectionalLight('#ffffff', 0)
@@ -55,52 +55,18 @@ function createLights() {
   sun.shadow.bias = -0.0004
   sun.shadow.normalBias = 0.035
   sun.shadow.autoUpdate = false
+  // 初めのコマで一度は影の地図を描いて大きさを決めておく（WebGPU は初めて描くときに影の深さのテクスチャを作り直すので、夜に起動して
+  // あとで初めて描くと、そのコマの別の描画が使っている前のテクスチャを捨ててしまい「Destroyed texture … used in a submit」になる）
+  sun.shadow.needsUpdate = true
   sun.target.position.copy(ROOM_CENTER)
   const hemi = new THREE.HemisphereLight('#ffffff', '#000000', 0)
-
-  // 太陽の影の地図を描くためのカメラと 1px の描き先。three.js は描くときのカメラのレイヤーで、ライトと影を落とす物を選ぶので、
-  // このカメラ（SUN_SHADOW_LAYER だけ）で描くと「太陽の影」だけが「部屋の殻と花音」で描かれる。
-  // カメラはシーンから遠く離して何も写らない向きにする（色は何も描かない）
-  sun.layers.enable(SUN_SHADOW_LAYER)
-  const shadowCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1)
-  shadowCamera.position.set(0, -1e5, 0)
-  shadowCamera.lookAt(0, -2e5, 0)
-  shadowCamera.updateMatrixWorld()
-  shadowCamera.layers.set(SUN_SHADOW_LAYER)
-  const shadowTarget = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false })
-
-  // 太陽の影は、ふだんのカメラの描画の中で（最初に描く空の形の onBeforeRender で）描く。
-  // 描画の中で描くと three.js がライトの状態を別に持つので、ふだんの描画のライトの設定を崩さない
-  const trigger = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
-  trigger.frustumCulled = false
-  trigger.renderOrder = -1000
-  trigger.onBeforeRender = (renderer, scene, camera) => {
-    if (!(sunShadow.pending || sunShadow.create) || camera !== sunShadow.camera) return
-    // 太陽を点ける前の影の地図づくりでは、この描画の中でだけ太陽を点ける
-    const visible = sun.visible
-    if (sunShadow.create) sun.visible = true
-    sunShadow.pending = false
-    sunShadow.create = false
-    sun.shadow.needsUpdate = true
-    const prev = renderer.getRenderTarget()
-    const autoUpdate = scene.matrixWorldAutoUpdate
-    scene.matrixWorldAutoUpdate = false
-    renderer.setRenderTarget(shadowTarget)
-    setSunOnlyCasters(true)
-    renderer.render(scene, shadowCamera)
-    setSunOnlyCasters(false)
-    renderer.setRenderTarget(prev)
-    scene.matrixWorldAutoUpdate = autoUpdate
-    sun.visible = visible
-  }
+  // 太陽の影は、部屋の殻と花音（SUN_SHADOW_LAYER）だけで描く（WebGPU の影は影のカメラのレイヤーで物を選ぶ）
+  sun.shadow.camera.layers.set(SUN_SHADOW_LAYER)
   return {
     sun,
     hemi,
-    trigger,
-    shadowTarget,
-    state: { frames: 0, precompiled: false },
     /** 場面に置く物（この順で場面の直下に） */
-    objects: [sun, sun.target, hemi, trigger] as readonly THREE.Object3D[],
+    objects: [sun, sun.target, hemi] as readonly THREE.Object3D[],
     /** 毎コマ */
     update: updateLights,
   }
@@ -242,8 +208,8 @@ function fitShadowCamera(sun: THREE.DirectionalLight, center: THREE.Vector3, out
 
 /** 毎コマ（遠景の更新のあと）: 外にいる度合い・街灯・光の強さと色・ガラスの不透明度・太陽の影 */
 function updateLights(f: TownFrame): void {
-  const { renderer: gl, scene, camera, dt } = f
-  const { sun, hemi, shadowTarget, state } = outdoorLights()
+  const { dt } = f
+  const { sun, hemi } = outdoorLights()
   const I = outdoor.interior
   const focus = townFocus()
   const high = townHighQuality()
@@ -257,27 +223,16 @@ function updateLights(f: TownFrame): void {
   townEvents.emit('outsideness', Math.max(outside.value, ia))
   const on = I.ambient > 0.0005 || I.sun > 0.0005 || lamp.active || ia > 0.01
   const wantSun = on && high
-  // 太陽を初めて点けるときは、先に影の地図を作る（地図が無いまま描くと、three.js が仮に使う空のテクスチャが
-  // 影の比べ方を持たず、WebGL のエラーになる）。このコマは点けずに、trigger の描画の中で地図だけ作る。
-  // ライトの組み合わせは「昼（太陽と空の光）」と「夜（どちらも消す）」の 2 つだけにする（3 つ目の組み合わせのシェーダーを作らない）
-  sunShadow.camera = camera
-  if (wantSun && !sun.shadow.map) {
-    sunShadow.create = true
-    sun.visible = false
-    hemi.visible = false
-  } else {
-    sun.visible = wantSun
-    hemi.visible = on
-  }
+  // ライトは消さずに強さで点け消しする（visible を替えると WebGPU はライトのノードを作り直して止まる）。点けない間は強さ 0
   const o = outside.value
-  let k = high ? (lamp.active ? lamp.intensity : I.sun) : 0
+  let k = wantSun ? (lamp.active ? lamp.intensity : I.sun) : 0
   sun.color.copy(lamp.active ? LAMP_COLOR : I.sunColor)
   // 空の光: 外にいる花音には、部屋の中より強い空の光（ガラス越しでない）。夜は街の灯りと月のほのかな光
-  hemi.intensity = I.ambient + o * (0.3 + 0.45 * outdoor.daylight - 0.12 * outdoor.night)
+  hemi.intensity = on ? I.ambient + o * (0.3 + 0.45 * outdoor.daylight - 0.12 * outdoor.night) : 0
   hemi.color.copy(I.ambientSky)
   if (outdoor.daylight < 0.05) hemi.color.copy(NIGHT_SKY).lerp(NIGHT_SKY_OUT, o)
   hemi.groundColor.copy(I.ambientGround)
-  if (ia > 0.001) {
+  if (on && ia > 0.001) {
     // 中: いちばん明るい窓・灯りの向きから、その色の光。まわりは部屋の照り返し
     const ik = Math.min(2.6, interiorLight.intensity * 2.4)
     k = THREE.MathUtils.lerp(k, high ? ik : 0, ia)
@@ -293,22 +248,6 @@ function updateLights(f: TownFrame): void {
   sun.intensity = k
   setExteriorGlassOpacity(I.glassOpacity)
 
-  // 起動して少したったら、もう一方のライトの組み合わせ（昼 ↔ 夜）のシェーダーも裏で作っておく（夕方・朝の切り替えで止まらないように）。
-  // シェーダーは描き先で変わる（画面か、ポストエフェクトの描き先か）ので、ふだんと同じく描き先を付けて作る
-  state.frames++
-  if (!state.precompiled && state.frames === 20) {
-    state.precompiled = true
-    const was = [sun.visible, hemi.visible]
-    sun.visible = !on && high
-    hemi.visible = !on
-    const prev = gl.getRenderTarget()
-    if (townOptions().postEffects) gl.setRenderTarget(shadowTarget)
-    void gl.compileAsync(scene, camera).catch(() => undefined)
-    gl.setRenderTarget(prev)
-    sun.visible = was[0]
-    hemi.visible = was[1]
-  }
-
   if (!wantSun) return
   // 太陽（夜に外にいる花音を照らす街灯の代わりのときは、いちばん近い街灯の向き）
   let dir = lamp.active ? lamp.dir : outdoor.sunDir
@@ -318,7 +257,7 @@ function updateLights(f: TownFrame): void {
   sun.target.position.copy(center)
   sun.target.updateMatrixWorld()
   fitShadowCamera(sun, center, outside.value > 0.01)
-  // 太陽の影の地図: 太陽が出ている間は毎コマ、部屋の殻と花音（SUN_SHADOW_LAYER）だけで描く（trigger の onBeforeRender）。
-  // ふだんの描画の影のパスでは描き直さない（autoUpdate = false。そこで描くと、影を落とす物すべて（家具も）が入って重い）
-  if (k > 0.0005) sunShadow.pending = true
+  // 太陽の影の地図: 太陽が出ている間は毎コマ、部屋の殻と花音（SUN_SHADOW_LAYER）だけで描き直す（ふだんの描画の初めに three が描く。
+  // 影のカメラのレイヤーで物を選ぶので、家具は入らない）
+  if (k > 0.0005) sun.shadow.needsUpdate = true
 }

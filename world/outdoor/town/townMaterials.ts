@@ -954,8 +954,9 @@ export function createTownBuildingMaterial(instanced: boolean) {
 }
 
 /** 建物の影の深さだけのシェーダー（頂点の計算は建物と同じ） */
-export function createTownBuildingDepthMaterial(instanced: boolean) {
-  return depthMaterial(BUILDING_VERTEX, { defines: { ...DEFINES, ...(instanced ? { TOWN_INSTANCED: '' } : {}) }, uniforms: { uPropsCenter: propsCenter } })
+export function createTownBuildingDepthMaterial(_instanced: boolean) {
+  // WebGPU への移行（第 1 段）: 深さだけの材質は NodeMaterial の工場（town/shadows.ts）。本体の頂点の計算（BUILDING_VERTEX）を positionNode で共有するのは、本体を TSL にする第 2 段で。今は形のまま（インスタンスの行列は NodeMaterial が扱う）で影を落とす
+  return depthMaterial()
 }
 
 /** 小物を形で描く範囲（x, y = 細かさの中心の平面座標、z = 半径 m）。外壁のシェーダーは、この中の建物のベランダの手すりを描かない（props.ts が形で描く） */

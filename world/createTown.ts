@@ -7,6 +7,7 @@ import { townWalk } from './walk/townWalk'
 import { createLab, type Lab, type LabOptions } from './lab/createLab'
 import { labLighting, type LabLightInput } from './labLight'
 import { sharedTime } from './materials/shared'
+import { skipUnportedShaders } from './materials/unported'
 import { landscape } from './outdoor/landscape'
 import { outdoorLights } from './outdoor/outdoorLighting'
 import { updateStars } from './outdoor/sky'
@@ -171,6 +172,8 @@ export function createTown(options: TownCreateOptions = {}): Town {
     },
 
     begin(f) {
+      // WebGPU への移行の途中: まだ TSL にしていない ShaderMaterial は描かない（world/materials/unported.ts。第 2 段で消す）
+      skipUnportedShaders(f.renderer)
       // 自作シェーダーの共有の時計（町の遠景・ラボの部品の素材が読む。前は kanon-lab の ShaderClock（−200）が書いていた。間に読む物は無い）
       sharedTime.value = f.time
       // 早送り・カットの分を町の時刻へ（いつ早送りするかは使う側。kanon-lab は character/ride/warp.ts）

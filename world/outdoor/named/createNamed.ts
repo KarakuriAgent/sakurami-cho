@@ -3,7 +3,7 @@ import { townOptions } from '../../townHost'
 import { OUTDOOR_LAYER } from '../layers'
 import { createSiteGlassMaterial } from '../site/siteMaterial'
 import type { LightItem } from '../town/lights'
-import { depthMaterial, PLAIN_DEPTH_VERTEX } from '../town/shadows'
+import { depthMaterial } from '../town/shadows'
 import type { TownInfra } from '../town/townData'
 import { ringCenter } from './frame'
 import { GlassBuilder, type DoorSpec, type Kit, localMatrix } from './kit'
@@ -78,7 +78,7 @@ export function createNamedTown(named: NamedFile, infra: TownInfra, heightAt: (x
   // 中のある建物の開く扉の透けるガラス（中を作ったときに出す）
   const doorClearMat = createSiteGlassMaterial()
   doorClearMat.side = THREE.DoubleSide
-  const depth = depthMaterial(PLAIN_DEPTH_VERTEX)
+  const depth = depthMaterial()
   const group = new THREE.Group()
   group.name = 'named'
   let meshes: THREE.Object3D[] = []

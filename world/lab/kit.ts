@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { WebGPURenderer } from 'three/webgpu'
 import type { LabMaterials } from '../materials/labMaterials'
 import { registerLabKitPlan } from '../../core/lab/kits/plans'
 import type { LabKitPlan, LabKitPlanFn, Obstacle, Placement } from '../../core/lab/plan'
@@ -18,7 +19,7 @@ export interface LabFrame {
   /** 共有の時計（R3F の clock.elapsedTime と同じ値） */
   time: number
   camera: THREE.Camera
-  renderer: THREE.WebGLRenderer
+  renderer: WebGPURenderer
   scene: THREE.Scene
 }
 

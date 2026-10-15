@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { CubeRenderTarget, type WebGPURenderer } from 'three/webgpu'
 import { outdoor, updateOutdoor } from '../../environment/daylight'
 import { labLight } from '../../labLight'
 import { LAB_ENV_CAPTURE, LAB_FORMERS, type LabFormerSpec } from './lightTable'
@@ -10,7 +11,7 @@ import { LAB_ENV_CAPTURE, LAB_FORMERS, type LabFormerSpec } from './lightTable'
  *
  * - 光る板 = PlaneGeometry・RingGeometry に MeshBasicMaterial（toneMapped なし・両面・色 × 強さ）。位置と大きさを入れて場面に足したあと、
  *   向きを単位にして原点を向ける（drei の Lightformer の癖。前の rotation-x・rotation-y の指定は効いていなかった）
- * - 撮る先 = WebGLCubeRenderTarget（256 px・HalfFloat）、cube のカメラは光る板の場面の最後の子（near 0.1・far 1000・原点）、背景の色 #010204。
+ * - 撮る先 = CubeRenderTarget（WebGPU。前は WebGLCubeRenderTarget）（256 px・HalfFloat）、cube のカメラは光る板の場面の最後の子（near 0.1・far 1000・原点）、背景の色 #010204。
  *   撮る間だけ renderer.autoClear を true にする
  * - 南のガラス壁と西・東の窓の板は外の光（時刻で変わる）。毎コマ撮り直すと重いので、0.25 秒ごとに外の光を見て、
  *   目に見えるほど変わったとき（明るさ 8%・色 6%）だけ撮り直す。撮り直すのは、そのコマの処理（描画まで）が終わったあと
@@ -62,9 +63,9 @@ export interface LabEnvironment {
   /** 光る板の場面（撮るときだけ描く） */
   readonly scene: THREE.Scene
   /** 今の値で撮る */
-  capture(renderer: THREE.WebGLRenderer): void
+  capture(renderer: WebGPURenderer): void
   /** 毎コマ: 0.25 秒ごとに外の光を見て、変わっていたら、このコマの処理が終わったあとに撮り直す（renderer で） */
-  update(time: number, renderer: THREE.WebGLRenderer): void
+  update(time: number, renderer: WebGPURenderer): void
   /** 撮り直しを受け付けるか（場面に付けている間だけ true にする。外したあとに撮り直さない） */
   active: boolean
   dispose(): void
@@ -99,7 +100,7 @@ function aimFormer(mesh: THREE.Object3D) {
 /** 反射用の環境を作る（光る板の場面と撮る先。まだ撮らない）。kits: ある置き場所の id（印の付いた板のうち、無い物は作らない） */
 export function createLabEnvironment(o: { kits: ReadonlySet<string> }): LabEnvironment {
   const scene = new THREE.Scene()
-  const target = new THREE.WebGLCubeRenderTarget(LAB_ENV_CAPTURE.resolution)
+  const target = new CubeRenderTarget(LAB_ENV_CAPTURE.resolution)
   target.texture.type = THREE.HalfFloatType
   scene.background = new THREE.Color(LAB_ENV_CAPTURE.background)
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { WebGPURenderer } from 'three/webgpu'
 import type { TownQualityName } from '../core/town'
 import type { CabinRider } from './outdoor/transit/vehicle'
 
@@ -218,6 +219,6 @@ export interface TownFrame {
   time: number
   dt: number
   camera: THREE.Camera
-  renderer: THREE.WebGLRenderer
+  renderer: WebGPURenderer
   scene: THREE.Scene
 }

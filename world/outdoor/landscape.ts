@@ -4,7 +4,7 @@ import { SITE, TOWN_QUALITY } from '../../core/town'
 import { insideLab, LOOKOUT, PARABOLA } from '../../core/site'
 import { outdoor } from '../environment/daylight'
 import { sharedTime } from '../materials/shared'
-import { createBeamMaterial, createDomeMaterial, createLightsMaterial, createStructureMaterial, LIGHT_KINDS, setTownDirection, syncOutdoorUniforms } from './materials'
+import { createBeamMaterial, createDomeMaterial, createLightsSprite, createStructureMaterial, LIGHT_KINDS, setTownDirection, syncOutdoorUniforms } from './materials'
 import { beamGeometry } from './shapes'
 import { skyParts } from './sky'
 import { OUTDOOR_LAYER } from './layers'
@@ -17,7 +17,7 @@ import { transitClock } from './transit/clock'
 import { LIGHT_KIND, lightsGeometry } from './town/lights'
 import { buildTerrainGeometry, terrainGeometrySteps, terrainHeight, terrainOptions } from './town/terrain'
 import { townData } from './town/townData'
-import { PLAIN_DEPTH_VERTEX, TownShadows, depthMaterial } from './town/shadows'
+import { TownShadows, depthMaterial } from './town/shadows'
 import { siteGroundUniforms, createGroundMaterial, createTownBuildingDepthMaterial, createTownBuildingMaterial, propsCenter, createWaterMaterial, createWindowSpriteMaterial, groundTexture, groundUniforms } from './town/townMaterials'
 import { createTreeMaterials, shrubMesh, treeMeshes } from './town/trees'
 import { createPropMaterials, propMeshes, shopFrontLamps } from './town/props'
@@ -68,7 +68,7 @@ const ORDER = 10
 /** 町を組み立てる（データを読み終えたあと 1 回だけ） */
 function createTown(anisotropy: number) {
   const quality = townQualityConfig()
-  const plainDepth = depthMaterial(PLAIN_DEPTH_VERTEX)
+  const plainDepth = depthMaterial()
   const manifest = townData.manifest!
   // 町を歩く共通の仕組み（道のグラフ・石段・橋の路面。world/walk/townWalk.ts）。石段の下の地形を下げるので、地形の格子より先に
   // 石段のわきの縁石・擁壁を付けない所は、名前のある建物の外形と敷地（トンプソン家の門の前など）
@@ -228,10 +228,12 @@ function createTown(anisotropy: number) {
   setLampFade(...quality.lampFade)
   if (debug()) (window as unknown as { __lamps: unknown }).__lamps = lampUniforms
   if (debug()) console.info(`[sakurami-cho] 灯りの表: 灯り ${lampInfo.lamps}・升 ${lampInfo.cells}・${Math.round(lampInfo.ms)}ms`)
-  const lights = new THREE.Points(lightsGeometry(tiles, extraLights, replacedTownLight), createLightsMaterial())
+  // 灯りは Sprite を灯りの数だけ並べる（WebGPU の点は 1px だけ。materials.ts の createLightsSprite）
+  const lights = createLightsSprite(lightsGeometry(tiles, extraLights, replacedTownLight))
   lights.frustumCulled = false
   lights.renderOrder = -1
-  const beam = new THREE.Mesh(beamGeometry(9000), createBeamMaterial())
+  const beamMat = createBeamMaterial()
+  const beam = new THREE.Mesh(beamGeometry(9000), beamMat)
   beam.frustumCulled = false
   beam.renderOrder = -1
   beam.visible = false
@@ -241,7 +243,7 @@ function createTown(anisotropy: number) {
   const objects: THREE.Object3D[] = [terrain, sea, water, ...buildings, polys, ...props, ...trees, shrubs, stairShrubs, structures, ...extras, sprites, lights, beam, labSite.group, ...(named ? [named.group] : []), interiors.group, ...(transit ? [transit.group] : []), grass.group]
   for (const o of objects) prepare(o)
   const shadows = new TownShadows(quality.shadowSize, quality.shadowNear, quality.shadowFar, quality.shadowNearMax, quality.localShadow)
-  return { objects, shadows, labSite, named, buildingDepth, stairShrubs, stairShrubBox, props, propMats, skip, terrain, buildings, trees, sprites, groundMat, seaMat, waterMat, buildingMat, polyMat, spriteMat, treeMat, structureMat, domeMat, soranowa, transit, grass, lamps, lights, beam, toLab, hasBeam: !!lh, lodCenter: [0, 0] as [number, number], terrainCenter: [0, 0] as [number, number], lampCenter: [0, 0] as [number, number] }
+  return { objects, shadows, labSite, named, buildingDepth, stairShrubs, stairShrubBox, props, propMats, skip, terrain, buildings, trees, sprites, groundMat, seaMat, waterMat, buildingMat, polyMat, spriteMat, treeMat, structureMat, domeMat, soranowa, transit, grass, lamps, lights, beam, beamMat, toLab, hasBeam: !!lh, lodCenter: [0, 0] as [number, number], terrainCenter: [0, 0] as [number, number], lampCenter: [0, 0] as [number, number] }
 }
 
 /**
@@ -450,7 +452,7 @@ function updateLandscape(root: THREE.Group, townGroup: THREE.Group, f: TownFrame
   // データを読み終えたら、町を組み立てる（1 回だけ。描画の流れの中で組み立てるので、撮影モードでも同じコマで出る）
   if (!townCache && townData.status === 'loading' && townData.infra && townData.tilesPlanned > 0 && townData.tiles.length >= townData.tilesPlanned) {
     const t0 = performance.now()
-    townCache = createTown(gl.capabilities.getMaxAnisotropy())
+    townCache = createTown(gl.getMaxAnisotropy())
     if (debug()) logTown(townCache, performance.now() - t0)
     for (const o of townCache.objects) townGroup.add(o)
     townData.markReady()
@@ -461,8 +463,8 @@ function updateLandscape(root: THREE.Group, townGroup: THREE.Group, f: TownFrame
   const t = townCache
   // 町のデータが無い・形が違う: ラボの外観とセットと、その影の地図だけ作る（地形の高さは仮）
   if (!t && !fallbackSite && (townData.status === 'missing' || townData.status === 'outdated' || townData.status === 'error')) {
-    createTownTextures(null, gl.capabilities.getMaxAnisotropy())
-    fallbackSite = createLabSite(gl.capabilities.getMaxAnisotropy(), null)
+    createTownTextures(null, gl.getMaxAnisotropy())
+    fallbackSite = createLabSite(gl.getMaxAnisotropy(), null)
     townGroup.add(fallbackSite.group)
     const quality = townQualityConfig()
     fallbackShadows = new TownShadows(quality.shadowSize, quality.shadowNear, quality.shadowFar, quality.shadowNearMax, quality.localShadow)
@@ -471,7 +473,6 @@ function updateLandscape(root: THREE.Group, townGroup: THREE.Group, f: TownFrame
   const shadows = t?.shadows ?? fallbackShadows
   if (!shadows) return
   // 太陽の影の地図（太陽が少し動いたとき・カメラが動いたときだけ描き直す）
-  shadows.ensureInit(gl)
   if (root.visible) {
     camera.getWorldDirection(_dir)
     _view.set(_dir.x, _dir.z)
@@ -531,12 +532,12 @@ function updateLandscape(root: THREE.Group, townGroup: THREE.Group, f: TownFrame
   const flash = Math.exp(-((diff / 0.075) ** 2))
   // ラボの方を向く前後は帯を消す（円錐の殻がカメラを横切るコマで、画面全体が一瞬明るくなるため。ラボの方を向いたことは閃光で見せる）
   const beam = o.lighthouse * THREE.MathUtils.smoothstep(diff, 0.1, 0.2)
-  ;(t.beam.material as THREE.ShaderMaterial).uniforms.uBeam.value = beam
+  t.beamMat.uniforms.uBeam.value = beam
   t.beam.visible = t.hasBeam && beam > 0.01
 
   // 灯り
-  const lm = t.lights.material as THREE.ShaderMaterial
-  const on = lm.uniforms.uOn.value as number[]
+  const lm = t.lights.material
+  const on = lm.uniforms.uOn.array as number[]
   on[LIGHT_KIND.window] = o.lights.window
   on[LIGHT_KIND.street] = o.lights.street
   on[LIGHT_KIND.port] = o.lights.port
@@ -547,7 +548,7 @@ function updateLandscape(root: THREE.Group, townGroup: THREE.Group, f: TownFrame
   on[LIGHT_KIND.clock] = o.clockFace
   on[LIGHT_KIND.lighthouse] = o.lighthouse
   on[LIGHT_KIND.beacon] = o.lighthouse
-  const gain = lm.uniforms.uKindGain.value as number[]
+  const gain = lm.uniforms.uKindGain.array as number[]
   gain[LIGHT_KIND.lighthouse] = 0.04 + flash
   lm.uniforms.uGain.value = o.lightGain
   const cam = camera as THREE.PerspectiveCamera

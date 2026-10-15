@@ -718,18 +718,7 @@ void main() {
 export function createPlantMaterials(nightAmb: THREE.Vector3) {
   const uniforms = { ...outdoorUniforms, ...townShadowUniforms, uWind: { value: 0.35 }, uNightAmb: { value: nightAmb }, uVein: { value: 0 } }
   const material = new THREE.ShaderMaterial({ name: 'domePlants', uniforms, vertexShader: PLANT_VERTEX, fragmentShader: PLANT_FRAGMENT, side: THREE.DoubleSide, alphaToCoverage: true })
-  const depth = depthMaterial(PLANT_VERTEX, {
-    uniforms,
-    side: THREE.DoubleSide,
-    fragment: /* glsl */ `
-      ${LEAF_SHAPE}
-      varying vec4 vUv;
-      void main() {
-        float vein;
-        if (leafShape(vUv, vein) < 0.5) discard;
-        gl_FragColor = vec4(1.0);
-      }
-    `,
-  })
+  // WebGPU への移行（第 1 段）: 深さだけの材質は NodeMaterial の工場（town/shadows.ts）。本体の頂点の計算（PLANT_VERTEX と葉の形 LEAF_SHAPE で抜く所）を positionNode で共有するのは、本体を TSL にする第 2 段で。今は形のまま（インスタンスの行列は NodeMaterial が扱う）で影を落とす
+  const depth = depthMaterial({ side: THREE.DoubleSide })
   return { material, depth, uniforms }
 }

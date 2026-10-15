@@ -5,7 +5,7 @@
  * 名前がぶつからないように・出す名前が公開の口になるので）。出すのは、例のアプリ（examples/town-walker）が使う物と、ラボの差し込み口（configureLab）、
  * 町の口の引数・毎コマの段・注目点・出来事の型。ここにはコードを書かない（export だけ）。
  * kanon-lab はここからは読まず、深いパス（sakurami-cho/world/…）で読む
- * （読み込みの時に形や素材を作る物・RectAreaLightUniformsLib.init()・registerLabAnchor などがあり、index から読むと評価の順が変わるため）
+ * （読み込みの時に形や素材を作る物・RectAreaLightNode.setLTC(RectAreaLightTexturesLib.init())・registerLabAnchor などがあり、index から読むと評価の順が変わるため）
  */
 // 町の口（1 ページに 1 つ）と、その引数・毎コマの段（begin・update・view の TownFrame）・注目点・出来事・時計・読み込みの状態の型
 export { createTown } from './createTown'

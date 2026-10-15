@@ -191,7 +191,8 @@ afterAll(() => {
 const sharedTextures = () =>
   Object.fromEntries(['brushedNormal', 'brushedRough', 'panelNormal', 'panelRough', 'perfOpacity', 'perfNormal', 'smudge'].map((k) => [k, new THREE.Texture()]))
 const floorTextures = () => Object.fromEntries(['map', 'normalMap', 'roughnessMap'].map((k) => [k, new THREE.Texture()]))
-const fakeRenderer = () => ({ capabilities: { getMaxAnisotropy: () => 8 } })
+// WebGPURenderer の形（異方性の最大は renderer.getMaxAnisotropy()。前の WebGLRenderer は capabilities.getMaxAnisotropy()）
+const fakeRenderer = () => ({ getMaxAnisotropy: () => 8 })
 const frame = (time: number): Frame => ({ time, camera: new THREE.PerspectiveCamera(), renderer: null, scene: new THREE.Scene() })
 const emptyHost = (): Host => ({ channels: {}, slots: {} })
 

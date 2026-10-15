@@ -12,6 +12,10 @@
  * 外壁は CC0 の実写の質感（townTextures.ts）をデータの色で染め、汚れ（足元・窓の下の雨だれ・上端の筋・まだら）と色あせを建物ごとにばらつかせる。
  */
 
+import { Fn, dot, max, vec3 } from 'three/tsl'
+import type { Node } from 'three/webgpu'
+import { outdoorUniforms } from '../materials'
+
 /** 外壁の型の番号（GLSL の facadeType と同じ） */
 export const FACADE_TYPE = { woodHouse: 0, mortarHouse: 1, brick: 3, stone: 4, apartment: 5, office: 6, curtainWall: 7, factory: 8, school: 9 } as const
 
@@ -93,7 +97,20 @@ float dirtOf(float style, float seed) {
 }
 `
 
-/** 光（太陽・空・照り返し・環境光の遮り）と、町の影（shadows.ts が townShadow を入れる） */
+/**
+ * 光（太陽・空・照り返し・環境光の遮り）: townLight(albedo, 法線, 環境光の遮り ao, 影 sh)（TSL の Fn。影は shadows.ts の townShadow）。
+ * 太陽の直射（影 sh）と空の光（ao）と、地面の照り返し（下を向くほど・太陽が高いほど暖色）
+ */
+export const townLight = Fn(([albedo, N, ao, sh]: [Node<'vec3'>, Node<'vec3'>, Node<'float'>, Node<'float'>]) => {
+  const u = outdoorUniforms
+  const ndl = max(dot(N, u.uSunDir), 0.0)
+  const up = N.y.mul(0.5).add(0.5)
+  const sky = u.uSkyLight.mul(up.mul(0.5).add(0.22))
+  const bounce = u.uSunLight.mul(vec3(0.95, 0.82, 0.66)).mul(max(u.uSunDir.y, 0.0).mul(0.16).add(0.06)).mul(up.mul(-0.6).add(1.0))
+  return albedo.mul(u.uSunLight.mul(ndl.mul(sh)).add(sky.add(bounce).mul(ao)))
+})
+
+/** GLSL の townLight（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す） */
 export const TOWN_LIGHT = /* glsl */ `
 /** 太陽の直射（影 sh）と空の光（環境光の遮り ao）と、地面の照り返し（下を向くほど・太陽が高いほど暖色） */
 vec3 townLight(vec3 albedo, vec3 N, float ao, float sh) {

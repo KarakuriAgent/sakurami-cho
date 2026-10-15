@@ -1,11 +1,10 @@
 /**
  * 町の地図データが無いとき（manifest.json が 404）の遠景（world/outdoor/landscape.ts の fallbackSite）の見張り:
- *   - ラボの外観とまわりのセットだけを作り、その太陽の影の地図（TownShadows）も作る。セットのシェーダー（site/siteMaterial.ts）は町の影の
- *     sampler2DShadow を 3 つ読むので、影の uniform が null のままだと three が比較の設定の無いテクスチャを付け、描くたびに WebGL の誤り
- *     （GL_INVALID_OPERATION）になって、ラボの外観とセットが描けない
+ *   - ラボの外観とまわりのセットだけを作り、その太陽の影の地図（TownShadows）も作る。セットの材質は町の影を 3 枚読むので、影の uniform は
+ *     比べの設定のある深さのテクスチャ（WebGPU への移行の第 1 段から TextureNode の value。前の WebGL では null だと GL_INVALID_OPERATION になった）
  *   - 影は町の地図データがあるときと同じ仕組み: 近く・遠くの影の地図にラボの外観とセットを深さだけのシェーダーで描き、花音のまわりの細かい影の
  *     地図にも描く。太陽が沈んでいれば影を使わない
- * 描くのは WebGL を使わない renderer の代わり（何を描き先にして、どの形を描いたかだけを記録する）。地図のコードは DOM の型を使うので、
+ * 描くのは GPU を使わない renderer の代わり（WebGPURenderer の形。何を描き先にして、どの形をどの素材で描いたかだけを記録する）。地図のコードは DOM の型を使うので、
  * ほかのテストと同じく実行の時に読む。質感の画像は読まない（TextureLoader をこのテストの間だけ空のテクスチャを返す物にする）
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -44,36 +43,55 @@ interface TownHostMod {
   setTownFocus(f: { position: THREE.Vector3; outside: boolean; walking: boolean; moveDir: THREE.Vector3; ride: { car: null; inside: boolean; seat: { z: number; side: number } } }): void
 }
 
-/** 描いた物の記録: 描き先（影の地図の深さのテクスチャ）と、そのとき見えていた形の名前と素材の名前 */
+/** 描いた物の記録: 描き先（影の地図の深さのテクスチャ）と、そのとき描いた形の名前と素材の名前 */
 interface Draw {
   depth: THREE.DepthTexture | null
   meshes: string[]
 }
 
-/** 影の地図を描くのに使う所だけの、WebGL を使わない renderer の代わり */
+type RenderObjectFn = (object: THREE.Object3D, scene: THREE.Object3D, camera: THREE.Camera, geometry: unknown, material: THREE.Material, group: null, ...rest: unknown[]) => void
+
+/**
+ * 影の地図を描くのに使う所だけの、GPU を使わない renderer の代わり（WebGPURenderer の形。WebGPU への移行の第 1 段から）。
+ * render は見えている形ごとに描き物の関数（setRenderObjectFunction。無ければそのまま描く）を呼び、renderObject が描いた形と素材を記録する
+ */
 function fakeRenderer() {
-  let target: THREE.WebGLRenderTarget | null = null
+  let target: THREE.RenderTarget | null = null
+  let fn: RenderObjectFn | null = null
   const draws: Draw[] = []
-  return {
+  let current: Draw | null = null
+  const r = {
     draws,
     autoClear: true,
-    capabilities: { getMaxAnisotropy: () => 8 },
+    coordinateSystem: THREE.WebGPUCoordinateSystem,
+    getMaxAnisotropy: () => 8,
     domElement: { height: 720 },
     getPixelRatio: () => 1,
     getRenderTarget: () => target,
-    setRenderTarget(t: THREE.WebGLRenderTarget | null) {
+    setRenderTarget(t: THREE.RenderTarget | null) {
       target = t
     },
+    getRenderObjectFunction: () => fn,
+    setRenderObjectFunction(f: RenderObjectFn | null) {
+      fn = f
+    },
     clear() {},
-    render(root: THREE.Object3D) {
-      const meshes: string[] = []
+    renderObject(object: THREE.Object3D, _scene: unknown, _camera: unknown, _geometry: unknown, material: THREE.Material) {
+      current?.meshes.push(`${object.name}:${material.name}`)
+    },
+    render(root: THREE.Object3D, camera: THREE.Camera) {
+      current = { depth: (target?.depthTexture as THREE.DepthTexture | null) ?? null, meshes: [] }
       root.traverseVisible((o) => {
         const mesh = o as THREE.Mesh
-        if (mesh.isMesh && !Array.isArray(mesh.material)) meshes.push(`${mesh.name}:${mesh.material.name}`)
+        if (!mesh.isMesh || Array.isArray(mesh.material)) return
+        if (fn) fn(o, root, camera, mesh.geometry, mesh.material, null)
+        else r.renderObject(o, root, camera, mesh.geometry, mesh.material)
       })
-      draws.push({ depth: target?.depthTexture ?? null, meshes })
+      draws.push(current)
+      current = null
     },
   }
+  return r
 }
 
 const loaderLoad = THREE.TextureLoader.prototype.load

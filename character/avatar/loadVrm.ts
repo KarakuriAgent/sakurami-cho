@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { MToonMaterial, VRMLoaderPlugin, VRMUtils, type VRM, type VRMHumanBoneName } from '@pixiv/three-vrm'
+import { MToonMaterialLoaderPlugin, VRMLoaderPlugin, VRMUtils, type MToonMaterial, type VRM, type VRMHumanBoneName } from '@pixiv/three-vrm'
+import { MToonNodeMaterial } from '@pixiv/three-vrm/nodes'
 import { SUN_SHADOW_LAYER } from '../../world/environment/sunShadow'
 import type { VrmMtoonConfig } from './visualConfig'
 
@@ -37,7 +38,12 @@ export async function loadVrm(url: string, rim: VrmRim, opts: VrmLoadOptions, on
   if (!(await exists(url))) return { status: 'missing' }
   try {
     const loader = new GLTFLoader()
-    loader.register((parser) => new VRMLoaderPlugin(parser))
+    // MToon は WebGPU（TSL）の版 MToonNodeMaterial で作る（WebGPURenderer は ShaderMaterial の MToonMaterial を描けない）。
+    // 渡し方は mtoonMaterialPlugin（mtoonMaterialPluginOptions では効かず ShaderMaterial のまま。sakurami-cho#31・kanon-stream-video#25 の試作）。
+    // MToonNodeMaterial は表情の UV のずらし（texture transform bind）に対応していない: lookAt が expression の方式（虹彩・ハイライトの UV を
+    // ずらす）の VRM は、読み込むときに three-vrm が「Tried to add a texture transform bind to the material … is not supported」と警告し、
+    // 視線・驚いた顔の瞳が動かない（今の花音の kanon.vrm が当たる。作り直すモデルは目のボーンの方式にする。kanon-stream-video#25）
+    loader.register((parser) => new VRMLoaderPlugin(parser, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, { materialType: MToonNodeMaterial }) }))
     const gltf = await loader.loadAsync(url, (e) => {
       if (e.total) onProgress?.(e.loaded / e.total)
     })
@@ -136,10 +142,21 @@ const rimColorAway = new THREE.Color('#d6dbe4').multiplyScalar(0.1)
 const RIM_MIX_AWAY = 0.85
 const _rim = new THREE.Color()
 
+/**
+ * 調整する MToon（WebGPU の MToonNodeMaterial。調整に使う欄は WebGL の MToonMaterial と同じ名前なので、どちらも受ける）
+ */
+export type VrmMToon = MToonMaterial | MToonNodeMaterial
+
+/** MToon か（WebGL の MToonMaterial・WebGPU の MToonNodeMaterial のどちらでも。使う側の材質の判定もこれを使う） */
+export function isVrmMToon(m: THREE.Material): m is THREE.Material & VrmMToon {
+  const x = m as Partial<{ isMToonMaterial: boolean; isMToonNodeMaterial: boolean }>
+  return x.isMToonMaterial === true || x.isMToonNodeMaterial === true
+}
+
 /** 縁の光（Character ごと。読み込んだ VRM の調整した MToon と、外にいる度合い） */
 export interface VrmRim {
   /** 調整した MToon（リムを外にいる度合いで変える） */
-  readonly tuned: MToonMaterial[]
+  readonly tuned: VrmMToon[]
   /** 外にいる度合い（0 = ラボの中、1 = 外・建物の中） */
   blend: number
   /** MToon の調整（リムの色・照明との混ぜ方。character/avatar/visualConfig.ts の mtoon） */
@@ -182,15 +199,17 @@ export function releaseVrm(vrm: VRM, rim: VrmRim) {
 
 /** MToon を暗いラボ向けに調整する（輪郭のリム・影色の持ち上げ。リムの色と混ぜ方は rim の物） */
 function tuneMaterial(material: THREE.Material, rim: VrmRim, cfg: VrmMtoonConfig) {
-  const m = material as MToonMaterial
-  if (!m.isMToonMaterial) return
+  if (!isVrmMToon(material)) return
+  const m: VrmMToon = material
   // 背景に埋もれないよう、輪郭をシアンで縁取る（視線に対するリム）
   rim.tuned.push(m)
   m.parametricRimColorFactor.copy(rim.color).lerp(rimColorAway, rim.blend)
   m.parametricRimFresnelPowerFactor = cfg.rimFresnelPower
   m.parametricRimLiftFactor = cfg.rimLift
   m.rimLightingMixFactor = rim.mtoon.rimLightingMix + (RIM_MIX_AWAY - rim.mtoon.rimLightingMix) * rim.blend
-  m.giEqualizationFactor = cfg.giEqualization
+  // 環境光の均一化（giEqualization）は WebGPU の MToonNodeMaterial に無い（環境光は向きのまま当たる。均一化 0 と同じ）。WebGL の MToonMaterial のときだけ
+  // 入れる。花音は独自の材質に作り直すので、node 版に足すことはしない（第 1 段の決め。kanon-stream-video#25）
+  if ('giEqualizationFactor' in m) m.giEqualizationFactor = cfg.giEqualization
   // 影色を少し持ち上げて、キーライトが当たらない側が黒くつぶれないようにする
   m.shadeColorFactor.lerp(white, cfg.shadeLift)
   m.outlineWidthFactor *= cfg.outlineWidthScale

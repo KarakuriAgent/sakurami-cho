@@ -4,8 +4,10 @@ import { PALETTE } from 'sakurami-cho/world'
 import { LabAtmosphere, RideDriver, TownClock, TownExposure, TownRoot, TownView } from 'sakurami-cho/react'
 import { sceneHook, walkerState } from '../debug'
 import { loadingLabBuilt, loadingReady } from '../loading'
-import { town, townState, walker } from '../town'
+import { DEBUG, town, townState, walker } from '../town'
+import type { WebGPURenderer } from 'three/webgpu'
 import { vrmPending } from '../vrm'
+import { gpuState } from '../gpu'
 import { updateMiniMap } from '../townMap'
 import { Controls } from './Controls'
 import { FollowCam } from './FollowCam'
@@ -69,7 +71,8 @@ function Render() {
 }
 
 /**
- * 準備の合図（町の地図データを読み終えて（か、無いと分かって）、しまった VRM を読み終えて（か、無い・読めないと分かって）から 30 コマ描いたら。?debug の __walker.ready と html の data-walker-ready）。
+ * 準備の合図（町の地図データを読み終えて（か、無いと分かって）、しまった VRM を読み終えて（か、無い・読めないと分かって）、描画の土台が WebGPU・実の GPU で、
+ * 場面の材質の先のコンパイル（compileAsync）を済ませてから 30 コマ描いたら。?debug の __walker.ready と html の data-walker-ready）。
  * 読み込み中の進み具合（../loading）にも、ラボを作り終えた（これが付いてから 2 コマ目。1 コマ目を描くときに素材のシェーダーを組み立てるので、それを含める）・
  * 準備ができた（進み具合を消す）を知らせる
  */
@@ -79,17 +82,33 @@ function ReadySignal() {
   const gl = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
   useEffect(() => {
-    sceneHook.gl = gl
+    sceneHook.gl = gl as unknown as WebGPURenderer
     sceneHook.scene = scene
     return () => {
       sceneHook.gl = null
       sceneHook.scene = null
     }
   }, [gl, scene])
-  useFrame(() => {
+  // 読み込みの間に、場面の全部の材質のパイプラインを先に作る（WebGPU の最初のコンパイルは数秒かかる。準備ができたの条件に入れる）
+  const compiled = useRef<'no' | 'running' | 'done'>('no')
+  useFrame(({ gl: r, scene: s, camera }) => {
     walkerState.frames++
     if (++drawn.current === 2) loadingLabBuilt()
     if (walkerState.ready || townState.status === 'idle' || townState.status === 'loading' || vrmPending()) return
+    // 描画の土台が WebGPU・実の GPU でなければ、準備ができたにしない（src/gpu.ts が画面とコンソールに理由を出す）
+    if (gpuState.ok !== true) return
+    if (compiled.current === 'no') {
+      compiled.current = 'running'
+      const t0 = performance.now()
+      ;(r as unknown as WebGPURenderer)
+        .compileAsync(s, camera)
+        .catch((e: unknown) => console.error('[town-walker] 材質の先のコンパイルに失敗しました', e))
+        .finally(() => {
+          compiled.current = 'done'
+          if (DEBUG) console.info(`[town-walker] 先のコンパイル ${Math.round(performance.now() - t0)}ms`)
+        })
+    }
+    if (compiled.current !== 'done') return
     if (++settled.current >= 30) {
       walkerState.ready = true
       document.documentElement.dataset.walkerReady = '1'

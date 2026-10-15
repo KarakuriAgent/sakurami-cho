@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { texture } from 'three/tsl'
 import { townOptions } from '../../townHost'
 
 /**
@@ -94,13 +95,24 @@ function plainTexture(image: ImageBitmap | null, anisotropy: number) {
   return t
 }
 
-/** 町の質感の uniform（建物・地面・木・小物のシェーダーが共有する。createTownTextures が中身を入れる） */
+/** 仮の層の配列のテクスチャ（町を組み立てる前に、読む側の材質を組み立てる時の物。中身は灰色 1 画素 1 層） */
+function placeholderArray() {
+  const t = new THREE.DataArrayTexture(new Uint8Array([128, 128, 128, 255]), 1, 1, 1)
+  t.needsUpdate = true
+  return t
+}
+
+/**
+ * 町の質感の uniform（建物・地面・木・小物のシェーダーが共有する。createTownTextures が中身を入れる）。
+ * WebGPU への移行（第 1 段）から TSL の TextureNode（TSL の材質は townTextureUniforms.uBldAlb.sample(uv).depth(層) のように読む。value を替えると
+ * 読む側の材質も替わる）。名前は前の GLSL の uniform と同じ（まだ TSL にしていない ShaderMaterial が uniforms に広げて使う）
+ */
 export const townTextureUniforms = {
-  uBldAlb: { value: null as THREE.DataArrayTexture | null },
-  uBldNrm: { value: null as THREE.DataArrayTexture | null },
-  uGndAlb: { value: null as THREE.DataArrayTexture | null },
-  uGndNrm: { value: null as THREE.DataArrayTexture | null },
-  uFoliage: { value: null as THREE.Texture | null },
+  uBldAlb: texture(placeholderArray()),
+  uBldNrm: texture(placeholderArray()),
+  uGndAlb: texture(placeholderArray()),
+  uGndNrm: texture(placeholderArray()),
+  uFoliage: texture(new THREE.DataTexture(new Uint8Array([60, 90, 40, 255]), 1, 1)),
 }
 
 /** 読んだ画像からテクスチャを作って uniform に入れる（町を組み立てるとき 1 回） */
@@ -114,7 +126,7 @@ export function createTownTextures(images: TownTextureImages | null, anisotropy:
   u.uFoliage.value = plainTexture(images?.foliage ?? null, anisotropy)
 }
 
-/** GLSL: 質感の sampler の宣言 */
+/** GLSL: 質感の sampler の宣言（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す） */
 export const TEXTURE_DECL = /* glsl */ `
 uniform highp sampler2DArray uBldAlb;
 uniform highp sampler2DArray uBldNrm;

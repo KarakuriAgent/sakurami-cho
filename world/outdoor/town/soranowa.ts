@@ -6,7 +6,7 @@ import { GeoBuilder } from '../site/builder'
 import { Fleet } from '../transit/fleet'
 import { TM } from '../transit/transitMaterial'
 import type { TownStructure } from './townData'
-import { PLAIN_DEPTH_VERTEX, depthMaterial } from './shadows'
+import { depthMaterial } from './shadows'
 import { HUB_Y as CONFIG_HUB_Y, SORANOWA } from '../../../core/soranowa'
 import { wheel } from './soranowaWheel'
 import { DetailedCabins, cabinUniforms } from './soranowaCabin'
@@ -380,7 +380,7 @@ export function createSoranowa(s: Extract<TownStructure, { type: 'soranowa' }>, 
   const legMesh = new THREE.Mesh(legs.build(), material)
   legMesh.name = 'soranowa:legs'
   // 支柱は動かないので町の太陽の影を落とす（回るホイールとゴンドラは落とさない）
-  legMesh.userData.shadowMaterial = depthMaterial(PLAIN_DEPTH_VERTEX)
+  legMesh.userData.shadowMaterial = depthMaterial()
   group.add(legMesh)
 
   // ゴンドラ（いつも水平。インスタンス）
@@ -400,7 +400,7 @@ export function createSoranowa(s: Extract<TownStructure, { type: 'soranowa' }>, 
 
   // 細かいゴンドラ（カメラの近くと、花音が乗っている 1 基）
   const cabins = new DetailedCabins(DETAIL.max + 1)
-  const cabinDepth = depthMaterial(PLAIN_DEPTH_VERTEX)
+  const cabinDepth = depthMaterial()
   for (const m of cabins.meshes) {
     group.add(m)
     m.layers.set(layer)

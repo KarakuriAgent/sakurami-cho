@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import type * as THREE from 'three'
+import type { WebGPURenderer } from 'three/webgpu'
 import { addLabLightDimmer } from '../world/labLight'
 import type { Lab } from '../world/lab/createLab'
 import { createLabScreen, type ScreenDraw } from '../world/lab/screens'
@@ -82,7 +83,7 @@ export function useRoomDimmer(apply: (k: number) => void, min: number, enabled =
  * draw には経過秒 t が渡る。曲面・斜めから見ても文字がつぶれないよう、異方性フィルタは GPU の最大にする。
  */
 export function useCanvasScreen(w: number, h: number, draw: ScreenDraw, fps = 12): THREE.CanvasTexture {
-  const maxAnisotropy = useThree((s) => s.gl.capabilities.getMaxAnisotropy())
+  const maxAnisotropy = useThree((s) => (s.gl as unknown as WebGPURenderer).getMaxAnisotropy())
   // 描く関数と fps は作った時の物で始め、描く関数はそのあと下の effect で差し替える（前の drawRef と同じ）
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const screen = useMemo(() => createLabScreen('', w, h, draw, fps, { maxAnisotropy }), [w, h, maxAnisotropy])

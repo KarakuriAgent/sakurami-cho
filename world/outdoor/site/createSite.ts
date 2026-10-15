@@ -5,7 +5,7 @@ import { enableSunShadow } from '../../environment/sunShadow'
 import { labLight } from '../../labLight'
 import { OUTDOOR_LAYER } from '../layers'
 import { LIGHT_KIND, type LightItem } from '../town/lights'
-import { depthMaterial, localShadowCasters, PLAIN_DEPTH_VERTEX } from '../town/shadows'
+import { depthMaterial, localShadowCasters } from '../town/shadows'
 import { shrubMesh, type TreeMaterials } from '../town/trees'
 import { GeoBuilder } from './builder'
 import { buildShell } from './labShell'
@@ -43,7 +43,7 @@ export function createLabSite(anisotropy: number, treeMat: TreeMaterials | null)
   const group = new THREE.Group()
   group.name = 'labSite'
   const mat = createSiteMaterial(anisotropy)
-  const depth = depthMaterial(PLAIN_DEPTH_VERTEX)
+  const depth = depthMaterial()
   const shell = buildShell()
   const grounds = buildSite()
 

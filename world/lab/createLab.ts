@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import type { WebGPURenderer } from 'three/webgpu'
+import { skipUnportedShaders } from '../materials/unported'
 import { createLabMaterials, type LabMaterials, type LabTextures } from '../materials/labMaterials'
 import { createLabAtmosphere, type LabAtmosphere } from './atmosphere'
 import { assembleLabKit, type LabAnchor, type LabFrame, type LabKit, type LabScreenFactory, type LabSlot } from './kit'
@@ -25,7 +27,7 @@ import { prepareLabSharedTextures, type LabFloorTextures } from './textures'
  */
 
 export interface LabOptions {
-  renderer: THREE.WebGLRenderer
+  renderer: WebGPURenderer
   scene: THREE.Scene
   /** 読んだままのテクスチャ（下ごしらえはここでする。textures.ts の labTextureUrls の置き場所から読んだ物） */
   textures: { shared: LabTextures; floor: LabFloorTextures }
@@ -84,6 +86,8 @@ export interface Lab {
 }
 
 export function createLab(o: LabOptions): Lab {
+  // WebGPU への移行の途中: まだ TSL にしていない ShaderMaterial は描かない（world/materials/unported.ts。第 2 段で消す）
+  skipUnportedShaders(o.renderer)
   const placements = o.placements ?? LAB_PLACEMENTS
   const host = o.host ?? labOptions()
   const quality = o.quality
@@ -97,7 +101,7 @@ export function createLab(o: LabOptions): Lab {
     stage: host.slots['lighting.stage']?.() ?? null,
   })
   const shell = createLabShell({ materials, floor: o.textures.floor, quality })
-  const kits = createKits(placements, host, { materials, quality, maxAnisotropy: o.renderer.capabilities.getMaxAnisotropy() })
+  const kits = createKits(placements, host, { materials, quality, maxAnisotropy: o.renderer.getMaxAnisotropy() })
   // 照明のコアの光（印 baseStation）は基地局のキットの入力の値を読む（読むたびに見る。キットの入力の値はラボの口の channels.baseStation を読む）
   lighting.bindChannels({ baseStation: kits.get('baseStation')?.channels ?? null })
   const atmosphere = createLabAtmosphere({ quality, pixelRatio: o.pixelRatio, placements })

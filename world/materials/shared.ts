@@ -1,8 +1,12 @@
+import { uniform } from 'three/tsl'
+
 /**
  * 自作シェーダー群で共有する時間 uniform。
  * 町の毎コマの初め（town.begin。world/createTown.ts）が毎フレーム 1 回だけ更新し（5-6 から。前は Lab.tsx の ShaderClock）、全マテリアルが同じオブジェクトを参照する。
+ * WebGPU への移行（第 1 段）から TSL のノードの uniform（TSL の材質はそのまま式に使う。value は前と同じく読み書きでき、まだ TSL にしていない
+ * ShaderMaterial の uniforms にも前のまま入れられる）
  */
-export const sharedTime = { value: 0 }
+export const sharedTime = uniform(0)
 
 /** GLSL: 軽量なハッシュ関数 */
 export const GLSL_HASH = /* glsl */ `

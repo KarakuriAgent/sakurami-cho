@@ -1,43 +1,102 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  Fn,
+  If,
+  abs,
+  asin,
+  atan,
+  attribute,
+  cameraPosition,
+  clamp,
+  dot,
+  exp,
+  faceDirection,
+  float,
+  floor,
+  fract,
+  fwidth,
+  instancedBufferAttribute,
+  int,
+  length,
+  max,
+  min,
+  mix,
+  modelViewMatrix,
+  modelWorldMatrix,
+  normalLocal,
+  normalWorld,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  pow,
+  reflect,
+  select,
+  sin,
+  smoothstep,
+  sqrt,
+  step,
+  uniform,
+  uniformArray,
+  uv,
+  varying,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl'
 import { outdoor } from '../environment/daylight'
 import { sharedTime } from '../materials/shared'
-import { TOWN_LIGHT } from './town/facades'
-import { TOWN_SHADOW, townShadowUniforms } from './town/shadows'
-import { TEXTURE_DECL, townTextureUniforms } from './town/townTextures'
-import { TOWN_LAMPS, lampUniforms } from './town/lamps'
+import { townLight } from './town/facades'
+import { townShadow } from './town/shadows'
+import { townTextureUniforms } from './town/townTextures'
+import { townLamps } from './town/lamps'
+
+type Node<T = unknown> = THREE.Node<T>
 
 /**
- * 遠景（空・地形・海・建物・木・灯り）のシェーダー。
+ * 遠景（空・地形・海・建物・木・灯り）の材質。
  *
- * - 部屋のライトは使わない（lights: false）。太陽・空の光・空気遠近は下の共有 uniform（outdoorUniforms）で自前に計算する
+ * - 部屋のライトは使わない。太陽・空の光・空気遠近は下の共有の uniform（outdoorUniforms）で自前に計算する
  *   （部屋の 20 個を超えるライトを遠景の画素ごとに計算しないため。部屋のライトが遠景を照らすこともない）
- * - ラボの霧（fogExp2）はかけない（fog: false。ShaderMaterial の既定）。遠くほど空の色にかすむのは outdoorHaze()
- * - 値は HDR のリニア。最後に EffectComposer のトーンマッピングがかかる
+ * - ラボの霧（fogExp2）はかけない（fog: false）。遠くほど空の色にかすむのは outdoorHaze()
+ * - 値は HDR のリニア。トーンマッピングと sRGB は描画の出力（WebGPURenderer の出力の変換。後処理を入れたら RenderPipeline）がかける
+ *
+ * WebGPU（WebGPURenderer＋TSL）への移行（第 1 段。kanon-claire-thompson/kanon-stream-video#25）:
+ * - 共有の部品は TSL の Fn（oHash・oNoise・outdoorShade・outdoorHaze・skyColor。町の townLight・townShadow・townLamps・質感の TextureNode）
+ * - 空・星・構造物・ドーム・灯り・光の筋の 6 つの材質は TSL（NodeMaterial）。前の GLSL の TONE（tonemapping_fragment・colorspace_fragment）は
+ *   出力の変換がするので無くした。使う側が毎コマ書く値は、前と同じ material.uniforms.<名前>.value（ノードの uniform）
+ * - 1px を超える点（星・町の灯り）は Points ではなく Sprite（PointsNodeMaterial）を count 個（インスタンス）並べ、大きさは sizeNode（WebGPU の
+ *   点は 1px だけ）。点ごとの値は InstancedBufferAttribute
+ * - GLSL の COMMON・SKY・TONE は、まだ TSL にしていない ShaderMaterial のためだけに残す（WebGPU では描けない。第 2 段でそれぞれを TSL にしたら消す）
  */
 
-/** 遠景のシェーダーが共有する uniform（OutdoorUniforms が毎コマ outdoor から書き込む） */
+/**
+ * 色の uniform（値は THREE.Color。シェーダーの中では vec3。型の上だけ vec3 として扱う（@types/three の TSL は color と vec3 の足し算などを許さないため））
+ */
+export const colorUniform = (c = new THREE.Color()) => uniform(c) as unknown as THREE.UniformNode<'vec3', THREE.Color>
+
+/** 遠景の材質が共有する uniform（ノード。OutdoorUniforms が毎コマ outdoor から書き込む） */
 export const outdoorUniforms = {
-  uSunDir: { value: new THREE.Vector3(0, 1, 0) },
-  uSunLight: { value: new THREE.Color() },
-  uSkyLight: { value: new THREE.Color() },
-  uHaze: { value: new THREE.Color() },
-  uHazeDist: { value: 8000 },
-  uZenith: { value: new THREE.Color() },
-  uMid: { value: new THREE.Color() },
-  uHorizon: { value: new THREE.Color() },
-  uHorizonAnti: { value: new THREE.Color() },
-  uGlow: { value: new THREE.Color() },
-  uSunDisc: { value: new THREE.Color() },
-  uCloudLit: { value: new THREE.Color() },
-  uCloudShade: { value: new THREE.Color() },
-  uCloudCover: { value: 0.3 },
-  uCityGlow: { value: new THREE.Color() },
-  uWater: { value: new THREE.Color() },
-  uNight: { value: 0 },
-  uDaylight: { value: 1 },
+  uSunDir: uniform(new THREE.Vector3(0, 1, 0)),
+  uSunLight: colorUniform(),
+  uSkyLight: colorUniform(),
+  uHaze: colorUniform(),
+  uHazeDist: uniform(8000),
+  uZenith: colorUniform(),
+  uMid: colorUniform(),
+  uHorizon: colorUniform(),
+  uHorizonAnti: colorUniform(),
+  uGlow: colorUniform(),
+  uSunDisc: colorUniform(),
+  uCloudLit: colorUniform(),
+  uCloudShade: colorUniform(),
+  uCloudCover: uniform(0.3),
+  uCityGlow: colorUniform(),
+  uWater: colorUniform(),
+  uNight: uniform(0),
+  uDaylight: uniform(1),
   uTime: sharedTime,
   /** 町の方角（xz の単位ベクトル。夜の地平線の町明かり） */
-  uTownDir: { value: new THREE.Vector2(0, 1) },
+  uTownDir: uniform(new THREE.Vector2(0, 1)),
 }
 
 /** outdoor（時刻から計算した外の状態）を共有 uniform へ写す */
@@ -71,7 +130,68 @@ export function setTownDirection(x: number, y: number) {
 setTownDirection(-730, -1170)
 
 /* -------------------------------------------------------------------------- */
-/* GLSL の部品                                                                   */
+/* 共有の部品（TSL）                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** 0〜1 のハッシュ（2 次元） */
+export const oHash = Fn(([p]: [Node<'vec2'>]) => {
+  const p3 = fract(vec3(p.x, p.y, p.x).mul(0.1031)).toVar()
+  p3.addAssign(dot(p3, p3.yzx.add(33.33)))
+  return fract(p3.x.add(p3.y).mul(p3.z))
+})
+
+/** 値のノイズ（2 次元。なめらかな補間） */
+export const oNoise = Fn(([p]: [Node<'vec2'>]) => {
+  const i = floor(p).toVar()
+  const f = fract(p)
+  const u = f.mul(f).mul(f.mul(-2.0).add(3.0)).toVar()
+  return mix(mix(oHash(i), oHash(i.add(vec2(1.0, 0.0))), u.x), mix(oHash(i.add(vec2(0.0, 1.0))), oHash(i.add(vec2(1.0, 1.0))), u.x), u.y)
+})
+
+/** 太陽の直射と空の光（ランバート。下向きの面には地面の照り返し） */
+export const outdoorShade = Fn(([albedo, N]: [Node<'vec3'>, Node<'vec3'>]) => {
+  const u = outdoorUniforms
+  const ndl = max(dot(N, u.uSunDir), 0.0)
+  const up = N.y.mul(0.5).add(0.5)
+  const amb = u.uSkyLight.mul(up.mul(0.58).add(0.42)).add(u.uSunLight.mul(up.oneMinus().mul(0.07)))
+  return albedo.mul(u.uSunLight.mul(ndl).add(amb))
+})
+
+/** 空気遠近（遠いほど地平線の空の色に溶け込む）。wp = ワールドの位置 */
+export const outdoorHaze = Fn(([col, wp]: [Node<'vec3'>, Node<'vec3'>]) => {
+  const u = outdoorUniforms
+  const dv = wp.sub(cameraPosition).toVar()
+  const d = length(dv).toVar()
+  const f = exp(d.negate().div(u.uHazeDist)).oneMinus()
+  // 太陽の方を見るほど、かすみは太陽の光を散らして明るく暖かい（前方散乱。逆光の町に奥行きが出る）
+  const dir = dv.div(max(d, 1e-3))
+  const toSun = max(dot(dir, u.uSunDir), 0.0).toVar()
+  const haze = u.uHaze.add(u.uSunLight.mul(pow(toSun, 6.0).mul(0.12).add(pow(toSun, 40.0).mul(0.2))).mul(smoothstep(-0.05, 0.1, u.uSunDir.y)))
+  return mix(col, haze, f)
+})
+
+/** 空の色（方向 d。地平線 → 中ほど → 天頂の 3 段のグラデーションと、太陽の側の地平線の光、夜の町明かり） */
+export const skyColor = Fn(([d]: [Node<'vec3'>]) => {
+  const u = outdoorUniforms
+  const h = max(d.y, 0.0).toVar()
+  // 地平線の色は、太陽の側（朝夕の橙・桃色）と反対側（青紫）で変える
+  const sxz = u.uSunDir.xz
+  const dxz = normalize(d.xz.add(1e-5)).toVar()
+  const side = dot(dxz, sxz.div(max(length(sxz), 1e-4))).mul(0.5).add(0.5)
+  const horizon = mix(u.uHorizonAnti, u.uHorizon, smoothstep(0.1, 0.95, side)).toVar()
+  const c = mix(horizon, u.uMid, smoothstep(0.0, 0.32, pow(h, 0.85))).toVar()
+  c.assign(mix(c, u.uZenith, smoothstep(0.2, 0.9, h)))
+  const sunSide = max(dot(d, u.uSunDir), 0.0).toVar()
+  const band = exp(h.mul(-4.0))
+  c.addAssign(u.uGlow.mul(pow(sunSide, 3.0).mul(band).mul(1.1).add(pow(sunSide, 16.0).mul(0.9))))
+  c.addAssign(u.uCityGlow.mul(smoothstep(0.0, 0.85, dot(dxz, u.uTownDir))).mul(exp(h.mul(-16.0))))
+  // 地平線より下（海・地面の向こう）は地平線の色を少し暗く（GLSL の smoothstep(0.0, -0.06, d.y) と同じ値。端の順を正しい向きにした）
+  c.assign(mix(c, horizon.mul(0.75), smoothstep(0.0, 0.06, d.y.negate())))
+  return c
+})
+
+/* -------------------------------------------------------------------------- */
+/* GLSL の部品（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す）     */
 /* -------------------------------------------------------------------------- */
 
 export const COMMON = /* glsl */ `
@@ -150,123 +270,100 @@ export const TONE = /* glsl */ `
   #include <colorspace_fragment>
 `
 
+/** 材質に、使う側が毎コマ書く uniform（ノード）の一覧を付ける（前の ShaderMaterial の material.uniforms.<名前>.value と同じ書き方で使える） */
+function withUniforms<M extends THREE.Material, U extends object>(m: M, uniforms: U): M & { readonly uniforms: U } {
+  return Object.assign(m, { uniforms })
+}
+
+/** 色だけを自前の式で決める、ライトも霧も使わない材質（遠景の材質の土台） */
+function unlit(name: string, params: ConstructorParameters<typeof THREE.MeshBasicNodeMaterial>[0] = {}) {
+  const m = new THREE.MeshBasicNodeMaterial({ fog: false, ...params })
+  m.name = name
+  return m
+}
+
 /* -------------------------------------------------------------------------- */
 /* 空                                                                           */
 /* -------------------------------------------------------------------------- */
 
+/** fbm（5 段の値のノイズ。雲） */
+const fbm = Fn(([p0]: [Node<'vec2'>]) => {
+  const p = vec2(p0).toVar()
+  const s = float(0).toVar()
+  let a = 0.5
+  for (let i = 0; i < 5; i++) {
+    s.addAssign(oNoise(p).mul(a))
+    p.assign(p.mul(2.03).add(vec2(17.1, 9.2)))
+    a *= 0.5
+  }
+  return s.div(0.96875)
+})
+
 /** 空のドーム（大きな球の内側）。雲（ノイズ）と太陽の円盤も描く。深度は書かない */
 export function createSkyMaterial(clouds: boolean) {
-  return new THREE.ShaderMaterial({
-    name: 'outdoorSky',
-    side: THREE.BackSide,
-    depthWrite: false,
-    defines: clouds ? { USE_CLOUDS: '' } : {},
-    uniforms: {
-      ...outdoorUniforms,
-    },
-    vertexShader: /* glsl */ `
-      varying vec3 vDir;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vDir = wp.xyz - cameraPosition;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      ${SKY}
-      uniform vec3 uSunDisc;
-      uniform vec3 uCloudLit;
-      uniform vec3 uCloudShade;
-      uniform float uCloudCover;
-      varying vec3 vDir;
-
-      float fbm(vec2 p) {
-        float s = 0.0;
-        float a = 0.5;
-        for (int i = 0; i < 5; i++) {
-          s += oNoise(p) * a;
-          p = p * 2.03 + vec2(17.1, 9.2);
-          a *= 0.5;
-        }
-        return s / 0.96875;
-      }
-
-      void main() {
-        vec3 d = normalize(vDir);
-        vec3 col = skyColor(d);
-        float cs = dot(d, uSunDir);
-        // 太陽の円盤とまわりのにじみ（HDR。Bloom でにじむ）
-        float disc = smoothstep(0.99994, 0.99997, cs);
-        float halo = pow(max(cs, 0.0), 900.0) * 0.06 + pow(max(cs, 0.0), 90.0) * 0.012;
-        col += uSunDisc * (disc + halo) * smoothstep(-0.02, 0.0, d.y);
-        #ifdef USE_CLOUDS
-        if (d.y > 0.0) {
-          vec2 uv = d.xz / (d.y + 0.1) * 1.4 + vec2(uTime * 0.0035, uTime * 0.0012);
-          float n = fbm(uv * 1.2);
-          float detail = fbm(uv * 4.3 + 3.1);
-          float cov = uCloudCover;
-          float c = smoothstep(1.0 - cov, 1.0 - cov + 0.3, n * 0.82 + detail * 0.18);
-          c *= smoothstep(0.0, 0.12, d.y);
-          // 光の当たり方: 太陽の側ほど明るく、縁（薄いところ）は太陽の色で光る（夕方は金に縁取られる）
-          float toward = max(cs, 0.0);
-          vec3 cloud = mix(uCloudShade, uCloudLit, 0.35 + 0.65 * toward * toward);
-          float rim = (1.0 - smoothstep(0.0, 0.55, c)) * pow(toward, 5.0);
-          cloud += uCloudLit * rim * 1.4;
-          col = mix(col, cloud, c * 0.9);
-        }
-        #endif
-        gl_FragColor = vec4(col, 1.0);
-        ${TONE}
-      }
-    `,
-  })
+  const u = outdoorUniforms
+  const m = unlit('outdoorSky', { side: THREE.BackSide, depthWrite: false })
+  m.colorNode = Fn(() => {
+    const d = normalize(positionWorld.sub(cameraPosition)).toVar()
+    const col = skyColor(d).toVar()
+    const cs = dot(d, u.uSunDir).toVar()
+    // 太陽の円盤とまわりのにじみ（HDR。後処理の bloom でにじむ）
+    const disc = smoothstep(0.99994, 0.99997, cs)
+    const mcs = max(cs, 0.0)
+    const halo = pow(mcs, 900.0).mul(0.06).add(pow(mcs, 90.0).mul(0.012))
+    col.addAssign(u.uSunDisc.mul(disc.add(halo)).mul(smoothstep(-0.02, 0.0, d.y)))
+    if (clouds) {
+      If(d.y.greaterThan(0.0), () => {
+        const p = d.xz.div(d.y.add(0.1)).mul(1.4).add(vec2(u.uTime.mul(0.0035), u.uTime.mul(0.0012))).toVar()
+        const n = fbm(p.mul(1.2))
+        const detail = fbm(p.mul(4.3).add(3.1))
+        const cov = u.uCloudCover
+        const c = smoothstep(cov.oneMinus(), cov.oneMinus().add(0.3), n.mul(0.82).add(detail.mul(0.18))).mul(smoothstep(0.0, 0.12, d.y)).toVar()
+        // 光の当たり方: 太陽の側ほど明るく、縁（薄いところ）は太陽の色で光る（夕方は金に縁取られる）
+        const toward = max(cs, 0.0)
+        const cloud = mix(u.uCloudShade, u.uCloudLit, toward.mul(toward).mul(0.65).add(0.35)).toVar()
+        const rim = smoothstep(0.0, 0.55, c).oneMinus().mul(pow(toward, 5.0))
+        cloud.addAssign(u.uCloudLit.mul(rim).mul(1.4))
+        col.assign(mix(col, cloud, c.mul(0.9)))
+      })
+    }
+    return col
+  })()
+  return m
 }
 
-/** 星（Points。天の北極のまわりを回す）。昼は消える */
-export function createStarsMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'outdoorStars',
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    uniforms: {
-      uStars: { value: 0 },
-      uPixelRatio: { value: 1 },
-      uTime: sharedTime,
-    },
-    vertexShader: /* glsl */ `
-      attribute float aMag;
-      attribute float aSeed;
-      uniform float uStars;
-      uniform float uPixelRatio;
-      uniform float uTime;
-      varying float vB;
-      varying vec3 vTint;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        gl_Position = projectionMatrix * viewMatrix * wp;
-        vec3 d = normalize(wp.xyz - cameraPosition);
-        // 地平線の近くは町の明かりで見えにくい
-        float horizon = smoothstep(0.02, 0.3, d.y);
-        float twinkle = 0.78 + 0.22 * sin(uTime * (1.3 + aSeed * 3.1) + aSeed * 61.0);
-        vB = uStars * aMag * horizon * twinkle;
-        vTint = mix(vec3(1.0, 0.86, 0.72), vec3(0.78, 0.86, 1.0), fract(aSeed * 7.3));
-        gl_PointSize = vB > 0.003 ? (1.3 + aMag * 1.7) * uPixelRatio : 0.0;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying float vB;
-      varying vec3 vTint;
-      void main() {
-        vec2 c = gl_PointCoord * 2.0 - 1.0;
-        float r2 = dot(c, c);
-        if (r2 > 1.0) discard;
-        gl_FragColor = vec4(vTint * vB * exp(-r2 * 3.0) * 1.6, 1.0);
-        ${TONE}
-      }
-    `,
-  })
+/** 星の点ごとの値（位置・明るさ・種）。星の Sprite（count 個）が読む */
+export interface StarAttributes {
+  position: THREE.InstancedBufferAttribute
+  mag: THREE.InstancedBufferAttribute
+  seed: THREE.InstancedBufferAttribute
+}
+
+/**
+ * 星（Sprite を星の数だけ並べる。天の北極のまわりを回す）。昼は消える。
+ * 大きさは画素（sizeNode。描画の画素の比は three が掛ける）
+ */
+export function createStarsMaterial(a: StarAttributes) {
+  const uStars = uniform(0)
+  const m = new THREE.PointsNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: false, fog: false })
+  m.name = 'outdoorStars'
+  const pos = instancedBufferAttribute(a.position, 'vec3' as const)
+  const mag = instancedBufferAttribute(a.mag, 'float' as const)
+  const seed = instancedBufferAttribute(a.seed, 'float' as const)
+  m.positionNode = pos
+  const wp = modelWorldMatrix.mul(vec4(pos, 1.0)).xyz
+  const d = normalize(wp.sub(cameraPosition))
+  // 地平線の近くは町の明かりで見えにくい
+  const horizon = smoothstep(0.02, 0.3, d.y)
+  const twinkle = sin(sharedTime.mul(seed.mul(3.1).add(1.3)).add(seed.mul(61.0))).mul(0.22).add(0.78)
+  const b = uStars.mul(mag).mul(horizon).mul(twinkle).toVar()
+  m.sizeNode = select(b.greaterThan(0.003), mag.mul(1.7).add(1.3), 0.0)
+  const vB = varying(b)
+  const vTint = varying(mix(vec3(1.0, 0.86, 0.72), vec3(0.78, 0.86, 1.0), fract(seed.mul(7.3))))
+  const c = uv().mul(2.0).sub(1.0)
+  const r2 = dot(c, c)
+  m.colorNode = vec4(vTint.mul(vB).mul(exp(r2.mul(-3.0))).mul(1.6).mul(step(r2, 1.0)), 1.0)
+  return withUniforms(m, { uStars })
 }
 
 /* -------------------------------------------------------------------------- */
@@ -278,71 +375,35 @@ export function createStarsMaterial() {
  * 光の種類: 1 = 駅の時計（uClock）、2 = 窓明かり（uWindows）、3 = ケーブルカーの車内（uCable）、4 = 小径・石段の足元灯（uPath。town/townStairsMesh.ts）
  */
 export function createStructureMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'outdoorStructures',
-    vertexColors: true,
-    // 両面を描く（岸壁・線路・橋などの面の向きをそろえなくてよいように）。法線は見ている側へ向ける
-    side: THREE.DoubleSide,
-    uniforms: { ...outdoorUniforms, ...townShadowUniforms, ...townTextureUniforms, ...lampUniforms, uClock: { value: 0 }, uWindows: { value: 0 }, uCable: { value: 0 }, uPath: { value: 0 }, uLightGain: { value: 1 } },
-    vertexShader: /* glsl */ `
-      attribute vec4 aEmit;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vColor;
-      varying vec4 vEmit;
-      void main() {
-        #ifdef USE_INSTANCING
-        mat4 m = modelMatrix * instanceMatrix;
-        #else
-        mat4 m = modelMatrix;
-        #endif
-        vec4 wp = m * vec4(position, 1.0);
-        vWorld = wp.xyz;
-        vNormal = normalize(mat3(m) * normal);
-        vColor = color;
-        vEmit = aEmit;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      ${TOWN_LIGHT}
-      ${TOWN_SHADOW}
-      ${TEXTURE_DECL}
-      ${TOWN_LAMPS}
-      uniform float uClock;
-      uniform float uWindows;
-      uniform float uCable;
-      uniform float uPath;
-      uniform float uLightGain;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vColor;
-      varying vec4 vEmit;
-      void main() {
-        vec3 N = normalize(vNormal);
-        if (!gl_FrontFacing) N = -N;
-        // 質感（三方向から投影。煉瓦色は煉瓦、ほかはコンクリート）と、雨の筋・足元の汚れ
-        vec3 an = abs(N);
-        vec2 uv = an.y > 0.7 ? vWorld.xz : an.x > an.z ? vWorld.zy : vWorld.xy;
-        float brick = step(vColor.g * 1.3, vColor.r) * step(0.12, vColor.r);
-        float layer = brick > 0.5 ? 3.0 : 4.0;
-        vec3 t = texture(uBldAlb, vec3(uv / (brick > 0.5 ? 2.0 : 3.2), layer)).rgb * 2.0;
-        float dist = length(cameraPosition - vWorld);
-        vec3 det = pow(max(mix(vec3(1.0), t, 0.8), 0.0), vec3(2.2));
-        vec3 albedo = vColor * mix(vec3(dot(det, vec3(0.2126, 0.7152, 0.0722))), det, 0.3 * brick);
-        float streak = smoothstep(0.55, 0.85, oNoise(vec2((uv.x) * 1.7, 0.5))) * (1.0 - an.y);
-        albedo *= 1.0 - 0.18 * streak - 0.1 * (1.0 - smoothstep(0.0, 2.0, oNoise(uv * 0.2) * 3.0));
-        vec3 col = townLight(albedo, N, 1.0, townShadow(vWorld, N));
-        col += albedo * townLamps(vWorld, N);
-        float k = vEmit.a < 0.5 ? 0.0 : vEmit.a < 1.5 ? uClock : vEmit.a < 2.5 ? uWindows : vEmit.a < 3.5 ? uCable : uPath;
-        col += vEmit.rgb * k * uLightGain;
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, 1.0);
-        ${TONE}
-      }
-    `,
-  })
+  const uniforms = { uClock: uniform(0), uWindows: uniform(0), uCable: uniform(0), uPath: uniform(0), uLightGain: uniform(1) }
+  // 両面を描く（岸壁・線路・橋などの面の向きをそろえなくてよいように）。法線は見ている側へ向ける
+  const m = unlit('outdoorStructures', { side: THREE.DoubleSide })
+  m.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const N = normalize(normalWorld).mul(faceDirection).toVar()
+    const color = attribute<'vec3'>('color', 'vec3' as const)
+    const emit = attribute<'vec4'>('aEmit', 'vec4')
+    // 質感（三方向から投影。煉瓦色は煉瓦、ほかはコンクリート）と、雨の筋・足元の汚れ
+    const an = abs(N).toVar()
+    const p = select(an.y.greaterThan(0.7), wp.xz, select(an.x.greaterThan(an.z), wp.zy, wp.xy)).toVar()
+    const brick = step(color.g.mul(1.3), color.r).mul(step(0.12, color.r)).toVar()
+    const isBrick = brick.greaterThan(0.5)
+    const t = townTextureUniforms.uBldAlb.sample(p.div(select(isBrick, 2.0, 3.2))).depth(select(isBrick, 3, 4)).rgb.mul(2.0)
+    const det = pow(max(mix(vec3(1.0), t, 0.8), 0.0), vec3(2.2)).toVar()
+    const albedo = color.mul(mix(vec3(dot(det, vec3(0.2126, 0.7152, 0.0722))), det, brick.mul(0.3))).toVar()
+    const streak = smoothstep(0.55, 0.85, oNoise(vec2(p.x.mul(1.7), 0.5))).mul(an.y.oneMinus())
+    albedo.mulAssign(float(1.0).sub(streak.mul(0.18)).sub(smoothstep(0.0, 2.0, oNoise(p.mul(0.2)).mul(3.0)).oneMinus().mul(0.1)))
+    const col = townLight(albedo, N, 1.0, townShadow(wp, N)).toVar()
+    col.addAssign(albedo.mul(townLamps(wp, N)))
+    const k = select(
+      emit.w.lessThan(0.5),
+      0.0,
+      select(emit.w.lessThan(1.5), uniforms.uClock, select(emit.w.lessThan(2.5), uniforms.uWindows, select(emit.w.lessThan(3.5), uniforms.uCable, uniforms.uPath))),
+    )
+    col.addAssign(emit.xyz.mul(k).mul(uniforms.uLightGain))
+    return outdoorHaze(col, wp)
+  })()
+  return withUniforms(m, uniforms)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -354,72 +415,52 @@ export function createStructureMaterial() {
  * 夕方からは葉脈ライティング（金緑色。ゆっくり明滅して「ドームが呼吸している」ように見える）
  */
 export function createDomeMaterial(ribs: number, rings: number) {
-  return new THREE.ShaderMaterial({
-    name: 'outdoorDome',
-    uniforms: { ...outdoorUniforms, uDome: { value: 0 }, uRibs: { value: ribs }, uRings: { value: rings } },
-    vertexShader: /* glsl */ `
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vUnit;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vWorld = wp.xyz;
-        vNormal = normalize(mat3(modelMatrix) * normal);
-        vUnit = position;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      ${SKY}
-      uniform float uDome;
-      uniform float uRibs;
-      uniform float uRings;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vUnit;
-      void main() {
-        vec3 N = normalize(vNormal);
-        vec3 V = normalize(cameraPosition - vWorld);
-        float az = atan(vUnit.z, vUnit.x) / 6.2831853 * uRibs;
-        float el = asin(clamp(vUnit.y, 0.0, 1.0)) / 1.5707963 * (uRings + 1.0);
-        float fa = abs(fract(az) - 0.5);
-        float fe = abs(fract(el) - 0.5);
-        float wa = fwidth(az) * 1.2 + 0.012;
-        float we = fwidth(el) * 1.2 + 0.02;
-        float rib = max(smoothstep(0.5 - wa, 0.5, fa), smoothstep(0.5 - we, 0.5, fe) * step(0.5, el));
-        // 主な骨のあいだの細い斜めの格子（ダイヤグリッド）。上ほど目が細かくならないよう、緯度で間隔を広げる
-        float cosEl = sqrt(max(1.0 - vUnit.y * vUnit.y, 0.04));
-        float g1 = az * 2.0 + el * 2.4 / max(cosEl, 0.35);
-        float g2 = az * 2.0 - el * 2.4 / max(cosEl, 0.35);
-        float wg = fwidth(g1) * 0.8 + 0.006;
-        float lattice = max(smoothstep(0.5 - wg, 0.5, abs(fract(g1) - 0.5)), smoothstep(0.5 - wg, 0.5, abs(fract(g2) - 0.5)));
-        float latticeFade = 1.0 - smoothstep(0.08, 0.25, fwidth(g1));
-        rib = max(rib, lattice * 0.75 * latticeFade);
-        // ガラス: 空を映し、中の木々（濃い緑）が透ける
-        float fres = 0.1 + 0.85 * pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 3.0);
-        vec3 refl = skyColor(reflect(-V, N)) * vec3(0.92, 0.97, 1.0);
-        float leaves = oNoise(vUnit.xz * 9.0 + vUnit.y * 3.0) * 0.6 + oNoise(vUnit.xz * 27.0) * 0.4;
-        vec3 inside = outdoorShade(mix(vec3(0.03, 0.07, 0.03), vec3(0.08, 0.14, 0.05), leaves), vec3(0.0, 1.0, 0.0)) * 0.8;
-        vec3 col = mix(inside, refl, fres);
-        // 太陽の照り返し（夕方はガラスが金に光る）
-        float spec = pow(max(dot(reflect(-V, N), uSunDir), 0.0), 60.0);
-        col += uSunLight * spec * 1.6;
-        // 白い鋼管のリブ
-        vec3 ribCol = outdoorShade(vec3(0.8, 0.8, 0.78), N);
-        col = mix(col, ribCol, rib * 0.9);
-        // 葉脈ライティング（金緑色。ゆっくり呼吸するように明滅し、葉脈のような筋が流れる）
-        float breath = 0.62 + 0.38 * sin(uTime * 0.55);
-        float veins = smoothstep(0.62, 0.95, oNoise(vUnit.xz * 16.0 + vec2(uTime * 0.05, 0.0)) * 0.7 + oNoise(vUnit.xz * 48.0) * 0.3);
-        vec3 glow = vec3(0.55, 1.0, 0.32) * (0.35 + 0.65 * leaves) * breath + vec3(0.9, 1.0, 0.45) * veins * breath * 1.2;
-        col += glow * uDome * (1.0 - rib * 0.7) * 1.6;
-        col += vec3(0.7, 0.9, 0.5) * rib * uDome * 0.25 * breath;
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, 1.0);
-        ${TONE}
-      }
-    `,
-  })
+  const u = outdoorUniforms
+  const uniforms = { uDome: uniform(0), uRibs: uniform(ribs), uRings: uniform(rings) }
+  const m = unlit('outdoorDome')
+  m.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const unit = positionGeometry.toVar()
+    const N = normalize(normalWorld).toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const az = atan(unit.z, unit.x).div(6.2831853).mul(uniforms.uRibs).toVar()
+    const el = asin(clamp(unit.y, 0.0, 1.0)).div(1.5707963).mul(uniforms.uRings.add(1.0)).toVar()
+    const fa = abs(fract(az).sub(0.5))
+    const fe = abs(fract(el).sub(0.5))
+    const wa = fwidth(az).mul(1.2).add(0.012)
+    const we = fwidth(el).mul(1.2).add(0.02)
+    const rib = max(smoothstep(float(0.5).sub(wa), 0.5, fa), smoothstep(float(0.5).sub(we), 0.5, fe).mul(step(0.5, el))).toVar()
+    // 主な骨のあいだの細い斜めの格子（ダイヤグリッド）。上ほど目が細かくならないよう、緯度で間隔を広げる
+    const cosEl = sqrt(max(unit.y.mul(unit.y).oneMinus(), 0.04))
+    const g = el.mul(2.4).div(max(cosEl, 0.35))
+    const g1 = az.mul(2.0).add(g).toVar()
+    const g2 = az.mul(2.0).sub(g)
+    const wg = fwidth(g1).mul(0.8).add(0.006)
+    const lattice = max(smoothstep(float(0.5).sub(wg), 0.5, abs(fract(g1).sub(0.5))), smoothstep(float(0.5).sub(wg), 0.5, abs(fract(g2).sub(0.5))))
+    const latticeFade = smoothstep(0.08, 0.25, fwidth(g1)).oneMinus()
+    rib.assign(max(rib, lattice.mul(0.75).mul(latticeFade)))
+    // ガラス: 空を映し、中の木々（濃い緑）が透ける
+    const fres = pow(clamp(dot(N, V).oneMinus(), 0.0, 1.0), 3.0).mul(0.85).add(0.1)
+    const R = reflect(V.negate(), N).toVar()
+    const refl = skyColor(R).mul(vec3(0.92, 0.97, 1.0))
+    const leaves = oNoise(unit.xz.mul(9.0).add(unit.y.mul(3.0))).mul(0.6).add(oNoise(unit.xz.mul(27.0)).mul(0.4)).toVar()
+    const inside = outdoorShade(mix(vec3(0.03, 0.07, 0.03), vec3(0.08, 0.14, 0.05), leaves), vec3(0.0, 1.0, 0.0)).mul(0.8)
+    const col = mix(inside, refl, fres).toVar()
+    // 太陽の照り返し（夕方はガラスが金に光る）
+    const spec = pow(max(dot(R, u.uSunDir), 0.0), 60.0)
+    col.addAssign(u.uSunLight.mul(spec).mul(1.6))
+    // 白い鋼管のリブ
+    const ribCol = outdoorShade(vec3(0.8, 0.8, 0.78), N)
+    col.assign(mix(col, ribCol, rib.mul(0.9)))
+    // 葉脈ライティング（金緑色。ゆっくり呼吸するように明滅し、葉脈のような筋が流れる）
+    const breath = sin(u.uTime.mul(0.55)).mul(0.38).add(0.62).toVar()
+    const veins = smoothstep(0.62, 0.95, oNoise(unit.xz.mul(16.0).add(vec2(u.uTime.mul(0.05), 0.0))).mul(0.7).add(oNoise(unit.xz.mul(48.0)).mul(0.3)))
+    const glow = vec3(0.55, 1.0, 0.32).mul(leaves.mul(0.65).add(0.35)).mul(breath).add(vec3(0.9, 1.0, 0.45).mul(veins).mul(breath).mul(1.2))
+    col.addAssign(glow.mul(uniforms.uDome).mul(rib.mul(-0.7).add(1.0)).mul(1.6))
+    col.addAssign(vec3(0.7, 0.9, 0.5).mul(rib).mul(uniforms.uDome).mul(0.25).mul(breath))
+    return outdoorHaze(col, wp)
+  })()
+  return withUniforms(m, uniforms)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -429,131 +470,112 @@ export function createDomeMaterial(ribs: number, rings: number) {
 /** 灯りの種類の数（town/lights.ts の LIGHT_KIND） */
 export const LIGHT_KINDS = 12
 
+/** 町の灯りの点ごとの値（town/lights.ts の lightsGeometry の属性を InstancedBufferAttribute にした物） */
+export interface LightAttributes {
+  position: THREE.InstancedBufferAttribute
+  aColor: THREE.InstancedBufferAttribute
+  aSize: THREE.InstancedBufferAttribute
+  aPower: THREE.InstancedBufferAttribute
+  aSeed: THREE.InstancedBufferAttribute
+  aKind: THREE.InstancedBufferAttribute
+}
+
 /**
- * 町の灯り（Points）。aKind ごとの点いている割合 uOn[種類] より aSeed が小さい灯りだけ点く。
- * 大きさは m で決め、遠くでは画面の最小の大きさで描く（遠い灯りも消えない）
+ * 町の灯り（Sprite を灯りの数だけ並べる）。aKind ごとの点いている割合 uOn[種類] より aSeed が小さい灯りだけ点く。
+ * 大きさは m で決め、遠くでは画面の最小の大きさで描く（遠い灯りも消えない）。uOn・uKindGain は数の配列（uniforms.uOn.array を書く）
  */
-export function createLightsMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'outdoorLights',
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    uniforms: {
-      uOn: { value: new Array(LIGHT_KINDS).fill(0) },
-      uKindGain: { value: new Array(LIGHT_KINDS).fill(1) },
-      uGain: { value: 1 },
-      uPx: { value: 500 },
-      uPixelRatio: { value: 1 },
-      uTime: sharedTime,
-      uHazeDist: outdoorUniforms.uHazeDist,
-    },
-    vertexShader: /* glsl */ `
-      attribute vec3 aColor;
-      attribute float aSize;
-      attribute float aPower;
-      attribute float aSeed;
-      attribute float aKind;
-      uniform float uOn[${LIGHT_KINDS}];
-      uniform float uKindGain[${LIGHT_KINDS}];
-      uniform float uGain;
-      uniform float uPx;
-      uniform float uPixelRatio;
-      uniform float uTime;
-      uniform float uHazeDist;
-      varying vec3 vCol;
-      varying float vCoreR;
-      void main() {
-        int k = int(aKind + 0.5);
-        float on = 0.0;
-        float kindGain = 1.0;
-        for (int i = 0; i < ${LIGHT_KINDS}; i++) {
-          if (i == k) {
-            on = uOn[i];
-            kindGain = uKindGain[i];
-          }
-        }
-        float lit = k == 10 ? on : smoothstep(aSeed, aSeed + 0.03, on);
-        vec4 mv = viewMatrix * modelMatrix * vec4(position, 1.0);
-        gl_Position = projectionMatrix * mv;
-        float d = max(-mv.z, 1.0);
-        // 光の芯の大きさ（画面の px）。遠くて小さい灯りも、2px の芯で描く（そのぶん少し暗くする）
-        float px = aSize * uPx / d;
-        float minPx = 2.0 * uPixelRatio;
-        float core = max(px, minPx);
-        float energy = px < minPx ? mix(1.0, sqrt(px / minPx), 0.6) : 1.0;
-        float sprite = min(core * 2.6, 110.0);
-        vCoreR = core / sprite;
-        float haze = exp(-d / (uHazeDist * 1.4));
-        float twinkle = 1.0 + 0.12 * sin(uTime * (2.0 + aSeed * 5.0) + aSeed * 80.0) * smoothstep(1500.0, 4000.0, d);
-        // 航空障害灯は 1 秒ごとに点滅、港の灯台の灯（赤・緑）は 4 秒に 1 回の閃光（灯台ごとに位相をずらす）
-        float beat = fract(uTime * 0.25 + aSeed);
-        // 浮遊レーンのレーン灯は 2 秒ごとにゆっくり点滅（レーンに沿って光が流れるように、種で位相をずらす）
-        float blink = k == 6 ? step(0.5, fract(uTime * 0.5 + aSeed)) : k == 9 ? smoothstep(0.0, 0.03, beat) * (1.0 - smoothstep(0.1, 0.16, beat)) : k == 10 ? 0.25 + 0.75 * smoothstep(0.55, 0.9, sin(uTime * 3.14159 - aSeed * 25.0) * 0.5 + 0.5) : 1.0;
-        vCol = aColor * aPower * uGain * kindGain * lit * energy * haze * twinkle * blink;
-        gl_PointSize = lit > 0.001 && kindGain > 0.001 ? sprite : 0.0;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying vec3 vCol;
-      varying float vCoreR;
-      void main() {
-        vec2 c = gl_PointCoord * 2.0 - 1.0;
-        float r = length(c);
-        if (r > 1.0) discard;
-        // 芯（Bloom でにじむ明るさ）と、まわりのほのかなにじみ
-        float core = 1.0 - smoothstep(vCoreR * 0.45, vCoreR, r);
-        float halo = exp(-r * r * 5.0) * 0.28;
-        gl_FragColor = vec4(vCol * (core * 2.2 + halo), 1.0);
-        ${TONE}
-      }
-    `,
-  })
+export function createLightsMaterial(a: LightAttributes) {
+  const uniforms = {
+    uOn: uniformArray(new Array<number>(LIGHT_KINDS).fill(0), 'float' as const),
+    uKindGain: uniformArray(new Array<number>(LIGHT_KINDS).fill(1), 'float' as const),
+    uGain: uniform(1),
+    uPx: uniform(500),
+    uPixelRatio: uniform(1),
+  }
+  const u = uniforms
+  const m = new THREE.PointsNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: false, fog: false })
+  m.name = 'outdoorLights'
+  const pos = instancedBufferAttribute(a.position, 'vec3' as const)
+  const aColor = instancedBufferAttribute(a.aColor, 'vec3' as const)
+  const aSize = instancedBufferAttribute(a.aSize, 'float' as const)
+  const aPower = instancedBufferAttribute(a.aPower, 'float' as const)
+  const aSeed = instancedBufferAttribute(a.aSeed, 'float' as const)
+  const aKind = instancedBufferAttribute(a.aKind, 'float' as const)
+  m.positionNode = pos
+  const t = sharedTime
+  const k = int(aKind.add(0.5)).toVar()
+  const on = u.uOn.element(k).toVar()
+  const kindGain = u.uKindGain.element(k).toVar()
+  const lit = select(k.equal(10), on, smoothstep(aSeed, aSeed.add(0.03), on)).toVar()
+  const mv = modelViewMatrix.mul(vec4(pos, 1.0))
+  const d = max(mv.z.negate(), 1.0).toVar()
+  // 光の芯の大きさ（画面の px）。遠くて小さい灯りも、2px の芯で描く（そのぶん少し暗くする）
+  const px = aSize.mul(u.uPx).div(d).toVar()
+  const minPx = u.uPixelRatio.mul(2.0)
+  const core = max(px, minPx).toVar()
+  const energy = select(px.lessThan(minPx), mix(1.0, sqrt(px.div(minPx)), 0.6), 1.0)
+  const sprite = min(core.mul(2.6), 110.0).toVar()
+  const haze = exp(d.negate().div(outdoorUniforms.uHazeDist.mul(1.4)))
+  const twinkle = sin(t.mul(aSeed.mul(5.0).add(2.0)).add(aSeed.mul(80.0))).mul(0.12).mul(smoothstep(1500.0, 4000.0, d)).add(1.0)
+  // 航空障害灯は 1 秒ごとに点滅、港の灯台の灯（赤・緑）は 4 秒に 1 回の閃光（灯台ごとに位相をずらす）
+  const beat = fract(t.mul(0.25).add(aSeed))
+  // 浮遊レーンのレーン灯は 2 秒ごとにゆっくり点滅（レーンに沿って光が流れるように、種で位相をずらす）
+  const blink = select(
+    k.equal(6),
+    step(0.5, fract(t.mul(0.5).add(aSeed))),
+    select(
+      k.equal(9),
+      smoothstep(0.0, 0.03, beat).mul(smoothstep(0.1, 0.16, beat).oneMinus()),
+      select(k.equal(10), smoothstep(0.55, 0.9, sin(t.mul(3.14159).sub(aSeed.mul(25.0))).mul(0.5).add(0.5)).mul(0.75).add(0.25), 1.0),
+    ),
+  )
+  // 大きさは描画の画素（sizeNode は CSS の px で、three が画素の比を掛ける）
+  m.sizeNode = select(lit.greaterThan(0.001).and(kindGain.greaterThan(0.001)), sprite.div(u.uPixelRatio), 0.0)
+  const vCol = varying(aColor.mul(aPower).mul(u.uGain).mul(kindGain).mul(lit).mul(energy).mul(haze).mul(twinkle).mul(blink))
+  const vCoreR = varying(core.div(sprite))
+  const c = uv().mul(2.0).sub(1.0)
+  const r = length(c).toVar()
+  // 芯（後処理の bloom でにじむ明るさ）と、まわりのほのかなにじみ
+  const coreI = smoothstep(vCoreR.mul(0.45), vCoreR, r).oneMinus()
+  const halo = exp(r.mul(r).mul(-5.0)).mul(0.28)
+  m.colorNode = vec4(vCol.mul(coreI.mul(2.2).add(halo)).mul(step(r, 1.0)), 1.0)
+  return withUniforms(m, uniforms)
+}
+
+/**
+ * 町の灯り（Sprite を灯りの数だけ並べた物）。g は town/lights.ts の lightsGeometry（点の属性は InstancedBufferAttribute に写す）
+ */
+export function createLightsSprite(g: THREE.BufferGeometry) {
+  const attr = (name: string) => {
+    const a = g.getAttribute(name) as THREE.BufferAttribute
+    return new THREE.InstancedBufferAttribute(a.array, a.itemSize)
+  }
+  const material = createLightsMaterial({ position: attr('position'), aColor: attr('aColor'), aSize: attr('aSize'), aPower: attr('aPower'), aSeed: attr('aSeed'), aKind: attr('aKind') })
+  const sprite = new THREE.Sprite(material)
+  sprite.count = g.getAttribute('position').count
+  return sprite as THREE.Sprite & { material: typeof material }
 }
 
 /** 灯台の光の帯（灯台から水平に伸びる細い円錐。加算合成で、灯台に近いほど・光の芯ほど明るい） */
 export function createBeamMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'outdoorBeam',
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-    uniforms: { uBeam: { value: 0 }, uHazeDist: outdoorUniforms.uHazeDist },
-    vertexShader: /* glsl */ `
-      varying float vAlong;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vWorld = wp.xyz;
-        vNormal = normalize(mat3(modelMatrix) * normal);
-        vAlong = 1.0 - uv.y;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform float uBeam;
-      uniform float uHazeDist;
-      varying float vAlong;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      void main() {
-        vec3 toCam = cameraPosition - vWorld;
-        float d = length(toCam);
-        vec3 V = toCam / max(d, 1e-3);
-        // 横から見たとき、帯の中ほど（光の中を通る長さが長い所）ほど明るい。細い帯の縁の画素では補間した法線が 0 の長さになることがある
-        // （normalize(0) は NaN になり、Bloom で大きな黒い四角に広がる）
-        float nl = length(vNormal);
-        float thick = nl > 1e-6 ? pow(abs(dot(vNormal / nl, V)), 1.5) : 0.0;
-        float fall = exp(-vAlong * 3.2) * smoothstep(0.0, 0.02, vAlong);
-        float haze = exp(-d / (uHazeDist * 1.6));
-        // カメラの近く（ラボのまわり）を通る帯の殻は描かない。帯がラボの方へ回ってくるとき、近くの殻が町の上に大きな灰色の膜になって
-        // 見えるため（ラボの方を向く前後は帯ごと消す。landscape.ts）
-        float nearFade = smoothstep(400.0, 2500.0, d);
-        gl_FragColor = vec4(vec3(0.85, 0.9, 1.0) * thick * fall * haze * nearFade * uBeam * 0.22, 1.0);
-        ${TONE}
-      }
-    `,
-  })
+  const uniforms = { uBeam: uniform(0) }
+  const m = unlit('outdoorBeam', { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })
+  // 法線は頂点で世界の向きにして、正規化しないまま補間する（細い帯の縁の画素では補間した法線が 0 の長さになることがあり、正規化すると NaN）
+  const vNormal = varying(modelWorldMatrix.mul(vec4(normalLocal, 0.0)).xyz)
+  m.colorNode = Fn(() => {
+    const along = uv().y.oneMinus().toVar()
+    const toCam = cameraPosition.sub(positionWorld).toVar()
+    const d = length(toCam).toVar()
+    const V = toCam.div(max(d, 1e-3))
+    // 横から見たとき、帯の中ほど（光の中を通る長さが長い所）ほど明るい
+    const nl = length(vNormal).toVar()
+    const thick = select(nl.greaterThan(1e-6), pow(abs(dot(vNormal.div(max(nl, 1e-6)), V)), 1.5), 0.0)
+    const fall = exp(along.mul(-3.2)).mul(smoothstep(0.0, 0.02, along))
+    const haze = exp(d.negate().div(outdoorUniforms.uHazeDist.mul(1.6)))
+    // カメラの近く（ラボのまわり）を通る帯の殻は描かない。帯がラボの方へ回ってくるとき、近くの殻が町の上に大きな灰色の膜になって
+    // 見えるため（ラボの方を向く前後は帯ごと消す。landscape.ts）
+    const nearFade = smoothstep(400.0, 2500.0, d)
+    return vec3(0.85, 0.9, 1.0).mul(thick).mul(fall).mul(haze).mul(nearFade).mul(uniforms.uBeam).mul(0.22)
+  })()
+  return withUniforms(m, uniforms)
 }

@@ -42,7 +42,7 @@ export function labScreenRate(fps: number, camera: THREE.Camera): number {
 }
 
 export interface LabScreenOptions {
-  /** GPU の異方性フィルタの最大（renderer.capabilities.getMaxAnisotropy()）。曲面・斜めから見ても文字がつぶれないよう max(8, 最大) にする */
+  /** GPU の異方性フィルタの最大（renderer.getMaxAnisotropy()）。曲面・斜めから見ても文字がつぶれないよう max(8, 最大) にする */
   maxAnisotropy: number
   /** 描き直す回数の決め方（省けば labScreenRate） */
   rate?: typeof labScreenRate

@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { Break, Continue, Fn, If, Loop, abs, cameraPosition, dot, exp, float, floor, fract, int, inverseSqrt, ivec2, length, max, normalize, smoothstep, sqrt, texture, uniform, uniformArray, vec2, vec3 } from 'three/tsl'
+import type { Node } from 'three/webgpu'
 import { SITE } from '../../../core/town'
 import { outdoor } from '../../environment/daylight'
 
@@ -48,19 +50,120 @@ const CELLS = 384
 const SLOTS = 8
 const KINDS = 8
 
-export const lampUniforms = {
-  uLampTable: { value: null as THREE.DataTexture | null },
-  /** x, y = 表の左下の角（シーンの x, z）、z = 升の大きさ、w = 使うか（0 / 1） */
-  uLampInfo: { value: new THREE.Vector4(0, 0, CELL, 0) },
-  /** 種類ごとの色 × 点き具合 × 強さ（rgb）と届く距離（a） */
-  uLampKind: { value: Array.from({ length: KINDS }, () => new THREE.Vector4()) },
-  /** カメラからの距離でうすめる [始まり, 終わり]（m。画質の段ごと。setLampFade） */
-  uLampFade: { value: new THREE.Vector2(260, 700) },
-  /** どれかの灯りが点いているか（昼は 0 で、画素のシェーダーは表を読まない） */
-  uLampAny: { value: 0 },
+/** 種類ごとの色 × 点き具合 × 強さ（rgb）と届く距離（a）。updateLampUniforms が毎コマ書き、uLampKind が毎コマ GPU へ写す */
+const lampKinds = Array.from({ length: KINDS }, () => new THREE.Vector4())
+
+/** 表の仮の画像（表を作る前に、読む側の材質を組み立てる時の物。浮動小数の 1 画素） */
+function placeholderTable() {
+  const t = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType)
+  t.needsUpdate = true
+  return t
 }
 
-/** GLSL: townLamps(ワールドの位置, 法線) → 照度（albedo を掛ける前）。skipNamed = 1 なら名前のある建物の灯具（named）を除く */
+/**
+ * 灯りの表の uniform（ノード。WebGPU への移行（第 1 段）から TSL の uniform・TextureNode。value は前と同じく読み書きでき、まだ TSL にしていない
+ * ShaderMaterial の uniforms にも前のまま入れられる。uLampKind は配列の uniform で、中身は .array（Vector4 の配列）を書く）
+ */
+export const lampUniforms = {
+  /** 表の画像（buildLampTable が value を替える） */
+  uLampTable: texture(placeholderTable()),
+  /** x, y = 表の左下の角（シーンの x, z）、z = 升の大きさ、w = 使うか（0 / 1） */
+  uLampInfo: uniform(new THREE.Vector4(0, 0, CELL, 0)),
+  /** 種類ごとの色 × 点き具合 × 強さ（rgb）と届く距離（a） */
+  uLampKind: uniformArray(lampKinds, 'vec4' as const),
+  /** カメラからの距離でうすめる [始まり, 終わり]（m。画質の段ごと。setLampFade） */
+  uLampFade: uniform(new THREE.Vector2(260, 700)),
+  /** どれかの灯りが点いているか（昼は 0 で、画素のシェーダーは表を読まない） */
+  uLampAny: uniform(0),
+}
+
+type V3 = Node<'vec3'>
+
+/**
+ * 升の表の SLOTS 個の灯りを順に読む（表の左下の角からの升・灯りが無くなったら終わる）。each(灯り: xyz = 位置、w = 種類 + 強さ / 16) を呼ぶ。
+ * 町の外・カメラから遠い・灯りが消えている間は何もしない。fade = カメラからの距離でうすめる割合（each の結果に掛けるのは呼ぶ側）
+ */
+function eachLamp(wp: V3, each: (t: Node<'vec4'>, fade: Node<'float'>) => void) {
+  const u = lampUniforms
+  If(u.uLampInfo.w.greaterThanEqual(0.5).and(u.uLampAny.greaterThanEqual(0.5)), () => {
+    const fade = smoothstep(u.uLampFade.x, u.uLampFade.y, length(wp.sub(cameraPosition))).oneMinus().toVar()
+    const c = floor(wp.xz.sub(u.uLampInfo.xy).div(u.uLampInfo.z)).toVar()
+    If(fade.greaterThan(0.0).and(c.x.greaterThanEqual(0.0)).and(c.y.greaterThanEqual(0.0)).and(c.x.lessThan(CELLS)).and(c.y.lessThan(CELLS)), () => {
+      const base = ivec2(int(c.x).mul(SLOTS), int(c.y)).toVar()
+      Loop(SLOTS, ({ i }: { i: Node<'int'> }) => {
+        const t = u.uLampTable.load(base.add(ivec2(i, 0))).toVar()
+        If(t.w.lessThanEqual(0.0), () => {
+          Break()
+        })
+        each(t, fade)
+      })
+    })
+  })
+}
+
+/** townLamps の中身: skipNamed = 1 なら名前のある建物の灯具（named）を除く、wrap = 面の向きの回り込み */
+export const townLampsEx = Fn(([wp, N, skipNamed, wrap]: [V3, V3, Node<'float'>, Node<'float'>]) => {
+  const acc = vec3(0.0).toVar()
+  eachLamp(wp, (t, fade) => {
+    const kind = floor(t.w).toVar()
+    If(skipNamed.greaterThan(0.5).and(abs(kind.sub(6.0)).lessThan(0.5)), () => {
+      Continue()
+    })
+    const k = lampUniforms.uLampKind.element(int(kind)).toVar()
+    If(dot(k.xyz, k.xyz).lessThan(1e-8), () => {
+      Continue()
+    })
+    const power = fract(t.w).mul(16.0)
+    const L = t.xyz.sub(wp).toVar()
+    const d2 = dot(L, L).toVar()
+    const R = k.w.toVar()
+    If(d2.greaterThan(R.mul(R)), () => {
+      Continue()
+    })
+    const d = sqrt(d2).toVar()
+    const l = L.div(max(d, 1e-3)).toVar()
+    // 灯具は下向き（上は暗い）。面の向き（回り込み wrap）と距離の減衰
+    const spot = smoothstep(-0.25, 0.55, l.y).mul(0.7).add(0.3)
+    const ndl = max(dot(N, l), 0.0).mul(wrap.oneMinus()).add(wrap)
+    const att = power.div(d2.mul(0.09).add(1.0)).mul(smoothstep(R.mul(0.45), R, d).oneMinus())
+    acc.addAssign(k.xyz.mul(att).mul(ndl).mul(spot).mul(fade))
+  })
+  return acc
+})
+
+/** townLamps(ワールドの位置, 法線) → 照度（albedo を掛ける前） */
+export const townLamps = Fn(([wp, N]: [V3, V3]) => townLampsEx(wp, N, float(0.0), float(0.08)))
+
+/**
+ * 水面に映る灯り（段階 5 の色の仕上げ）: 映った向き R の近くに灯りがあれば、その光（さざ波の法線で揺れて縦に伸びる）。
+ * 灯りは升の表の 8 つ（その升を照らす灯り）。映り込みは照らす範囲より遠くまで見えるので、届く距離の 2 倍まで
+ */
+export const townLampsMirror = Fn(([wp, R]: [V3, V3]) => {
+  const acc = vec3(0.0).toVar()
+  eachLamp(wp, (t, fade) => {
+    const k = lampUniforms.uLampKind.element(int(floor(t.w))).toVar()
+    If(dot(k.xyz, k.xyz).lessThan(1e-8), () => {
+      Continue()
+    })
+    const power = fract(t.w).mul(16.0)
+    const L = t.xyz.sub(wp).toVar()
+    const d2 = dot(L, L).toVar()
+    const Rr = k.w.mul(2.0).toVar()
+    If(d2.greaterThan(Rr.mul(Rr)), () => {
+      Continue()
+    })
+    const l = L.mul(inverseSqrt(max(d2, 1e-4))).toVar()
+    // 横には細く、縦に長い光の筋（水面のさざ波は縦の向きに映りを引き伸ばす）。dAz ≒ 方位の差の 2 乗 / 2、dEl = 高さの向きの差
+    const dAz = dot(normalize(R.xz.add(vec2(1e-5))), normalize(l.xz.add(vec2(1e-5)))).oneMinus()
+    const dEl = R.y.sub(l.y)
+    const spec = exp(dAz.div(-0.00009).sub(dEl.mul(dEl).div(0.006))).mul(5.0).add(exp(dAz.div(-0.0018).sub(dEl.mul(dEl).div(0.05))).mul(0.35))
+    acc.addAssign(k.xyz.mul(spec).mul(power).div(d2.mul(0.004).add(1.0)).mul(fade))
+  })
+  return acc
+})
+
+
+/** GLSL の townLamps（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す） */
 export const TOWN_LAMPS = /* glsl */ `
 uniform highp sampler2D uLampTable;
 uniform vec4 uLampInfo;
@@ -257,7 +360,7 @@ export function lampNear(x: number, y: number, z: number, out: THREE.Vector3): n
     const w = d[row + k * 4 + 3]
     if (w <= 0) break
     const kind = Math.floor(w)
-    const kk = lampUniforms.uLampKind.value[kind]
+    const kk = lampKinds[kind]
     const on = kk ? Math.max(kk.x, kk.y, kk.z) : 0
     if (on < 1e-4) continue
     const power = (w - kind) * 16
@@ -294,11 +397,11 @@ export function updateLampUniforms() {
     [LAMP.named]: o.lights.path,
     [LAMP.stop]: o.lights.street,
   }
-  const k = lampUniforms.uLampKind.value
+  const k = lampKinds
   lampUniforms.uLampAny.value = Math.max(...Object.values(on)) * o.lightGain > 0.002 ? 1 : 0
   for (const [id, st] of Object.entries(LAMP_STYLE)) {
     const i = Number(id) as LampKind
     _c.set(st.color).multiplyScalar(st.gain * on[i] * o.lightGain)
-    k[i].set(_c.r, _c.g, _c.b, st.radius)
+    k[i]!.set(_c.r, _c.g, _c.b, st.radius)
   }
 }

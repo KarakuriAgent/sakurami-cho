@@ -526,8 +526,11 @@ export function createTreeMaterials() {
       gl_FragColor = vec4(1.0);
     }
   `
-  const nearDepth = depthMaterial(NEAR_VERTEX, { defines: DEFINES, uniforms, fragment: depthFrag('near') })
-  const farDepth = depthMaterial(FAR_VERTEX, { defines: DEFINES, uniforms, fragment: depthFrag('far') })
+  // WebGPU への移行（第 1 段）: 深さだけの材質は NodeMaterial の工場（town/shadows.ts）。本体の頂点の計算（NEAR_VERTEX・FAR_VERTEX と葉の形で抜く depthFrag）を positionNode で共有するのは、本体を TSL にする第 2 段で。今は形のまま（インスタンスの行列は NodeMaterial が扱う）で影を落とす
+  // 葉の形で抜く所（depthFrag）は第 2 段で maskNode にする（それまで使わない）
+  void depthFrag
+  const nearDepth = depthMaterial()
+  const farDepth = depthMaterial()
   return { near, far, nearDepth, farDepth, uniforms }
 }
 

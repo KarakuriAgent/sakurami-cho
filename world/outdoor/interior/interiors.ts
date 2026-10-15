@@ -8,7 +8,7 @@ import { namedDoors } from '../named/doors'
 import { namedInteriorParts } from '../named/interiorParts'
 import { localMatrix, type Kit } from '../named/kit'
 import type { NamedFile } from '../named/namedData'
-import { depthMaterial, localShadowCasters, PLAIN_DEPTH_VERTEX } from '../town/shadows'
+import { depthMaterial, localShadowCasters } from '../town/shadows'
 import { gardenDomeShell } from '../town/infraMeshes'
 import { groundHole } from '../town/townMaterials'
 import { InteriorBuilder } from './builder'
@@ -127,7 +127,7 @@ class Interiors {
   private loaded = new Map<InteriorZoneId, Loaded>()
   /** 町の中に足す入れ物（Landscape の townGroup に入れる） */
   readonly group = new THREE.Group()
-  private depth = depthMaterial(PLAIN_DEPTH_VERTEX)
+  private depth = depthMaterial()
   /** 作り直すたびに増える（花音の通り道） */
   version = 0
   /** ガラスの温室の中を作った・壊したたびに増える（町の影の地図を描き直す。Landscape が見る） */

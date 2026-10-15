@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
+import type { WebGPURenderer } from 'three/webgpu'
 import { useTexture } from '@react-three/drei'
 import type { Town } from '../world/createTown'
 import type { Lab } from '../world/lab/createLab'
@@ -45,7 +46,7 @@ function useTownFrame(update: (f: TownFrame) => void, priority: number) {
     f.time = clock.elapsedTime
     f.dt = delta
     f.camera = camera
-    f.renderer = gl
+    f.renderer = gl as unknown as WebGPURenderer
     f.scene = scene
     update(f)
   }, priority)
@@ -90,7 +91,7 @@ export function TownRoot({ town, children, placements }: { town: Town; children:
   const lab = useMemo(
     () =>
       town.buildLab({
-        renderer: gl,
+        renderer: gl as unknown as WebGPURenderer,
         scene,
         textures: { shared, floor },
         pixelRatio: get().viewport.dpr,

@@ -9,6 +9,8 @@ import { alightWheel, boardWheel, callHover, DESTINATION_GROUPS, openTravel, set
 import { putWalker, warpFrames, warpSpots, warpTo, warpUi, type WarpFrame, type WarpUi } from './teleport'
 import { clockUi, resetClock, runClock, setClockDate, setClockMinutes, setClockSpeed, stopClock, type ClockUi } from './clock'
 import { QUALITY, qualityUrl, type Quality } from './quality'
+import { gpuState, type GpuState } from './gpu'
+import type { WebGPURenderer } from 'three/webgpu'
 import { fullHook, mapDebugState, openMap, resetMapStats, setGround } from './townMap'
 
 /**
@@ -114,8 +116,10 @@ export interface WalkerState {
   teleport: Omit<WarpUi, 'groups'> & { groups: { kind: string; count: number }[]; frames: readonly WarpFrame[] }
   /** 町の地図（材料の様子・全体の地図を開いているか・いる所の字と印・ミニマップ（窓の直径・下絵の中心とずらし・矢印の回り・毎コマの段と描き直しの時間）・全体の地図の見え方） */
   map: ReturnType<typeof mapDebugState>
-  /** 描く物の数（three の renderer.info.memory）と JS のヒープ（MB。Chrome だけ） */
+  /** 描く物の数（three の renderer.info.memory）と JS のヒープ（MB。Chrome だけ）。programs は WebGPU では数えない（0） */
   memory: { geometries: number; textures: number; programs: number; heapMB: number | null } | null
+  /** 描画の土台（src/gpu.ts。WebGPU・実の GPU か・外れた理由・アダプター） */
+  gpu: GpuState
 }
 
 declare global {
@@ -128,7 +132,7 @@ declare global {
 export const walkerState = { ready: false, frames: 0, walkTime: 0 }
 
 /** 場面の物（scene/ の部品が入れる。確かめの口が読む） */
-export const sceneHook: { follow: FollowCamera | null; gl: THREE.WebGLRenderer | null; scene: THREE.Scene | null } = { follow: null, gl: null, scene: null }
+export const sceneHook: { follow: FollowCamera | null; gl: WebGPURenderer | null; scene: THREE.Scene | null } = { follow: null, gl: null, scene: null }
 
 const r3 = (v: THREE.Vector3): V3 => [round(v.x), round(v.y), round(v.z)]
 const round = (x: number) => Math.round(x * 1000) / 1000
@@ -200,7 +204,8 @@ function state(): WalkerState {
       return { ...rest, groups: groups.map((g) => ({ kind: g.kind, count: g.items.length })), frames: warpFrames() }
     })(),
     map: mapDebugState(),
-    memory: gl ? { geometries: gl.info.memory.geometries, textures: gl.info.memory.textures, programs: gl.info.programs?.length ?? 0, heapMB: heap ? round(heap / 1048576) : null } : null,
+    gpu: { ...gpuState },
+    memory: gl ? { geometries: gl.info.memory.geometries, textures: gl.info.memory.textures, programs: 0, heapMB: heap ? round(heap / 1048576) : null } : null,
   }
 }
 

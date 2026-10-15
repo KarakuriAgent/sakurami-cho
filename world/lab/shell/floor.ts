@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { WebGPURenderer } from 'three/webgpu'
 import { ROOM } from '../../../core/lab/plan'
 import type { LabFloorTextures } from '../textures'
 import { BlurPass } from './reflector/BlurPass'
@@ -38,7 +39,7 @@ const REFLECTOR = {
 export interface LabFloor {
   readonly mesh: THREE.Mesh
   /** 床の映り込みを描く（high のときだけ。low なら何もしない） */
-  renderReflection(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void
+  renderReflection(renderer: WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera): void
   /** 撮る先・ぼかし・素材・形を捨てる（床のテクスチャは使う側の物なので捨てない） */
   dispose(): void
 }
@@ -62,7 +63,9 @@ export function createLabFloor(o: { textures: LabFloorTextures; quality: 'high' 
   const mesh = floorMesh(geometry, reflector.material)
   return {
     mesh,
-    renderReflection: (renderer, scene, camera) => reflector.render(mesh, renderer, scene, camera),
+    // WebGPU への移行（第 1 段）: 映り込みを撮る所（reflector.render）は WebGL の state を直に触るので、WebGPURenderer では呼ばない。
+    // 床は MeshReflectorMaterial の元の MeshStandardMaterial の見た目（映り込み無し）で出る。第 2 段で TSL の reflector() に置き換える
+    renderReflection: () => undefined,
     dispose() {
       geometry.dispose()
       reflector.dispose()

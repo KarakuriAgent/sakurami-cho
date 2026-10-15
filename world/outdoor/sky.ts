@@ -1,4 +1,5 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import type { WebGPURenderer } from 'three/webgpu'
 import { townHighQuality } from '../townHost'
 import { SITE } from '../../core/town'
 import { outdoor } from '../environment/daylight'
@@ -55,12 +56,14 @@ function createSky() {
     mag[i] = 0.15 + 0.85 * Math.pow(rnd(), 3.2)
     seed[i] = rnd()
   }
-  const g = new THREE.BufferGeometry()
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-  g.setAttribute('aMag', new THREE.BufferAttribute(mag, 1))
-  g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1))
-  const starMaterial = createStarsMaterial()
-  const stars = new THREE.Points(g, starMaterial)
+  // 星は Sprite を count 個（インスタンス）並べる（WebGPU の点は 1px だけなので、大きさのある点は板にする。materials.ts の createStarsMaterial）
+  const starMaterial = createStarsMaterial({
+    position: new THREE.InstancedBufferAttribute(pos, 3),
+    mag: new THREE.InstancedBufferAttribute(mag, 1),
+    seed: new THREE.InstancedBufferAttribute(seed, 1),
+  })
+  const stars = new THREE.Sprite(starMaterial)
+  stars.count = count
   stars.frustumCulled = false
   stars.renderOrder = -2
   // 空と星も遠景のレイヤー（ふだんのカメラだけ）。床の映り込みには入れない（昼に床が空の色で明るくなりすぎず、暗い床と光のラインのままにする）
@@ -74,10 +77,10 @@ let skyCache: ReturnType<typeof createSky> | null = null
 export const skyParts = () => (skyCache ??= createSky())
 
 /** 毎コマ: 星の明るさと、星の空の回転（恒星時） */
-export function updateStars(renderer: THREE.WebGLRenderer) {
+export function updateStars(_renderer: WebGPURenderer) {
   const { stars, starMaterial } = skyParts()
+  // 星の大きさは CSS の px（描画の画素の比は PointsNodeMaterial が掛ける。前の uPixelRatio は要らない）
   starMaterial.uniforms.uStars.value = outdoor.stars
-  starMaterial.uniforms.uPixelRatio.value = renderer.getPixelRatio()
   stars.visible = outdoor.stars > 0.002
   if (stars.visible) {
     // 北のずれ → 天の北極を北の空（高度 = 緯度）へ傾ける → 恒星時で回す（東から昇って西へ沈む向き）

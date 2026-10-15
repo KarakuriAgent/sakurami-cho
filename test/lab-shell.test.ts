@@ -188,8 +188,9 @@ describe('ラボの殻（4-4）', () => {
       const mats = Array.isArray(x.material) ? x.material : [x.material]
       if (mats.some((m) => m.transparent)) expect(x.layers.isEnabled(Sun.SUN_SHADOW_LAYER)).toBe(false)
     }
-    // 入れた物のうち、ここで影を落とす物（castShadow）でなかった物は、太陽の影の間だけ落とす（前と同じ）
-    expect(got.filter((x) => x.castShadow).length).toBeGreaterThan(0)
+    // 入れた物はどれも影を落とす物（castShadow）。WebGPU の影は影のカメラのレイヤーで物を選ぶので、太陽の影は SUN_SHADOW_LAYER の物だけ
+    // （前の WebGL は、ここで castShadow でなかった物を太陽の影の間だけ落としていた。setSunOnlyCasters。WebGPU への移行の第 1 段で無くした）
+    expect(got.every((x) => x.castShadow)).toBe(true)
   })
 
   test('4-0b の直しがそのまま: 中二階の天井の板は部屋の高さ + 2mm、天井のケーブルラックの縁は 1mm 上げる', async () => {
@@ -228,7 +229,7 @@ describe('ラボの殻（4-4）', () => {
     expect(color.r).toBeCloseTo(W.WASH_COLOR.r * 0.3, 12)
   })
 
-  test('毎コマ: 床を隠して映り込みを撮ってから、見学エントランスの扉を進める（注目点が扉の前なら開く）', async () => {
+  test('毎コマ: 見学エントランスの扉を進める（注目点が扉の前なら開く）。床の映り込みは WebGPU への移行の第 2 段まで撮らない', async () => {
     const { shell } = await makeShell('high')
     const D = await load<DoorMod>(`${LAB}/shell/entranceDoor.ts`)
     const P = await load<PlanMod>(`${LAB_CORE}/plan.ts`)
@@ -250,10 +251,10 @@ describe('ラボの殻（4-4）', () => {
       if (s === scene) seen.push({ floorVisible: shell.floor.mesh.visible, open: D.entranceDoor.open })
     })
     shell.update(0.05, { time: 1, camera, renderer, scene })
-    // 場面を 1 回撮る（床を隠して）。そのあとぼかしを 5 回描き、最後に撮る先を戻す
-    expect(seen).toEqual([{ floorVisible: false, open: 0 }])
+    // WebGPU への移行の第 1 段: 床の映り込みは撮らない（前は床を隠して場面を 1 回撮り、ぼかしを 5 回描いて撮る先を戻していた。前の撮り方は
+    // WebGL の state を直に触るので WebGPURenderer では呼べない。第 2 段で TSL の reflector() に置き換えたら、ここも戻す）
+    expect(seen).toEqual([])
     expect(shell.floor.mesh.visible).toBe(true)
-    expect(renderer.targets.at(-1)).toBeNull()
     expect(D.entranceDoor.open).toBeCloseTo(0.05 / P.ENTRANCE_DOOR.openSeconds, 12)
     // 扉の組（西・東）は外へ逆向きに回る
     const leaves = shell.object.children[3].children[0].children[1].children

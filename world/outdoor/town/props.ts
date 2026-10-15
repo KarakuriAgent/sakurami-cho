@@ -527,7 +527,8 @@ void main() {
 export function createPropMaterials() {
   const uniforms = { ...outdoorUniforms, ...townShadowUniforms, ...townTextureUniforms, ...lampUniforms, uShop: { value: 0 }, uLightGain: { value: 1 } }
   const material = new THREE.ShaderMaterial({ name: 'townProps', uniforms, vertexShader: PROP_VERTEX, fragmentShader: PROP_FRAGMENT, side: THREE.DoubleSide })
-  const depth = depthMaterial(PROP_VERTEX)
+  // WebGPU への移行（第 1 段）: 深さだけの材質は NodeMaterial の工場（town/shadows.ts）。本体の頂点の計算（PROP_VERTEX）を positionNode で共有するのは、本体を TSL にする第 2 段で。今は形のまま（インスタンスの行列は NodeMaterial が扱う）で影を落とす
+  const depth = depthMaterial()
   return { material, depth }
 }
 

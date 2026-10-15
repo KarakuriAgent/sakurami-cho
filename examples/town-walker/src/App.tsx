@@ -1,4 +1,5 @@
 import { Canvas } from '@react-three/fiber'
+import { gpuRenderer } from './gpu'
 import { QUALITY } from './quality'
 import { Scene } from './scene/Scene'
 import { MiniMap } from './ui/MiniMap'
@@ -23,7 +24,8 @@ export default function App() {
       <Canvas
         shadows="percentage"
         dpr={QUALITY.lab === 'high' ? [1, 1.5] : 1}
-        gl={{ antialias: QUALITY.lab === 'high', powerPreference: 'high-performance', stencil: false }}
+        // 描画は WebGPURenderer（非同期に作って確かめる。src/gpu.ts）
+        gl={gpuRenderer(QUALITY.lab === 'high')}
         camera={{ fov: 50, near: 0.05, far: 40000 }}
       >
         <Scene />

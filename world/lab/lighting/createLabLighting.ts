@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { WebGPURenderer } from 'three/webgpu'
 import { labLight, onLabLight } from '../../labLight'
 import { createLabSlot, kitChannels, type LabFrame, type LabSlot, type LabSlotContent } from '../kit'
 import { LAB_PLACEMENTS, type LabPlacement } from '../../../core/lab/placements'
@@ -30,7 +31,7 @@ export interface LabCoreChannels {
 const CORE_CHANNELS: Readonly<LabCoreChannels> = { link: 0, flash: 0, pulse: 0 }
 
 export interface LabLightingOptions {
-  renderer: THREE.WebGLRenderer
+  renderer: WebGPURenderer
   scene: THREE.Scene
   /** high なら影を落とす光（作業台の手元灯など）が影を落とす */
   quality: 'high' | 'low'

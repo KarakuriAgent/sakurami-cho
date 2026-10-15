@@ -82,7 +82,7 @@ export const VISUAL_DEFAULTS = {
     rimLift: 0.0,
     /** 0 = リムを照明と無関係に常に出す / 1 = 照明に比例 */
     rimLightingMix: 0.25,
-    /** 環境光の均一化（MToon の giEqualization） */
+    /** 環境光の均一化（MToon の giEqualization）。WebGPU の MToonNodeMaterial には無いので、今は効かない（character/avatar/loadVrm.ts の tuneMaterial） */
     giEqualization: 0.85,
     /** 影の色を少し持ち上げて、暗いラボで黒くつぶれないようにする（0〜1） */
     shadeLift: 0.12,
