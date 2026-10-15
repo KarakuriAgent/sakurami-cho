@@ -1,9 +1,47 @@
-import * as THREE from 'three'
-import { COMMON, SKY, TONE, outdoorUniforms } from '../materials'
+import * as THREE from 'three/webgpu'
+import {
+  Fn,
+  If,
+  abs,
+  attribute,
+  cameraPosition,
+  clamp,
+  dot,
+  exp,
+  faceDirection,
+  float,
+  floor,
+  fract,
+  inverseSqrt,
+  length,
+  max,
+  mix,
+  normalGeometry,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  reflect,
+  select,
+  sign,
+  smoothstep,
+  texture,
+  uniform,
+  varying,
+  vec2,
+  vec3,
+} from 'three/tsl'
+import { oHash, oNoise, outdoorHaze, outdoorUniforms, withUniforms } from '../materials'
 import { GeoBuilder } from '../site/builder'
-import { TOWN_LIGHT } from '../town/facades'
-import { TOWN_LAMPS, lampUniforms } from '../town/lamps'
-import { TOWN_SHADOW, townShadowUniforms } from '../town/shadows'
+import { townLight } from '../town/facades'
+import { townLamps } from '../town/lamps'
+import { townShadow } from '../town/shadows'
+import { ObjectNodeMaterial, envRefl, facingNormal, localFrame, matAttr, metalFresnel, sunSpecular, vertexColorAttr, woodGrain } from './transitMaterial'
+import { detailGlassColor as cableGlassColorBase } from './vehicleDetail'
+
+type Node<T = unknown> = THREE.Node<T>
+
+/** ガラスの色（細かい車両のガラスと同じ式。中の灯りの色だけ木の内装の暖かい色） */
+const cableGlassColor = (builder: THREE.NodeBuilder, camInside: (c: Node<'vec3'>) => Node<'bool'>) => cableGlassColorBase(builder, camInside, new THREE.Color(0.9, 0.72, 0.5))
 
 /**
  * 丘ノ上ケーブルの細かい車両（さくら号・かえで号。1996 年製の二代目・内装は木張り。vol3 4-4。docs/design/town.md §19・§7 の 176〜）。
@@ -14,7 +52,7 @@ import { TOWN_SHADOW, townShadowUniforms } from '../town/shadows'
  *   扉の前後に窓（木の窓枠・下の窓を上げる二段の窓）、両端に向かい合う長いす（車両の幅いっぱい。臙脂のモケットと木の台・背もたれの上の真鍮の握り）
  * - 区画の間は腰まで木の仕切りと、上はガラス。天井は生成りの塗装で、区画ごとに丸い灯り・真ん中に横の握り棒とつり革 4 つ・扉のわきに真鍮の縦の握り棒
  * - 外: 赤い腰・クリームの窓の帯・赤の幕板・灰色の屋根（区画ごとの段）・前後の大きな窓と前照灯と尾灯・扉のレール・台車と車輪・綱の留め金
- * - シェーダー: 町と同じ光（太陽・空・町の影・夜の灯りの表）。中の面は空の光が窓の分だけ入り、太陽は窓を通る分だけ（日なたの形）。
+ * - 材質（TSL）: 町と同じ光（太陽・空・町の影・夜の灯りの表）。中の面は空の光が窓の分だけ入り、太陽は窓を通る分だけ（日なたの形）。
  *   区画ごとの天井の灯り（車両の局所で計算）。ガラスは透けて、空と（中から見ると夜は）中の灯りを映す
  * - インスタンスの iInfo = (中の灯り 0〜1, 車両（0 = さくら号・1 = かえで号）, +x の側の扉の開き具合, −x の側の扉の開き具合)
  */
@@ -548,62 +586,68 @@ function doorLeaf(sx: number) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* シェーダー                                                                     */
+/* 材質                                                                         */
 /* -------------------------------------------------------------------------- */
 
-const f = (v: number) => v.toFixed(4)
+/* 車両の局所の決まり（呼ぶ側の Fn の中で式を組む JS の関数。前の GLSL の CAR_GLSL） */
 
-const CAR_GLSL = /* glsl */ `
-  const float CAR_HL = ${f(HL)};
-  const float CAR_IL = ${f(IL)};
-  const float CAR_W = ${f(W)};
-  const float CAR_IW = ${f(IW)};
-  const float CAR_SLOPE = ${f(C.slope)};
-  const float CAR_COMP = ${f(C.compL)};
-  const float CAR_FLOOR = ${f(C.floorAbove)};
-  float carComp(float z) { return clamp(floor((z + CAR_HL) / CAR_COMP), 0.0, 3.0); }
-  float carF(float i) { return CAR_SLOPE * (-CAR_HL + (i + 0.5) * CAR_COMP) + CAR_FLOOR; }
-  float carZc(float i) { return -CAR_HL + (i + 0.5) * CAR_COMP; }
-  bool carInside(vec3 p) {
-    if (abs(p.x) > CAR_IW + 0.012 || abs(p.z) > CAR_IL + 0.012) return false;
-    float F = carF(carComp(p.z));
-    return p.y > F - 0.03 && p.y < F + ${f(C.ceilMid + 0.04)};
-  }
-  // 側の壁の面（x = ±CAR_IW）の点が窓の開口か（窓 2 つと扉の窓）
-  bool carWindow(float z, float y) {
-    float i = carComp(z);
-    float F = carF(i);
-    float zc = carZc(i);
-    float d = abs(z - zc);
-    if (y > F + ${f(C.winY0)} && y < F + ${f(C.winY1)} && d > ${f(C.doorW / 2 + 0.13)} && d < ${f(C.compL / 2 - 0.15)}) return true;
-    return y > F + 0.98 && y < F + 1.8 && d < ${f(C.doorW / 2 - 0.05)};
-  }
-  // 中の点 p から光の向き L（局所）へ、窓を通って外へ出るか（側の窓・端の窓）
-  float carSunThrough(vec3 p, vec3 L) {
-    if (abs(L.x) > 1e-3) {
-      float t = (sign(L.x) * CAR_IW - p.x) / L.x;
-      if (t > 0.0) {
-        vec3 h = p + L * t;
-        if (abs(h.z) < CAR_IL && carWindow(h.z, h.y)) return 1.0;
-      }
-    }
-    if (abs(L.z) > 1e-3) {
-      float t = (sign(L.z) * CAR_IL - p.z) / L.z;
-      if (t > 0.0) {
-        vec3 h = p + L * t;
-        float F = carF(carComp(h.z));
-        if (abs(h.x) < CAR_IW && abs(h.x) > 0.12 && abs(h.x) < 1.02 && h.y > F + ${f(C.winY0)} && h.y < F + ${f(C.winY1)}) return 1.0;
-      }
-    }
-    return 0.0;
-  }
-`
+/** z の点の区画の番号（0〜3） */
+const carComp = (z: Node<'float'>) => clamp(floor(z.add(HL).div(C.compL)), 0.0, 3.0)
+/** 区画 i の床の高さ */
+const carF = (i: Node<'float'>) => i.add(0.5).mul(C.compL).sub(HL).mul(C.slope).add(C.floorAbove)
+/** 区画 i の真ん中の z */
+const carZc = (i: Node<'float'>) => i.add(0.5).mul(C.compL).sub(HL)
+/** 中の点か */
+const carInside = (p: Node<'vec3'>) => {
+  const F = carF(carComp(p.z)).toVar()
+  return abs(p.x).lessThanEqual(IW + 0.012).and(abs(p.z).lessThanEqual(IL + 0.012)).and(p.y.greaterThan(F.sub(0.03))).and(p.y.lessThan(F.add(C.ceilMid + 0.04)))
+}
+/** 側の壁の面（x = ±IW）の点が窓の開口か（窓 2 つと扉の窓） */
+const carWindow = (z: Node<'float'>, y: Node<'float'>) => {
+  const i = carComp(z).toVar()
+  const F = carF(i).toVar()
+  const d = abs(z.sub(carZc(i))).toVar()
+  const win = y.greaterThan(F.add(C.winY0)).and(y.lessThan(F.add(C.winY1))).and(d.greaterThan(C.doorW / 2 + 0.13)).and(d.lessThan(C.compL / 2 - 0.15))
+  const door = y.greaterThan(F.add(0.98)).and(y.lessThan(F.add(1.8))).and(d.lessThan(C.doorW / 2 - 0.05))
+  return win.or(door)
+}
+/** 中の点 p から光の向き L（局所）へ、窓を通って外へ出るか（側の窓・端の窓） */
+const carSunThrough = (p: Node<'vec3'>, L: Node<'vec3'>) => {
+  const r = float(0.0).toVar()
+  If(abs(L.x).greaterThan(1e-3), () => {
+    const t = sign(L.x).mul(IW).sub(p.x).div(L.x).toVar()
+    If(t.greaterThan(0.0), () => {
+      const h = p.add(L.mul(t)).toVar()
+      If(abs(h.z).lessThan(IL).and(carWindow(h.z, h.y)), () => {
+        r.assign(1.0)
+      })
+    })
+  })
+  If(r.lessThan(0.5).and(abs(L.z).greaterThan(1e-3)), () => {
+    const t = sign(L.z).mul(IL).sub(p.z).div(L.z).toVar()
+    If(t.greaterThan(0.0), () => {
+      const h = p.add(L.mul(t)).toVar()
+      const F = carF(carComp(h.z)).toVar()
+      If(abs(h.x).lessThan(IW).and(abs(h.x).greaterThan(0.12)).and(abs(h.x).lessThan(1.02)).and(h.y.greaterThan(F.add(C.winY0))).and(h.y.lessThan(F.add(C.winY1))), () => {
+        r.assign(1.0)
+      })
+    })
+  })
+  return r
+}
 
 export const cableCarUniforms = {
-  /** 夜の駅・線路の灯りの照り返し（0〜1） */
-  uCarNight: { value: 0 },
-  /** 名前の板の字（上半分 = さくら号、下半分 = かえで号） */
-  uPlate: { value: plateTexture() },
+  /** 夜の駅・線路の灯りの照り返し（0〜1。今は材質の式では使っていない（前の GLSL と同じ）） */
+  uCarNight: uniform(0),
+  /** 名前の板の字（上半分 = さくら号、下半分 = かえで号）。document の無い所（テスト）では透明の 1 画素 */
+  uPlate: texture(plateTexture() ?? emptyPlate()),
+}
+
+/** 字の無い名前の板（透明の 1 画素） */
+function emptyPlate() {
+  const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1)
+  t.needsUpdate = true
+  return t
 }
 
 /** 名前の板の字の絵（canvas。上半分にさくら号、下半分にかえで号。字だけで、地は透明） */
@@ -628,251 +672,181 @@ function plateTexture() {
   return t
 }
 
-const VERTEX = /* glsl */ `
-  attribute vec2 aMat;
-  attribute vec4 iInfo;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  varying vec3 vLocalN;
-  varying vec4 vInfo;
-  varying vec3 vSunLocal;
-  varying vec3 vCamLocal;
-  uniform vec3 uSunDir;
-  void main() {
-    mat4 m = modelMatrix * instanceMatrix;
-    vec4 wp = m * vec4(position, 1.0);
-    vWorld = wp.xyz;
-    mat3 r = mat3(m);
-    vNormal = normalize(r * normal);
-    vColor = color;
-    vMat = aMat;
-    vInfo = iInfo;
-    mat3 rt = transpose(r);
-    vSunLocal = normalize(rt * uSunDir);
+/** 細かい車両の不透明な面の色 */
+function cableCarColor(builder: THREE.NodeBuilder) {
+  const u = outdoorUniforms
+  return Fn(() => {
+    const { rt } = localFrame(builder)
+    const vSunLocal = varying(normalize(rt.mul(u.uSunDir)))
+    const wp = positionWorld.toVar()
+    const N = facingNormal().toVar()
+    const Nl = normalize(normalGeometry).mul(faceDirection).toVar()
     // 車両の局所（扉の板は区画の真ん中・床が原点。x は車両と同じなので、いつも外の面の扱いになる）
-    vLocal = position;
-    vLocalN = normal;
-    vCamLocal = rt * (cameraPosition - m[3].xyz);
-    gl_Position = projectionMatrix * viewMatrix * wp;
-  }
-`
-
-const FRAGMENT = /* glsl */ `
-  ${COMMON}
-  ${SKY}
-  ${TOWN_LIGHT}
-  ${TOWN_SHADOW}
-  ${TOWN_LAMPS}
-  ${CAR_GLSL}
-  uniform float uCarNight;
-  uniform sampler2D uPlate;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  varying vec3 vLocalN;
-  varying vec4 vInfo;
-  varying vec3 vSunLocal;
-  varying vec3 vCamLocal;
-  vec3 envRefl(vec3 R) {
-    return R.y > 0.0 ? skyColor(R) : mix(skyColor(vec3(R.x, 0.02, R.z)) * 0.45, uSkyLight * 0.22 + uSunLight * 0.03, smoothstep(0.0, -0.25, R.y));
-  }
-  float woodGrain(vec2 uv) {
-    float n = oNoise(vec2(uv.x * 2.0, uv.y * 30.0));
-    float rings = 0.5 + 0.5 * sin((uv.y * 70.0 + n * 6.0 + oNoise(uv * vec2(0.6, 4.0)) * 9.0));
-    return 0.84 + 0.12 * rings + 0.1 * n;
-  }
-  void main() {
-    vec3 N = normalize(vNormal);
-    vec3 Nl = normalize(vLocalN);
-    if (!gl_FrontFacing) { N = -N; Nl = -Nl; }
-    float id = floor(vMat.x + 0.5);
-    float aux = vMat.y;
-    vec3 V = normalize(cameraPosition - vWorld);
-    float dist = length(cameraPosition - vWorld);
-    vec3 albedo = vColor;
-    float gloss = 0.12;
-    float metal = 0.0;
-    vec3 emit = vec3(0.0);
-    bool inside = carInside(vLocal);
-    float lampOn = vInfo.x;
-    vec3 an = abs(Nl);
-    vec2 uv = an.y > 0.7 ? vLocal.xz : an.x > an.z ? vLocal.zy : vLocal.xy;
-    if (id < 0.5) {
+    const vLocal = positionGeometry.toVar()
+    const info = attribute<'vec4'>('iInfo', 'vec4').toVar()
+    const mat = matAttr().toVar()
+    const id = floor(mat.x.add(0.5)).toVar()
+    const aux = mat.y.toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const dist = length(cameraPosition.sub(wp)).toVar()
+    const vColor = vertexColorAttr().toVar()
+    const albedo = vec3(vColor).toVar()
+    const gloss = float(0.12).toVar()
+    const metal = float(0.0).toVar()
+    const emit = vec3(0.0).toVar()
+    const inside = select(carInside(vLocal), 1.0, 0.0).toVar()
+    const lampOn = info.x.toVar()
+    const an = abs(Nl).toVar()
+    const p = select(an.y.greaterThan(0.7), vLocal.xz, select(an.x.greaterThan(an.z), vLocal.zy, vLocal.xy)).toVar()
+    If(id.lessThan(0.5), () => {
       // 塗装（つやのある赤とクリーム。下ほど少し汚れる）
-      gloss = 0.35 + 0.5 * aux;
-      albedo *= 0.96 + 0.06 * oNoise(uv * 3.0 + vInfo.y * 9.0);
-      albedo *= 1.0 - 0.1 * (1.0 - smoothstep(-0.6, 0.6, vLocal.y - CAR_SLOPE * vLocal.z));
-    } else if (id < 1.5) {
-      // 木（ニスを塗った板。aux = 1 なら木目は縦）
-      vec2 wuv = aux > 0.5 ? uv.yx : uv;
-      albedo *= woodGrain(wuv);
-      // 腰板の縦の目地
-      if (aux > 0.5 && an.y < 0.5) albedo *= 0.9 + 0.1 * smoothstep(0.0, 0.012, abs(fract((an.x > an.z ? vLocal.z : vLocal.x) * 6.0) - 0.5) * 0.17);
-      gloss = 0.32;
-    } else if (id < 2.5) {
-      // モケット（細かい織りの目）
-      float weave = 0.5 + 0.5 * sin(uv.x * 900.0) * sin(uv.y * 900.0);
-      albedo *= 0.8 + 0.22 * weave + 0.12 * oNoise(uv * 40.0);
-      gloss = 0.02;
-    } else if (id < 3.5) {
-      metal = 1.0;
-      gloss = aux > 0.5 ? 0.75 : 0.62;
-      albedo *= 0.92 + 0.08 * oNoise(vec2(uv.x * 3.0, uv.y * 50.0));
-    } else if (id < 4.5) {
-      // 床（幅 11cm の木の板。目地と色のばらつき・人の通る所のすり減り）
-      float row = floor(vLocal.x / 0.11);
-      float seam = smoothstep(0.0, 0.008, abs(fract(vLocal.x / 0.11) - 0.5) * 0.11 - 0.05 + 0.008);
-      albedo *= (0.82 + 0.25 * oHash(vec2(row, floor(vLocal.z / 1.4 + oHash(vec2(row, 3.0)))))) * woodGrain(vec2(vLocal.x * 3.0, vLocal.z));
-      albedo *= 0.6 + 0.4 * seam;
-      gloss = 0.22 + 0.15 * (1.0 - smoothstep(0.2, 0.8, abs(vLocal.x)));
-    } else if (id < 5.5) {
-      albedo *= 0.96 + 0.04 * oNoise(uv * 5.0);
-      gloss = 0.08;
-    } else if (id < 6.5) {
-      // 灯り: 中の灯り・前照灯（運転の間）・尾灯
-      albedo = vColor * 0.5;
-      if (aux < 0.5) emit = vColor * (0.12 + 3.4 * lampOn);
-      else if (aux < 1.5) emit = vColor * (0.2 + 2.6 * lampOn);
-      else emit = vColor * (0.4 + 6.0 * lampOn);
-      gloss = 0.6;
-    } else if (id < 7.5) {
-      gloss = 0.05 + 0.4 * aux;
-      albedo *= 0.9 + 0.1 * oNoise(uv * 20.0);
-    } else if (id < 8.5) {
-      gloss = 0.12;
-      albedo *= 0.9 + 0.12 * oNoise(uv * vec2(2.0, 12.0));
-    } else if (id < 9.5) {
-      gloss = 0.15;
-    } else {
-      // 名前の板: 上半分がさくら号、下半分がかえで号の字（局所の x と、区画の床からの高さで引く）
-      float F = carF(carComp(vLocal.z));
-      float u = (vLocal.x + 0.42) / 0.84;
-      if (aux > 0.5) u = 1.0 - u;
-      float v = clamp((vLocal.y - F - 0.55) / 0.25, 0.0, 1.0);
-      vec4 tx = texture2D(uPlate, vec2(clamp(u, 0.0, 1.0), (vInfo.y > 0.5 ? 0.0 : 0.5) + v * 0.5));
-      albedo = mix(vColor, vec3(0.5, 0.06, 0.05), tx.a);
-      gloss = 0.4;
-    }
-    float sh = townShadow(vWorld, N);
-    vec3 col;
-    if (inside) {
+      gloss.assign(aux.mul(0.5).add(0.35))
+      albedo.mulAssign(oNoise(p.mul(3.0).add(info.y.mul(9.0))).mul(0.06).add(0.96))
+      albedo.mulAssign(smoothstep(-0.6, 0.6, vLocal.y.sub(vLocal.z.mul(C.slope))).oneMinus().mul(-0.1).add(1.0))
+    })
+      .ElseIf(id.lessThan(1.5), () => {
+        // 木（ニスを塗った板。aux = 1 なら木目は縦）
+        const wuv = select(aux.greaterThan(0.5), p.yx, p)
+        albedo.mulAssign(woodGrain(wuv))
+        // 腰板の縦の目地
+        If(aux.greaterThan(0.5).and(an.y.lessThan(0.5)), () => {
+          albedo.mulAssign(smoothstep(0.0, 0.012, abs(fract(select(an.x.greaterThan(an.z), vLocal.z, vLocal.x).mul(6.0)).sub(0.5)).mul(0.17)).mul(0.1).add(0.9))
+        })
+        gloss.assign(0.32)
+      })
+      .ElseIf(id.lessThan(2.5), () => {
+        // モケット（細かい織りの目）
+        const weave = p.x.mul(900.0).sin().mul(p.y.mul(900.0).sin()).mul(0.5).add(0.5)
+        albedo.mulAssign(weave.mul(0.22).add(0.8).add(oNoise(p.mul(40.0)).mul(0.12)))
+        gloss.assign(0.02)
+      })
+      .ElseIf(id.lessThan(3.5), () => {
+        metal.assign(1.0)
+        gloss.assign(select(aux.greaterThan(0.5), 0.75, 0.62))
+        albedo.mulAssign(oNoise(vec2(p.x.mul(3.0), p.y.mul(50.0))).mul(0.08).add(0.92))
+      })
+      .ElseIf(id.lessThan(4.5), () => {
+        // 床（幅 11cm の木の板。目地と色のばらつき・人の通る所のすり減り）
+        const row = floor(vLocal.x.div(0.11)).toVar()
+        const seam = smoothstep(0.0, 0.008, abs(fract(vLocal.x.div(0.11)).sub(0.5)).mul(0.11).sub(0.05).add(0.008))
+        albedo.mulAssign(oHash(vec2(row, floor(vLocal.z.div(1.4).add(oHash(vec2(row, 3.0)))))).mul(0.25).add(0.82).mul(woodGrain(vec2(vLocal.x.mul(3.0), vLocal.z))))
+        albedo.mulAssign(seam.mul(0.4).add(0.6))
+        gloss.assign(smoothstep(0.2, 0.8, abs(vLocal.x)).oneMinus().mul(0.15).add(0.22))
+      })
+      .ElseIf(id.lessThan(5.5), () => {
+        albedo.mulAssign(oNoise(p.mul(5.0)).mul(0.04).add(0.96))
+        gloss.assign(0.08)
+      })
+      .ElseIf(id.lessThan(6.5), () => {
+        // 灯り: 中の灯り・前照灯（運転の間）・尾灯
+        albedo.assign(vColor.mul(0.5))
+        If(aux.lessThan(0.5), () => {
+          emit.assign(vColor.mul(lampOn.mul(3.4).add(0.12)))
+        })
+          .ElseIf(aux.lessThan(1.5), () => {
+            emit.assign(vColor.mul(lampOn.mul(2.6).add(0.2)))
+          })
+          .Else(() => {
+            emit.assign(vColor.mul(lampOn.mul(6.0).add(0.4)))
+          })
+        gloss.assign(0.6)
+      })
+      .ElseIf(id.lessThan(7.5), () => {
+        gloss.assign(aux.mul(0.4).add(0.05))
+        albedo.mulAssign(oNoise(p.mul(20.0)).mul(0.1).add(0.9))
+      })
+      .ElseIf(id.lessThan(8.5), () => {
+        gloss.assign(0.12)
+        albedo.mulAssign(oNoise(p.mul(vec2(2.0, 12.0))).mul(0.12).add(0.9))
+      })
+      .ElseIf(id.lessThan(9.5), () => {
+        gloss.assign(0.15)
+      })
+      .Else(() => {
+        // 名前の板: 上半分がさくら号、下半分がかえで号の字（局所の x と、区画の床からの高さで引く）
+        const F = carF(carComp(vLocal.z))
+        const uu = vLocal.x.add(0.42).div(0.84).toVar()
+        If(aux.greaterThan(0.5), () => {
+          uu.assign(uu.oneMinus())
+        })
+        const vv = clamp(vLocal.y.sub(F).sub(0.55).div(0.25), 0.0, 1.0)
+        const tx = cableCarUniforms.uPlate.sample(vec2(clamp(uu, 0.0, 1.0), select(info.y.greaterThan(0.5), 0.0, 0.5).add(vv.mul(0.5))))
+        albedo.assign(mix(vColor, vec3(0.5, 0.06, 0.05), tx.a))
+        gloss.assign(0.4)
+      })
+    const sh = townShadow(wp, N).toVar()
+    const col = vec3(0.0).toVar()
+    If(inside.greaterThan(0.5), () => {
       // 中: 空の光は窓から（上を向く面ほど少なく、窓に近い面ほど多い）・太陽は窓を通る分だけ・床の照り返し
-      float nearWin = 1.0 - smoothstep(0.1, 1.1, CAR_IW - abs(vLocal.x));
-      float ao = (Nl.y < -0.5 ? 0.22 : Nl.y > 0.5 ? 0.3 : 0.34) * (0.7 + 0.45 * nearWin);
-      float sun = carSunThrough(vLocal, vSunLocal) * max(dot(Nl, vSunLocal), 0.0) * sh;
-      col = albedo * (uSunLight * sun + (uSkyLight * 0.9 + uSunLight * 0.05) * ao);
-    } else {
-      col = townLight(albedo * (1.0 - metal * 0.6), N, 1.0, sh);
-    }
-    vec3 H = normalize(V + uSunDir);
-    float pw = mix(10.0, 260.0, gloss);
-    float fres = mix(0.04, 0.9, metal) + (1.0 - mix(0.04, 0.9, metal)) * pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 5.0);
-    if (!inside) col += uSunLight * pow(max(dot(N, H), 0.0), pw) * (pw + 2.0) / 8.0 * fres * sh * max(dot(N, uSunDir), 0.0) * gloss;
-    vec3 R = reflect(-V, N);
-    vec3 env = envRefl(R);
-    if (inside) env = mix(vec3(0.5, 0.42, 0.32) * (uSkyLight * 0.25 + vec3(0.06, 0.045, 0.03) * lampOn), env, 0.25);
-    col += env * fres * mix(gloss * 0.5, 0.9, metal) * mix(vec3(1.0), albedo * 2.0, metal);
+      const nearWin = smoothstep(0.1, 1.1, abs(vLocal.x).negate().add(IW)).oneMinus()
+      const ao = select(Nl.y.lessThan(-0.5), 0.22, select(Nl.y.greaterThan(0.5), 0.3, 0.34)).mul(nearWin.mul(0.45).add(0.7))
+      const sun = carSunThrough(vLocal, vSunLocal).mul(max(dot(Nl, vSunLocal), 0.0)).mul(sh)
+      col.assign(albedo.mul(u.uSunLight.mul(sun).add(u.uSkyLight.mul(0.9).add(u.uSunLight.mul(0.05)).mul(ao))))
+    }).Else(() => {
+      col.assign(townLight(albedo.mul(metal.mul(-0.6).add(1.0)), N, 1.0, sh))
+    })
+    const fres = metalFresnel(metal, N, V).toVar()
+    If(inside.lessThan(0.5), () => {
+      col.addAssign(sunSpecular(N, V, gloss, fres, sh))
+    })
+    const R = reflect(V.negate(), N)
+    const env = envRefl(R).toVar()
+    If(inside.greaterThan(0.5), () => {
+      env.assign(mix(vec3(0.5, 0.42, 0.32).mul(u.uSkyLight.mul(0.25).add(vec3(0.06, 0.045, 0.03).mul(lampOn))), env, 0.25))
+    })
+    col.addAssign(env.mul(fres).mul(mix(gloss.mul(0.5), 0.9, metal)).mul(mix(vec3(1.0), albedo.mul(2.0), metal)))
     // 区画の天井の灯り（車両の局所。自分の区画の灯りと、仕切りのガラス越しのとなりの灯り少し）
-    if (inside) {
-      float ci = carComp(vLocal.z);
-      vec3 lamp = vec3(0.0, carF(ci) + ${f(C.ceilMid - 0.1)}, carZc(ci));
-      vec3 Lv = lamp - vLocal;
-      float d2 = dot(Lv, Lv);
-      vec3 Ll = Lv * inversesqrt(max(d2, 1e-4));
-      float ndl = max(dot(Nl, Ll), 0.0);
-      vec3 LC = vec3(1.0, 0.8, 0.58) * 1.7;
-      col += albedo * LC * lampOn * (ndl * 0.8 + 0.2) / (d2 * 0.9 + 0.45);
+    If(inside.greaterThan(0.5), () => {
+      const ci = carComp(vLocal.z).toVar()
+      const lamp = vec3(0.0, carF(ci).add(C.ceilMid - 0.1), carZc(ci))
+      const Lv = lamp.sub(vLocal).toVar()
+      const d2 = dot(Lv, Lv).toVar()
+      const Ll = Lv.mul(inverseSqrt(max(d2, 1e-4)))
+      const ndl = max(dot(Nl, Ll), 0.0)
+      const LC = vec3(1.0, 0.8, 0.58).mul(1.7)
+      col.addAssign(albedo.mul(LC).mul(lampOn).mul(ndl.mul(0.8).add(0.2)).div(d2.mul(0.9).add(0.45)))
       // 木の壁と天井の照り返し（暖かい色）
-      col += albedo * LC * lampOn * 0.09;
+      col.addAssign(albedo.mul(LC).mul(lampOn).mul(0.09))
       // 夜の駅の灯り・線路の灯りが窓から入る分（少し）
-      col += albedo * townLamps(vWorld, N) * 0.25;
-    } else {
-      col += albedo * townLamps(vWorld, N) * 0.6;
+      col.addAssign(albedo.mul(townLamps(wp, N)).mul(0.25))
+    }).Else(() => {
+      col.addAssign(albedo.mul(townLamps(wp, N)).mul(0.6))
       // 窓のまわりの外の面に、中の灯りが少し漏れる
-      col += albedo * vec3(1.0, 0.8, 0.58) * lampOn * 0.08 * smoothstep(CAR_W + 0.15, CAR_W - 0.05, abs(vLocal.x)) * (1.0 - smoothstep(0.0, 0.2, abs(Nl.y)));
-    }
-    col = outdoorHaze(col, vWorld);
-    col += emit * exp(-dist / (uHazeDist * 1.5));
-    gl_FragColor = vec4(col, 1.0);
-    ${TONE}
-  }
-`
+      col.addAssign(
+        albedo
+          .mul(vec3(1.0, 0.8, 0.58))
+          .mul(lampOn)
+          .mul(0.08)
+          .mul(smoothstep(W - 0.05, W + 0.15, abs(vLocal.x)).oneMinus())
+          .mul(smoothstep(0.0, 0.2, abs(Nl.y)).oneMinus()),
+      )
+    })
+    col.assign(outdoorHaze(col, wp))
+    col.addAssign(emit.mul(exp(dist.negate().div(u.uHazeDist.mul(1.5)))))
+    return col
+  })()
+}
 
-/** 細かい車両の不透明な面のシェーダー（インスタンス）。door = 扉の板（局所が区画ごとなので、いつも外の面の扱い） */
+/** 細かい車両の不透明な面の材質（インスタンス）。door = 扉の板（局所が区画ごとなので、いつも外の面の扱い） */
 export function createCableCarMaterial(door = false) {
-  return new THREE.ShaderMaterial({
-    name: door ? 'cableCarDoor' : 'cableCar',
-    vertexColors: true,
-    side: THREE.DoubleSide,
-    defines: door ? { CAR_DOOR: 1 } : {},
-    uniforms: { ...outdoorUniforms, ...townShadowUniforms, ...lampUniforms, ...cableCarUniforms },
-    vertexShader: VERTEX,
-    fragmentShader: FRAGMENT,
-  })
+  const m = new ObjectNodeMaterial({ fog: false, side: THREE.DoubleSide })
+  m.name = door ? 'cableCarDoor' : 'cableCar'
+  m.buildNodes = (mat, builder) => {
+    mat.colorNode = cableCarColor(builder)
+  }
+  return withUniforms(m, cableCarUniforms)
 }
 
 /** 細かい車両のガラス（透ける。空と、中から見ると夜は中の灯りを映す。外から夜は中の灯りの色） */
 export function createCableCarGlassMaterial(door = false) {
-  return new THREE.ShaderMaterial({
-    name: door ? 'cableCarDoorGlass' : 'cableCarGlass',
-    vertexColors: true,
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    defines: door ? { CAR_DOOR: 1 } : {},
-    uniforms: { ...outdoorUniforms },
-    vertexShader: VERTEX,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      ${SKY}
-      ${CAR_GLSL}
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vColor;
-      varying vec2 vMat;
-      varying vec3 vLocal;
-      varying vec3 vLocalN;
-      varying vec4 vInfo;
-      varying vec3 vSunLocal;
-      varying vec3 vCamLocal;
-      void main() {
-        vec3 N = normalize(vNormal);
-        vec3 V = normalize(cameraPosition - vWorld);
-        if (dot(N, V) < 0.0) N = -N;
-        float cosv = max(dot(N, V), 0.0);
-        float fres = 0.04 + 0.96 * pow(clamp(1.0 - cosv, 0.0, 1.0), 5.0);
-        vec3 R = reflect(-V, N);
-        vec3 refl = R.y > 0.0 ? skyColor(R) : mix(skyColor(vec3(R.x, 0.02, R.z)) * 0.45, uSkyLight * 0.22, smoothstep(0.0, -0.25, R.y));
-        refl += uSunLight * pow(max(dot(R, uSunDir), 0.0), 900.0) * 30.0 * smoothstep(-0.02, 0.05, uSunDir.y);
-        #ifdef CAR_DOOR
-        bool camIn = abs(vCamLocal.x) < CAR_IW;
-        #else
-        bool camIn = carInside(vCamLocal);
-        #endif
-        float lampOn = vInfo.x;
-        vec3 room = vec3(0.9, 0.72, 0.5) * lampOn * 0.3;
-        float a = clamp(0.06 + fres * 0.85, 0.0, 0.92);
-        vec3 col = refl;
-        if (camIn) {
-          // 中から: 夜は中の灯りに照らされた中が映る
-          col = mix(refl, room + refl * 0.4, clamp(lampOn * 0.7 * (1.0 - uDaylight), 0.0, 0.7));
-          a = clamp(a + lampOn * 0.1 * (1.0 - uDaylight), 0.0, 0.92);
-        } else {
-          // 外から: 夜は中の灯りが見える（暖かい色が少し）
-          col += room * 0.6 * (1.0 - uDaylight);
-        }
-        col = mix(vec3(0.03, 0.035, 0.03), col, 0.92);
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, a);
-        ${TONE}
-      }
-    `,
-  })
+  const m = new ObjectNodeMaterial({ fog: false, side: THREE.DoubleSide, transparent: true, depthWrite: false })
+  m.name = door ? 'cableCarDoorGlass' : 'cableCarGlass'
+  // 扉の板は局所が区画ごとなので、カメラが中かは x だけで見る
+  const camInside = door ? (c: Node<'vec3'>) => abs(c.x).lessThan(IW) : (c: Node<'vec3'>) => carInside(c)
+  m.buildNodes = (mat, builder) => {
+    mat.colorNode = cableGlassColor(builder, camInside)
+  }
+  return m
 }
 
 /* -------------------------------------------------------------------------- */

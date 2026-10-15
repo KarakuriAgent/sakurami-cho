@@ -1,7 +1,31 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  Fn,
+  If,
+  attribute,
+  cameraPosition,
+  cameraProjectionMatrix,
+  cameraViewMatrix,
+  clamp,
+  cross,
+  float,
+  fract,
+  max,
+  min,
+  mix,
+  modelWorldMatrix,
+  normalize,
+  positionGeometry,
+  select,
+  smoothstep,
+  uniform,
+  varying,
+  vec3,
+  vec4,
+} from 'three/tsl'
 import { SITE } from '../../../core/town'
 import { outdoor } from '../../environment/daylight'
-import { COMMON, TONE, outdoorUniforms } from '../materials'
+import { outdoorHaze, outdoorUniforms, unlit, withUniforms } from '../materials'
 import { GeoBuilder } from '../site/builder'
 import { Fleet } from '../transit/fleet'
 import { TM } from '../transit/transitMaterial'
@@ -77,84 +101,63 @@ class LineBatch {
   }
 }
 
-/** 線のシェーダー（画面で 1.2px より細くしない・細い所はうすく。夜は LED） */
+/** 線の材質（画面で 1.2px より細くしない・細い所はうすく。夜は LED。TSL。頂点は線の両側へ画面の幅だけ広げる） */
 function createWheelLineMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'soranowaLines',
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    uniforms: {
-      ...outdoorUniforms,
-      uPx: { value: 500 },
-      uLed: { value: 0 },
-      uTide: { value: 0.5 },
-      uWind: { value: 0.5 },
-      uFlow: { value: 0 },
-      /** 外周のいちばん下・直径（ワールドの y と m。外周の光の高さ） */
-      uRim: { value: new THREE.Vector2(0, 100) },
-      /** 鉄骨の線を描くか（近くは鋼管の形なので、スポーク以外は描かない） */
-      uSteel: { value: 1 },
-    },
-    vertexShader: /* glsl */ `
-      attribute vec3 aOther;
-      attribute float aSide;
-      attribute float aWidth;
-      attribute vec2 aLed;
-      uniform float uPx;
-      uniform float uSteel;
-      varying float vAlpha;
-      varying vec3 vWorld;
-      varying vec2 vLed;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vec4 wo = modelMatrix * vec4(aOther, 1.0);
-        vWorld = wp.xyz;
-        vLed = aLed;
-        float d = max(-(viewMatrix * wp).z, 0.1);
-        float px = aWidth * uPx / d;
-        float w = max(px, 1.2) / uPx * d;
-        vAlpha = clamp(px / 1.2, 0.0, 1.0) * (aLed.x < 0.5 ? uSteel : 1.0);
-        vec3 dir = normalize(wo.xyz - wp.xyz);
-        vec3 side = normalize(cross(dir, normalize(cameraPosition - wp.xyz)));
-        wp.xyz += side * aSide * w * 0.5;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-        if (vAlpha < 0.001) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      uniform float uLed;
-      uniform float uTide;
-      uniform float uWind;
-      uniform float uFlow;
-      uniform vec2 uRim;
-      varying float vAlpha;
-      varying vec3 vWorld;
-      varying vec2 vLed;
-      void main() {
-        // 白い鉄骨（空の光と太陽。線なので向きは平均）
-        vec3 col = vec3(0.78, 0.79, 0.8) * (uSkyLight * 0.9 + uSunLight * 0.45);
-        float a = vAlpha;
-        if (vLed.x > 0.5 && vLed.x < 1.5) {
-          // スポーク: 根元から外へ光が流れる（流れる速さ = 風速）。いつもほのかに光り、流れる所が明るい
-          float pulse = smoothstep(0.7, 1.0, fract(vLed.y * 2.5 - uFlow));
-          // 画素より細い遠くの綱は、うすい分だけ明るく（線の数が多いので、白い円盤にならないよう上限は 3 倍）
-          // 軸のそばは綱が集まって白くつぶれるので、根元ほど暗く
-          float base = 0.25 + 0.75 * smoothstep(0.04, 0.5, vLed.y);
-          col += mix(vec3(1.0, 0.86, 0.66), vec3(1.0, 0.7, 0.4), pulse) * (0.45 + 2.6 * pulse) * base * uLed * min(3.0, 1.0 / max(a, 0.05));
-        } else if (vLed.x > 1.5) {
-          // 外周: 下から潮位の高さまで光る
-          float h = (vWorld.y - uRim.x) / uRim.y;
-          float lit = 1.0 - smoothstep(uTide - 0.015, uTide + 0.015, h);
-          col += vec3(1.0, 0.94, 0.84) * (0.25 + 2.4 * lit) * uLed * min(3.0, 1.0 / max(a, 0.05));
-        }
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, a);
-        ${TONE}
-      }
-    `,
-  })
+  const u = outdoorUniforms
+  const uniforms = {
+    uPx: uniform(500),
+    uLed: uniform(0),
+    uTide: uniform(0.5),
+    uWind: uniform(0.5),
+    uFlow: uniform(0),
+    /** 外周のいちばん下・直径（ワールドの y と m。外周の光の高さ） */
+    uRim: uniform(new THREE.Vector2(0, 100)),
+    /** 鉄骨の線を描くか（近くは鋼管の形なので、スポーク以外は描かない） */
+    uSteel: uniform(1),
+  }
+  const m = unlit('soranowaLines', { transparent: true, depthWrite: false, side: THREE.DoubleSide })
+  const aOther = attribute<'vec3'>('aOther', 'vec3')
+  const aSide = attribute<'float'>('aSide', 'float')
+  const aWidth = attribute<'float'>('aWidth', 'float')
+  const aLed = attribute<'vec2'>('aLed', 'vec2')
+  // 頂点: 画面で 1.2px より細くならない幅で、線の両側へ広げる（細すぎる所はうすく、見えない線はクリップの外へ）
+  const wp = modelWorldMatrix.mul(vec4(positionGeometry, 1.0)).xyz.toVar()
+  const wo = modelWorldMatrix.mul(vec4(aOther, 1.0)).xyz
+  const d = max(cameraViewMatrix.mul(vec4(wp, 1.0)).z.negate(), 0.1).toVar()
+  const px = aWidth.mul(uniforms.uPx).div(d).toVar()
+  const w = max(px, 1.2).div(uniforms.uPx).mul(d)
+  const alpha = clamp(px.div(1.2), 0.0, 1.0).mul(select(aLed.x.lessThan(0.5), uniforms.uSteel, 1.0)).toVar()
+  const dir = normalize(wo.sub(wp))
+  const side = normalize(cross(dir, normalize(cameraPosition.sub(wp))))
+  const moved = wp.add(side.mul(aSide).mul(w).mul(0.5))
+  const clip = cameraProjectionMatrix.mul(cameraViewMatrix).mul(vec4(moved, 1.0))
+  m.vertexNode = select(alpha.lessThan(0.001), vec4(0.0, 0.0, -2.0, 1.0), clip)
+  const vAlpha = varying(alpha)
+  const vWorld = varying(wp)
+  const vLed = varying(aLed)
+  const col = Fn(() => {
+    // 白い鉄骨（空の光と太陽。線なので向きは平均）
+    const c = vec3(0.78, 0.79, 0.8).mul(u.uSkyLight.mul(0.9).add(u.uSunLight.mul(0.45))).toVar()
+    const a = vAlpha
+    const thin = min(3.0, float(1.0).div(max(a, 0.05)))
+    If(vLed.x.greaterThan(0.5).and(vLed.x.lessThan(1.5)), () => {
+      // スポーク: 根元から外へ光が流れる（流れる速さ = 風速）。いつもほのかに光り、流れる所が明るい
+      const pulse = smoothstep(0.7, 1.0, fract(vLed.y.mul(2.5).sub(uniforms.uFlow))).toVar()
+      // 画素より細い遠くの綱は、うすい分だけ明るく（線の数が多いので、白い円盤にならないよう上限は 3 倍）
+      // 軸のそばは綱が集まって白くつぶれるので、根元ほど暗く
+      const base = smoothstep(0.04, 0.5, vLed.y).mul(0.75).add(0.25)
+      c.addAssign(mix(vec3(1.0, 0.86, 0.66), vec3(1.0, 0.7, 0.4), pulse).mul(pulse.mul(2.6).add(0.45)).mul(base).mul(uniforms.uLed).mul(thin))
+    }).ElseIf(vLed.x.greaterThan(1.5), () => {
+      // 外周: 下から潮位の高さまで光る
+      const h = vWorld.y.sub(uniforms.uRim.x).div(uniforms.uRim.y)
+      const lit = smoothstep(uniforms.uTide.sub(0.015), uniforms.uTide.add(0.015), h).oneMinus()
+      c.addAssign(vec3(1.0, 0.94, 0.84).mul(lit.mul(2.4).add(0.25)).mul(uniforms.uLed).mul(thin))
+    })
+    return outdoorHaze(c, vWorld)
+  })()
+  m.colorNode = col
+  m.opacityNode = vAlpha
+  return withUniforms(m, uniforms)
 }
 
 /** 鋼管（2 点を結ぶ 6 角の筒） */
@@ -263,6 +266,8 @@ const _m = new THREE.Matrix4()
 const _p = new THREE.Vector3()
 const _info: [number, number, number, number] = [0, 1, 0, 0]
 const _ci: [number, number, number, number] = [0, 0, 0, 0]
+const _camLocal = new THREE.Vector3()
+const _gInv = new THREE.Matrix4()
 
 export function createSoranowa(s: Extract<TownStructure, { type: 'soranowa' }>, material: THREE.Material, layer: number): Soranowa {
   const R = s.diameter / 2
@@ -418,6 +423,7 @@ export function createSoranowa(s: Extract<TownStructure, { type: 'soranowa' }>, 
       wheelGroup.rotation.z = angle
       camera.getWorldPosition(_cam)
       group.updateMatrixWorld()
+      _camLocal.copy(_cam).applyMatrix4(_gInv.copy(group.matrixWorld).invert())
       const dist = _cam.distanceTo(_p.setFromMatrixPosition(group.matrixWorld).setY(_p.y + hubY))
       // 近くは鋼管の形、遠くは線（回っても、ちらつかない）
       const near = dist < 450
@@ -463,7 +469,7 @@ export function createSoranowa(s: Extract<TownStructure, { type: 'soranowa' }>, 
           _ci[1] = seed
           _ci[2] = -Math.cos(a)
           _ci[3] = -Math.sin(a)
-          if (cabins.add(_m, _ci, ridden ? wheel.door : 0)) continue
+          if (cabins.add(_m, _ci, ridden ? wheel.door : 0, _camLocal)) continue
         }
         _info[0] = 0
         _info[1] = o.soranowa > 0.01 ? 1 : 0

@@ -1,4 +1,4 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { OUTDOOR_LAYER } from '../layers'
 import { localShadowCasters } from '../town/shadows'
 import { createHoverMaterial, hoverGeometry } from './hoverCar'
@@ -12,7 +12,7 @@ import { hoverCraft } from './hoverCraft'
 export class HoverView {
   readonly group = new THREE.Group()
   private readonly body: THREE.Mesh
-  private readonly mat: THREE.ShaderMaterial
+  private readonly mat: ReturnType<typeof createHoverMaterial>
   private spin = 0
   private readonly cam = new THREE.Vector3()
   private readonly pos = new THREE.Vector3()

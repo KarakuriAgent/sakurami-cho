@@ -1,7 +1,7 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { GeoBuilder } from '../site/builder'
-import { transitUniforms } from './transitMaterial'
-import { InstancedPart, VM, createDetailGlassMaterial, createDetailMaterial, endRect, flatRect, sideRect, tube, type VehicleGlsl } from './vehicleDetail'
+import { If, abs, select } from 'three/tsl'
+import { InstancedPart, VM, createDetailGlassMaterial, createDetailMaterial, endRect, flatRect, sideRect, tube, ceilingLamps, sideWindowHit, type VehicleTsl } from './vehicleDetail'
 
 /**
  * 運河バスの細かい形（町営の電動水上バス。船体はクリーム・屋根はひらき緑・定員 40 名。vol3 4-5）。花音が乗っている舟と、カメラから近い 2 隻だけ
@@ -360,50 +360,29 @@ function leafGeometry(sx: number) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* シェーダー（舟の局所の中の決まり）                                                 */
+/* 材質の決まり（舟の局所の中の決まり）                                               */
 /* -------------------------------------------------------------------------- */
 
-const f = (v: number) => v.toFixed(4)
-
-const BOAT_GLSL: VehicleGlsl = {
+const BOAT_TSL: VehicleTsl = {
   name: 'waterbus',
-  glsl: /* glsl */ `
-    bool vehInside(vec3 p) {
-      return abs(p.x) < ${f(IW + 0.012)} && p.z > ${f(C.z0 - 0.01)} && p.z < ${f(C.z1 + 0.01)} && p.y > ${f(F - 0.03)} && p.y < ${f(C.ceilMid + 0.04)};
-    }
-    bool vehCamInside(vec3 c) { return abs(c.x) < ${f(IW)} && c.z > ${f(C.z0)} && c.z < ${f(C.z1)} && c.y > ${f(F)} && c.y < ${f(C.ceilMid)}; }
-    float vehSunThrough(vec3 p, vec3 L) {
-      if (abs(L.x) > 1e-3) {
-        float t = (sign(L.x) * ${f(IW)} - p.x) / L.x;
-        if (t > 0.0) {
-          vec3 h = p + L * t;
-          if (h.z > ${f(C.z0 + 0.2)} && h.z < ${f(C.z1 - 0.2)} && h.y > ${f(C.winY0)} && h.y < ${f(C.winY1)}) return 0.85;
-        }
-      }
-      if (abs(L.z) > 1e-3) {
-        float zw = L.z > 0.0 ? ${f(C.z1)} : ${f(C.z0)};
-        float t = (zw - p.z) / L.z;
-        if (t > 0.0) {
-          vec3 h = p + L * t;
-          if (abs(h.x) < ${f(IW)} && h.y > ${f(C.winY0)} && h.y < ${f(C.winY1)}) return 0.8;
-        }
-      }
-      return 0.0;
-    }
-    vec3 vehLamp(vec3 p, vec3 n) {
-      vec3 acc = vec3(0.0);
-      for (int i = 0; i < 2; i++) {
-        float x = i == 0 ? -0.6 : 0.6;
-        vec3 q = vec3(x, ${f(C.ceilSide + 0.2)}, clamp(p.z, ${f(C.z0 + 0.5)}, ${f(C.z1 - 0.5)}));
-        vec3 Lv = q - p;
-        float d2 = dot(Lv, Lv);
-        vec3 Ll = Lv * inversesqrt(max(d2, 1e-4));
-        float ndl = max(dot(n, Ll), 0.0);
-        acc += vec3(1.0, 0.82, 0.6) * (ndl * 0.75 + 0.25) / (d2 * 1.3 + 0.7);
-      }
-      return acc * 1.15 + vec3(1.0, 0.85, 0.66) * 0.07;
-    }
-  `,
+  inside: (p) => abs(p.x).lessThan(IW + 0.012).and(p.z.greaterThan(C.z0 - 0.01)).and(p.z.lessThan(C.z1 + 0.01)).and(p.y.greaterThan(F - 0.03)).and(p.y.lessThan(C.ceilMid + 0.04)),
+  camInside: (c) => abs(c.x).lessThan(IW).and(c.z.greaterThan(C.z0)).and(c.z.lessThan(C.z1)).and(c.y.greaterThan(F)).and(c.y.lessThan(C.ceilMid)),
+  sunThrough: (p, L) => {
+    const r = sideWindowHit(p, L, IW, C.z0 + 0.2, C.z1 - 0.2, C.winY0, C.winY1, 0.85)
+    // 前後の窓（z の面）
+    If(r.lessThan(0.5).and(abs(L.z).greaterThan(1e-3)), () => {
+      const zw = select(L.z.greaterThan(0.0), C.z1, C.z0)
+      const t = zw.sub(p.z).div(L.z).toVar()
+      If(t.greaterThan(0.0), () => {
+        const h = p.add(L.mul(t)).toVar()
+        If(abs(h.x).lessThan(IW).and(h.y.greaterThan(C.winY0)).and(h.y.lessThan(C.winY1)), () => {
+          r.assign(0.8)
+        })
+      })
+    })
+    return r
+  },
+  lamp: (p, n) => ceilingLamps(p, n, 0.6, C.ceilSide + 0.2, C.z0 + 0.5, C.z1 - 0.5, new THREE.Color(1.0, 0.82, 0.6), 1.3, 0.7, 1.15, new THREE.Color(0.07, 0.0595, 0.0462)),
 }
 
 /* -------------------------------------------------------------------------- */
@@ -426,8 +405,8 @@ export class WaterbusDetail {
 
   constructor(capacity = 3) {
     this.capacity = capacity
-    const mat = createDetailMaterial(BOAT_GLSL, transitUniforms.uLineColors)
-    const glassMat = createDetailGlassMaterial(BOAT_GLSL)
+    const mat = createDetailMaterial(BOAT_TSL)
+    const glassMat = createDetailGlassMaterial(BOAT_TSL)
     const geo = waterbusGeometry()
     this.body = new InstancedPart(geo.body, mat, 'transit:waterbus:body', capacity)
     this.glass = new InstancedPart(geo.glass, glassMat, 'transit:waterbus:glass', capacity)

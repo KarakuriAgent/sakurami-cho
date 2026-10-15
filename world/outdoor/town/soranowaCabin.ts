@@ -1,10 +1,46 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  Fn,
+  If,
+  abs,
+  attribute,
+  cameraPosition,
+  clamp,
+  dot,
+  exp,
+  faceDirection,
+  float,
+  floor,
+  fract,
+  inverseSqrt,
+  length,
+  max,
+  min,
+  mix,
+  modelWorldMatrix,
+  normalGeometry,
+  normalWorld,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  pow,
+  reflect,
+  select,
+  sin,
+  smoothstep,
+  step,
+  uniform,
+  varying,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl'
 import { CABIN, CABIN_SPOTS } from '../../../core/soranowa'
-import { COMMON, SKY, TONE, outdoorUniforms } from '../materials'
+import { oNoise, outdoorHaze, outdoorUniforms, skyColor, unlit, withUniforms } from '../materials'
 import { GeoBuilder } from '../site/builder'
-import { TOWN_LIGHT } from './facades'
-import { TOWN_LAMPS, lampUniforms } from './lamps'
-import { TOWN_SHADOW, townShadowUniforms } from './shadows'
+import { townLight } from './facades'
+import { townLamps } from './lamps'
+import { townShadow } from './shadows'
 
 /**
  * 観覧車ソラノワの細かいゴンドラ（花音が乗る 1 基と、カメラの近くの数基。docs/design/town.md §17）。
@@ -329,229 +365,212 @@ export function cabinGeometry(): CabinGeometry {
 
 export const cabinUniforms = {
   /** 夜のホイールの LED の明るさ（outdoor.soranowa） */
-  uLed: { value: 0 },
+  uLed: uniform(0),
 }
 
-const CABIN_GLSL = /* glsl */ `
-  const vec3 CAB_LAMP = vec3(0.0, ${(CEIL - 0.06).toFixed(3)}, 0.0);
-  const vec3 CAB_LAMP_C = vec3(1.0, 0.88, 0.7) * 1.9;
-  const vec3 LED_C = vec3(1.0, 0.86, 0.64);
-  bool cabInside(vec3 p) {
-    return abs(p.x) < ${(IW + 0.015).toFixed(3)} && abs(p.z) < ${(ID + 0.015).toFixed(3)} && p.y > ${(FLOOR - 0.02).toFixed(3)} && p.y < ${(CEIL + 0.02).toFixed(3)};
-  }
-`
+type V3n = THREE.Node<'vec3'>
 
-const VERTEX = /* glsl */ `
-  attribute vec2 aMat;
-  attribute vec4 iInfo;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  varying vec3 vLocalN;
-  varying vec4 vInfo;
-  varying vec3 vHub;
-  varying vec3 vCamLocal;
-  void main() {
-    mat4 m = modelMatrix * instanceMatrix;
-    vec4 wp = m * vec4(position, 1.0);
-    vWorld = wp.xyz;
-    mat3 r = mat3(m);
-    vNormal = normalize(r * normal);
-    vColor = color;
-    vMat = aMat;
-    vLocal = position;
-    vLocalN = normal;
-    vInfo = iInfo;
-    vHub = normalize(r * vec3(iInfo.z, iInfo.w, 0.0));
-    // カメラの位置（ゴンドラの局所。回転と平行移動だけ）
-    vCamLocal = transpose(r) * (cameraPosition - m[3].xyz);
-    gl_Position = projectionMatrix * viewMatrix * wp;
-  }
-`
+/** 中の天井の灯りの位置・色と、LED の色（ゴンドラの局所） */
+const CAB_LAMP = vec3(0.0, CEIL - 0.06, 0.0)
+const CAB_LAMP_C = vec3(1.0, 0.88, 0.7).mul(1.9)
+const LED_C = vec3(1.0, 0.86, 0.64)
 
-const FRAGMENT = /* glsl */ `
-  ${COMMON}
-  ${SKY}
-  ${TOWN_LIGHT}
-  ${TOWN_SHADOW}
-  ${TOWN_LAMPS}
-  ${CABIN_GLSL}
-  uniform float uLed;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  varying vec3 vLocalN;
-  varying vec4 vInfo;
-  varying vec3 vHub;
-  varying vec3 vCamLocal;
-  vec3 envRefl(vec3 R) {
-    return R.y > 0.0 ? skyColor(R) : mix(skyColor(vec3(R.x, 0.02, R.z)) * 0.45, uSkyLight * 0.22 + uSunLight * 0.03, smoothstep(0.0, -0.25, R.y));
-  }
-  void main() {
-    vec3 N = normalize(vNormal);
-    vec3 Nl = normalize(vLocalN);
-    if (!gl_FrontFacing) { N = -N; Nl = -Nl; }
-    float id = floor(vMat.x + 0.5);
-    float aux = vMat.y;
-    vec3 V = normalize(cameraPosition - vWorld);
-    float dist = length(cameraPosition - vWorld);
-    vec3 albedo = vColor;
-    float gloss = 0.1;
-    float metal = 0.0;
-    vec3 emit = vec3(0.0);
-    bool inside = cabInside(vLocal);
-    float lampOn = vInfo.x;
-    vec3 an = abs(vLocalN);
-    vec2 uv = an.y > 0.7 ? vLocal.xz : an.x > an.z ? vLocal.zy : vLocal.xy;
-    if (id < 0.5) {
-      gloss = 0.35 + 0.55 * aux;
-      // 外の塗装のわずかなむら・下ほどの汚れ
-      albedo *= 0.97 + 0.05 * oNoise(uv * 3.0 + vInfo.y * 9.0);
-      albedo *= 1.0 - 0.12 * (1.0 - smoothstep(${Y0.toFixed(2)}, ${(Y0 + 0.6).toFixed(2)}, vLocal.y));
-    } else if (id < 1.5) {
-      gloss = 0.18;
-      albedo *= 0.96 + 0.04 * oNoise(uv * 6.0);
-    } else if (id < 2.5) {
-      // モケット（細かい織りの目と、すこし明るい糸）
-      float weave = 0.5 + 0.5 * sin(uv.x * 900.0) * sin(uv.y * 900.0);
-      albedo *= 0.82 + 0.22 * weave + 0.1 * oNoise(uv * 40.0);
-      gloss = 0.02;
-    } else if (id < 3.5) {
-      metal = 1.0;
-      gloss = 0.75;
-      albedo *= 0.92 + 0.08 * oNoise(vec2(uv.x * 2.0, uv.y * 60.0));
-    } else if (id < 4.5) {
-      // ゴムの床（丸い滑り止めの点）
-      vec2 q = fract(vLocal.xz * 9.0) - 0.5;
-      float dotm = 1.0 - smoothstep(0.17, 0.22, length(q));
-      albedo *= 0.85 + 0.25 * dotm + 0.1 * oNoise(vLocal.xz * 7.0);
-      gloss = 0.08 + 0.25 * dotm;
-    } else if (id < 5.5) {
-      // 屋根の色（安い形のゴンドラと同じ 5 色）
-      float k = floor(fract(vInfo.y * 5.0 + 0.01) * 5.0);
-      albedo = k < 0.5 ? vec3(0.62, 0.16, 0.14) : k < 1.5 ? vec3(0.14, 0.3, 0.52) : k < 2.5 ? vec3(0.62, 0.5, 0.12) : k < 3.5 ? vec3(0.16, 0.42, 0.26) : vec3(0.55, 0.3, 0.42);
-      gloss = 0.3 + 0.6 * aux;
-    } else if (id < 6.5) {
-      albedo = vColor * 0.55;
-      emit = vColor * (0.15 + 3.2 * lampOn);
-      gloss = 0.5;
-    } else if (id < 7.5) {
-      gloss = 0.05 + 0.4 * aux;
-      albedo *= 0.9 + 0.1 * oNoise(uv * 20.0);
-    } else {
-      // アルミの縞板
-      metal = 1.0;
-      gloss = 0.45;
-      float st = step(0.5, fract((vLocal.x + vLocal.z) * 14.0));
-      albedo *= 0.8 + 0.2 * st;
-    }
-    // 中は天井と壁に囲まれて空の光が少ない（ガラスの窓は四方にある）
-    float ao = inside ? (Nl.y < -0.5 ? 0.35 : Nl.y > 0.5 ? 0.6 : 0.68) : 1.0;
-    // 中の隅・床の近くは暗く
-    if (inside) ao *= 0.8 + 0.2 * smoothstep(0.0, 0.25, min(${IW.toFixed(3)} - abs(vLocal.x), ${ID.toFixed(3)} - abs(vLocal.z)));
-    float sh = townShadow(vWorld, N);
-    vec3 col = townLight(albedo * (1.0 - metal * 0.6), N, ao, sh);
-    vec3 H = normalize(V + uSunDir);
-    float pw = mix(10.0, 260.0, gloss);
-    float fres = mix(0.04, 0.9, metal) + (1.0 - mix(0.04, 0.9, metal)) * pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 5.0);
-    col += uSunLight * pow(max(dot(N, H), 0.0), pw) * (pw + 2.0) / 8.0 * fres * sh * max(dot(N, uSunDir), 0.0) * gloss;
-    vec3 R = reflect(-V, N);
-    vec3 env = envRefl(R);
-    // 中の面に映るのは、ほとんど中の壁と天井（窓の外の空は一部）
-    if (inside) env *= 0.45;
-    col += env * fres * mix(gloss * 0.5, 0.9, metal) * mix(vec3(1.0), albedo * 2.0, metal) * ao;
-    // 中の天井の灯り（ゴンドラの局所で。中と、窓の枠のまわり）
-    vec3 Lv = CAB_LAMP - vLocal;
-    float d2 = dot(Lv, Lv);
-    vec3 Ll = Lv * inversesqrt(max(d2, 1e-4));
-    float ndl = max(dot(Nl, Ll), 0.0);
-    float lampK = (inside ? 1.0 : 0.1 * smoothstep(${(W + 0.2).toFixed(2)}, ${(W - 0.2).toFixed(2)}, max(abs(vLocal.x), abs(vLocal.z))));
-    col += albedo * CAB_LAMP_C * lampOn * (ndl * 0.75 + 0.25) / (d2 * 1.4 + 0.35) * lampK;
-    // 照り返し（中の白い壁から）
-    col += albedo * CAB_LAMP_C * lampOn * 0.06 * (inside ? 1.0 : 0.0);
-    // 夜のホイールの LED（外周とスポークの光。ハブの向きから。中は窓から入る分）
-    float ledFace = 0.3 + 0.7 * max(dot(N, vHub), 0.0);
-    col += albedo * LED_C * uLed * ledFace * (inside ? 0.05 : 0.12);
-    // 夜: 町の灯り（外の面）。白いつやのある塗装は灯りの表のままだと白く飛ぶ（乗り場の屋根の灯りのすぐ下を通る）ので弱める
-    if (!inside) col += albedo * townLamps(vWorld, N) * 0.45;
-    col = outdoorHaze(col, vWorld);
-    col += emit * exp(-dist / (uHazeDist * 1.5));
-    gl_FragColor = vec4(col, 1.0);
-    ${TONE}
-  }
-`
+/** ゴンドラの中か（局所の位置。CPU の cabInside と同じ範囲） */
+const cabInside = (p: V3n) =>
+  abs(p.x).lessThan(IW + 0.015).and(abs(p.z).lessThan(ID + 0.015)).and(p.y.greaterThan(FLOOR - 0.02)).and(p.y.lessThan(CEIL + 0.02))
 
-/** 細かいゴンドラの不透明な面のシェーダー（インスタンス） */
+/** CPU で: 局所の位置 p がゴンドラの中か（シェーダーの cabInside と同じ範囲。カメラが中にいるかをインスタンスごとに決める） */
+function cabInsideCpu(p: THREE.Vector3) {
+  return Math.abs(p.x) < IW + 0.015 && Math.abs(p.z) < ID + 0.015 && p.y > FLOOR - 0.02 && p.y < CEIL + 0.02
+}
+
+/** 地面より下を向いた映り込み（地平線の空を暗くして、下ほど空の光と地面の照り返しに） */
+const groundRefl = (R: V3n, extra: V3n) =>
+  mix(skyColor(vec3(R.x, 0.02, R.z)).mul(0.45), extra, smoothstep(-0.25, 0.0, R.y).oneMinus())
+
+/**
+ * 頂点の値（両方の材質が共有）。iInfo = (中の灯り 0〜1, 色の種, ハブへの向き x, y（インスタンスの回転を CPU で掛けたゴンドラの吊りの面の向き）)、
+ * iCam = カメラがこのゴンドラの中にいるか（CPU で決める。前の GLSL はカメラの位置をインスタンスの局所へ戻して画素ごとに見ていた。値は同じ）
+ */
+function cabinVaryings() {
+  const info = attribute<'vec4'>('iInfo', 'vec4')
+  return {
+    color: attribute<'vec3'>('color', 'vec3'),
+    mat: attribute<'vec2'>('aMat', 'vec2'),
+    info,
+    camIn: attribute<'float'>('iCam', 'float'),
+    local: varying(positionGeometry),
+    localN: varying(normalGeometry),
+    hub: varying(normalize(modelWorldMatrix.mul(vec4(info.z, info.w, 0.0, 0.0)).xyz)),
+  }
+}
+
+/** 細かいゴンドラの不透明な面の材質（インスタンス。TSL） */
 export function createCabinMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'soranowaCabin',
-    vertexColors: true,
-    // 中の面と外の面の向きを取り違えても欠けないように両面（裏から見た面は法線を返す）
-    side: THREE.DoubleSide,
-    uniforms: { ...outdoorUniforms, ...townShadowUniforms, ...lampUniforms, ...cabinUniforms },
-    vertexShader: VERTEX,
-    fragmentShader: FRAGMENT,
-  })
+  const u = outdoorUniforms
+  // 中の面と外の面の向きを取り違えても欠けないように両面（裏から見た面は法線を返す）
+  const m = unlit('soranowaCabin', { side: THREE.DoubleSide })
+  const v = cabinVaryings()
+  m.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const N = normalize(normalWorld).toVar() // 両面: normalWorld は裏の面で反転済み（MeshBasicNodeMaterial の setupNormal）
+    const Nl = normalize(v.localN).mul(faceDirection).toVar()
+    const local = v.local.toVar()
+    const id = floor(v.mat.x.add(0.5)).toVar()
+    const aux = v.mat.y.toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const dist = length(cameraPosition.sub(wp)).toVar()
+    const albedo = vec3(v.color).toVar()
+    const gloss = float(0.1).toVar()
+    const metal = float(0.0).toVar()
+    const emit = vec3(0.0).toVar()
+    const inside = cabInside(local).toVar()
+    const lampOn = v.info.x.toVar()
+    const an = abs(v.localN).toVar()
+    const uv = select(an.y.greaterThan(0.7), local.xz, select(an.x.greaterThan(an.z), local.zy, local.xy)).toVar()
+    If(id.lessThan(0.5), () => {
+      gloss.assign(aux.mul(0.55).add(0.35))
+      // 外の塗装のわずかなむら・下ほどの汚れ
+      albedo.mulAssign(oNoise(uv.mul(3.0).add(v.info.y.mul(9.0))).mul(0.05).add(0.97))
+      albedo.mulAssign(float(1.0).sub(smoothstep(Y0, Y0 + 0.6, local.y).oneMinus().mul(0.12)))
+    })
+      .ElseIf(id.lessThan(1.5), () => {
+        gloss.assign(0.18)
+        albedo.mulAssign(oNoise(uv.mul(6.0)).mul(0.04).add(0.96))
+      })
+      .ElseIf(id.lessThan(2.5), () => {
+        // モケット（細かい織りの目と、すこし明るい糸）
+        const weave = sin(uv.x.mul(900.0)).mul(sin(uv.y.mul(900.0))).mul(0.5).add(0.5)
+        albedo.mulAssign(weave.mul(0.22).add(0.82).add(oNoise(uv.mul(40.0)).mul(0.1)))
+        gloss.assign(0.02)
+      })
+      .ElseIf(id.lessThan(3.5), () => {
+        metal.assign(1.0)
+        gloss.assign(0.75)
+        albedo.mulAssign(oNoise(vec2(uv.x.mul(2.0), uv.y.mul(60.0))).mul(0.08).add(0.92))
+      })
+      .ElseIf(id.lessThan(4.5), () => {
+        // ゴムの床（丸い滑り止めの点）
+        const q = fract(local.xz.mul(9.0)).sub(0.5)
+        const dotm = smoothstep(0.17, 0.22, length(q)).oneMinus().toVar()
+        albedo.mulAssign(dotm.mul(0.25).add(0.85).add(oNoise(local.xz.mul(7.0)).mul(0.1)))
+        gloss.assign(dotm.mul(0.25).add(0.08))
+      })
+      .ElseIf(id.lessThan(5.5), () => {
+        // 屋根の色（安い形のゴンドラと同じ 5 色）
+        const k = floor(fract(v.info.y.mul(5.0).add(0.01)).mul(5.0)).toVar()
+        albedo.assign(
+          select(
+            k.lessThan(0.5),
+            vec3(0.62, 0.16, 0.14),
+            select(k.lessThan(1.5), vec3(0.14, 0.3, 0.52), select(k.lessThan(2.5), vec3(0.62, 0.5, 0.12), select(k.lessThan(3.5), vec3(0.16, 0.42, 0.26), vec3(0.55, 0.3, 0.42)))),
+          ),
+        )
+        gloss.assign(aux.mul(0.6).add(0.3))
+      })
+      .ElseIf(id.lessThan(6.5), () => {
+        albedo.assign(v.color.mul(0.55))
+        emit.assign(v.color.mul(lampOn.mul(3.2).add(0.15)))
+        gloss.assign(0.5)
+      })
+      .ElseIf(id.lessThan(7.5), () => {
+        gloss.assign(aux.mul(0.4).add(0.05))
+        albedo.mulAssign(oNoise(uv.mul(20.0)).mul(0.1).add(0.9))
+      })
+      .Else(() => {
+        // アルミの縞板
+        metal.assign(1.0)
+        gloss.assign(0.45)
+        const st = step(0.5, fract(local.x.add(local.z).mul(14.0)))
+        albedo.mulAssign(st.mul(0.2).add(0.8))
+      })
+    // 中は天井と壁に囲まれて空の光が少ない（ガラスの窓は四方にある）
+    const ao = select(inside, select(Nl.y.lessThan(-0.5), 0.35, select(Nl.y.greaterThan(0.5), 0.6, 0.68)), 1.0).toVar()
+    // 中の隅・床の近くは暗く
+    If(inside, () => {
+      ao.mulAssign(smoothstep(0.0, 0.25, min(float(IW).sub(abs(local.x)), float(ID).sub(abs(local.z)))).mul(0.2).add(0.8))
+    })
+    const sh = townShadow(wp, N).toVar()
+    const col = townLight(albedo.mul(metal.mul(-0.6).add(1.0)), N, ao, sh).toVar()
+    const H = normalize(V.add(u.uSunDir))
+    const pw = mix(10.0, 260.0, gloss).toVar()
+    const f0 = mix(0.04, 0.9, metal).toVar()
+    const fres = f0.add(f0.oneMinus().mul(pow(clamp(dot(N, V).oneMinus(), 0.0, 1.0), 5.0))).toVar()
+    col.addAssign(u.uSunLight.mul(pow(max(dot(N, H), 0.0), pw)).mul(pw.add(2.0).div(8.0)).mul(fres).mul(sh).mul(max(dot(N, u.uSunDir), 0.0)).mul(gloss))
+    const R = reflect(V.negate(), N).toVar()
+    const env = vec3(0.0).toVar()
+    If(R.y.greaterThan(0.0), () => {
+      env.assign(skyColor(R))
+    }).Else(() => {
+      env.assign(groundRefl(R, u.uSkyLight.mul(0.22).add(u.uSunLight.mul(0.03))))
+    })
+    // 中の面に映るのは、ほとんど中の壁と天井（窓の外の空は一部）
+    If(inside, () => {
+      env.mulAssign(0.45)
+    })
+    col.addAssign(env.mul(fres).mul(mix(gloss.mul(0.5), 0.9, metal)).mul(mix(vec3(1.0), albedo.mul(2.0), metal)).mul(ao))
+    // 中の天井の灯り（ゴンドラの局所で。中と、窓の枠のまわり）
+    const Lv = CAB_LAMP.sub(local).toVar()
+    const d2 = dot(Lv, Lv).toVar()
+    const Ll = Lv.mul(inverseSqrt(max(d2, 1e-4)))
+    const ndl = max(dot(Nl, Ll), 0.0)
+    const lampK = select(inside, 1.0, smoothstep(W - 0.2, W + 0.2, max(abs(local.x), abs(local.z))).oneMinus().mul(0.1))
+    col.addAssign(albedo.mul(CAB_LAMP_C).mul(lampOn).mul(ndl.mul(0.75).add(0.25)).div(d2.mul(1.4).add(0.35)).mul(lampK))
+    // 照り返し（中の白い壁から）
+    col.addAssign(albedo.mul(CAB_LAMP_C).mul(lampOn).mul(0.06).mul(select(inside, 1.0, 0.0)))
+    // 夜のホイールの LED（外周とスポークの光。ハブの向きから。中は窓から入る分）
+    const ledFace = max(dot(N, v.hub), 0.0).mul(0.7).add(0.3)
+    col.addAssign(albedo.mul(LED_C).mul(cabinUniforms.uLed).mul(ledFace).mul(select(inside, 0.05, 0.12)))
+    // 夜: 町の灯り（外の面）。白いつやのある塗装は灯りの表のままだと白く飛ぶ（乗り場の屋根の灯りのすぐ下を通る）ので弱める
+    If(inside.not(), () => {
+      col.addAssign(albedo.mul(townLamps(wp, N)).mul(0.45))
+    })
+    col.assign(outdoorHaze(col, wp))
+    col.addAssign(emit.mul(exp(dist.negate().div(u.uHazeDist.mul(1.5)))))
+    return col
+  })()
+  return withUniforms(m, cabinUniforms)
 }
 
-/** 細かいゴンドラのガラス（透ける。空・夜の LED・中の灯りを映す） */
+/** 細かいゴンドラのガラス（透ける。空・夜の LED・中の灯りを映す。TSL） */
 export function createCabinGlassMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'soranowaCabinGlass',
-    vertexColors: true,
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    uniforms: { ...outdoorUniforms, ...cabinUniforms },
-    vertexShader: VERTEX,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      ${SKY}
-      ${CABIN_GLSL}
-      uniform float uLed;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vColor;
-      varying vec2 vMat;
-      varying vec3 vLocal;
-      varying vec3 vLocalN;
-      varying vec4 vInfo;
-      varying vec3 vHub;
-      varying vec3 vCamLocal;
-      void main() {
-        vec3 N = normalize(vNormal);
-        vec3 V = normalize(cameraPosition - vWorld);
-        if (dot(N, V) < 0.0) N = -N;
-        float cosv = max(dot(N, V), 0.0);
-        float fres = 0.04 + 0.96 * pow(clamp(1.0 - cosv, 0.0, 1.0), 5.0);
-        vec3 R = reflect(-V, N);
-        vec3 refl = R.y > 0.0 ? skyColor(R) : mix(skyColor(vec3(R.x, 0.02, R.z)) * 0.45, uSkyLight * 0.22, smoothstep(0.0, -0.25, R.y));
-        refl += uSunLight * pow(max(dot(R, uSunDir), 0.0), 900.0) * 30.0 * smoothstep(-0.02, 0.05, uSunDir.y);
-        // 夜の LED（外周の光の帯とスポークの光の筋が、ハブの側のガラスに映る）
-        float toward = dot(R, vHub);
-        float band = smoothstep(0.55, 0.95, toward) * (0.6 + 0.4 * sin(R.y * 60.0 + R.x * 23.0));
-        refl += LED_C * uLed * (0.5 * smoothstep(0.0, 0.9, toward) + 1.6 * band);
-        bool camIn = cabInside(vCamLocal);
-        // 中から見ると、夜は中の灯りに照らされた中が映る
-        vec3 room = vec3(0.86, 0.84, 0.8) * vInfo.x * 0.32;
-        float a = clamp(0.05 + fres * 0.85, 0.0, 0.92);
-        vec3 col = refl;
-        if (camIn) {
-          col = mix(refl, room + refl * 0.4, clamp(vInfo.x * 0.75, 0.0, 0.75));
-          a = clamp(a + vInfo.x * 0.08 * (1.0 - uSkyLight.g * 2.0), 0.0, 0.92);
-        }
-        // うすい灰青の色（合わせガラスの縁の色）
-        col = mix(vec3(0.03, 0.04, 0.045), col, 0.92);
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, a);
-        ${TONE}
-      }
-    `,
-  })
+  const u = outdoorUniforms
+  const m = unlit('soranowaCabinGlass', { transparent: true, depthWrite: false, side: THREE.DoubleSide })
+  const v = cabinVaryings()
+  m.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const N = normalize(normalWorld).toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    If(dot(N, V).lessThan(0.0), () => {
+      N.assign(N.negate())
+    })
+    const cosv = max(dot(N, V), 0.0)
+    const fres = pow(clamp(cosv.oneMinus(), 0.0, 1.0), 5.0).mul(0.96).add(0.04).toVar()
+    const R = reflect(V.negate(), N).toVar()
+    const refl = vec3(0.0).toVar()
+    If(R.y.greaterThan(0.0), () => {
+      refl.assign(skyColor(R))
+    }).Else(() => {
+      refl.assign(groundRefl(R, u.uSkyLight.mul(0.22)))
+    })
+    refl.addAssign(u.uSunLight.mul(pow(max(dot(R, u.uSunDir), 0.0), 900.0)).mul(30.0).mul(smoothstep(-0.02, 0.05, u.uSunDir.y)))
+    // 夜の LED（外周の光の帯とスポークの光の筋が、ハブの側のガラスに映る）
+    const toward = dot(R, v.hub).toVar()
+    const band = smoothstep(0.55, 0.95, toward).mul(sin(R.y.mul(60.0).add(R.x.mul(23.0))).mul(0.4).add(0.6))
+    refl.addAssign(LED_C.mul(cabinUniforms.uLed).mul(smoothstep(0.0, 0.9, toward).mul(0.5).add(band.mul(1.6))))
+    // 中から見ると、夜は中の灯りに照らされた中が映る
+    const room = vec3(0.86, 0.84, 0.8).mul(v.info.x).mul(0.32)
+    const a = clamp(fres.mul(0.85).add(0.05), 0.0, 0.92).toVar()
+    const col = vec3(refl).toVar()
+    If(v.camIn.greaterThan(0.5), () => {
+      col.assign(mix(refl, room.add(refl.mul(0.4)), clamp(v.info.x.mul(0.75), 0.0, 0.75)))
+      a.assign(clamp(a.add(v.info.x.mul(0.08).mul(u.uSkyLight.g.mul(2.0).oneMinus())), 0.0, 0.92))
+    })
+    // うすい灰青の色（合わせガラスの縁の色）
+    col.assign(mix(vec3(0.03, 0.04, 0.045), col, 0.92))
+    return vec4(outdoorHaze(col, wp), a)
+  })()
+  return withUniforms(m, cabinUniforms)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -559,6 +578,8 @@ export function createCabinGlassMaterial() {
 /* -------------------------------------------------------------------------- */
 
 const _dm = new THREE.Matrix4()
+const _inv = new THREE.Matrix4()
+const _cl = new THREE.Vector3()
 
 /** 細かいゴンドラ（最大 capacity 基）。毎コマ begin → add（ホイールの局所の行列・iInfo・扉の開き具合）→ end */
 export class DetailedCabins {
@@ -568,9 +589,11 @@ export class DetailedCabins {
   private door: THREE.InstancedMesh
   private doorGlass: THREE.InstancedMesh
   private infos: THREE.InstancedBufferAttribute[] = []
+  /** カメラがそのゴンドラの中にいるか（形ごと。本体・窓と扉では行列が違う） */
+  private cams: THREE.InstancedBufferAttribute[] = []
   private count = 0
-  readonly material: THREE.ShaderMaterial
-  readonly glassMaterial: THREE.ShaderMaterial
+  readonly material: ReturnType<typeof createCabinMaterial>
+  readonly glassMaterial: ReturnType<typeof createCabinGlassMaterial>
 
   constructor(capacity: number) {
     const geo = cabinGeometry()
@@ -580,6 +603,10 @@ export class DetailedCabins {
       const info = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4)
       info.setUsage(THREE.DynamicDrawUsage)
       g.setAttribute('iInfo', info)
+      const cam = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1)
+      cam.setUsage(THREE.DynamicDrawUsage)
+      g.setAttribute('iCam', cam)
+      this.cams.push(cam)
       if (!g.getAttribute('color')) g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(g.getAttribute('position').count * 3).fill(1), 3))
       if (!g.getAttribute('aMat')) g.setAttribute('aMat', new THREE.Float32BufferAttribute(new Float32Array(g.getAttribute('position').count * 2), 2))
       const mesh = new THREE.InstancedMesh(g, m, capacity)
@@ -603,8 +630,11 @@ export class DetailedCabins {
     this.count = 0
   }
 
-  /** 1 基（m = ゴンドラの局所 → ホイールの局所の行列、door = 扉の開き具合 0〜1） */
-  add(m: THREE.Matrix4, info: readonly [number, number, number, number], door: number) {
+  /**
+   * 1 基（m = ゴンドラの局所 → 観覧車の局所（入れ物の group）の行列、info = (中の灯り, 色の種, ハブへの向き x, y（観覧車の局所の xy の面）)、
+   * door = 扉の開き具合 0〜1、cam = カメラの位置（観覧車の局所。ガラスが中から見た映り方にするか））
+   */
+  add(m: THREE.Matrix4, info: readonly [number, number, number, number], door: number, cam: THREE.Vector3 | null = null) {
     const i = this.count
     if (i >= this.infos[0].count) return false
     this.body.setMatrixAt(i, m)
@@ -616,7 +646,18 @@ export class DetailedCabins {
     _dm.makeTranslation(slide, 0, -out).premultiply(m)
     this.door.setMatrixAt(i, _dm)
     this.doorGlass.setMatrixAt(i, _dm)
-    for (const a of this.infos) a.setXYZW(i, info[0], info[1], info[2], info[3])
+    // ハブへの向きは、前の GLSL と同じくインスタンスの回転を掛けた向きで渡す（シェーダーは物の行列だけを掛ける）
+    const me = m.elements
+    const hx = me[0] * info[2] + me[4] * info[3]
+    const hy = me[1] * info[2] + me[5] * info[3]
+    for (const a of this.infos) a.setXYZW(i, info[0], info[1], hx, hy)
+    // カメラが中にいるか（前の GLSL はカメラをインスタンスの局所へ戻して画素ごとに見ていた。インスタンスごとに同じ値なのでここで決める）
+    const inBody = cam ? cabInsideCpu(_cl.copy(cam).applyMatrix4(_inv.copy(m).invert())) : false
+    const inDoor = cam ? cabInsideCpu(_cl.copy(cam).applyMatrix4(_inv.copy(_dm).invert())) : false
+    this.cams[0].setX(i, inBody ? 1 : 0)
+    this.cams[1].setX(i, inDoor ? 1 : 0)
+    this.cams[2].setX(i, inBody ? 1 : 0)
+    this.cams[3].setX(i, inDoor ? 1 : 0)
     this.count++
     return true
   }
@@ -634,6 +675,11 @@ export class DetailedCabins {
     for (const a of this.infos) {
       a.clearUpdateRanges()
       a.addUpdateRange(0, this.count * 4)
+      a.needsUpdate = true
+    }
+    for (const a of this.cams) {
+      a.clearUpdateRanges()
+      a.addUpdateRange(0, this.count)
       a.needsUpdate = true
     }
   }

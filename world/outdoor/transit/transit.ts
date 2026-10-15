@@ -1,4 +1,4 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { townOptions } from '../../townHost'
 import { outdoor } from '../../environment/daylight'
 import type { TownInfra, TownTile } from '../town/townData'
@@ -57,7 +57,7 @@ export function createTransit(infra: TownInfra, tiles: TownTile[], skipLight: In
   const material = createTransitMaterial()
   const shapes = vehicleShapes(CABLE_BUILT_SLOPE)
   // 系統の色
-  const lc = transitUniforms.uLineColors.value
+  const lc = transitUniforms.uLineColors.array as THREE.Color[]
   for (const l of t.trams) lc[l.no]?.set(l.color)
   lc[5].set('#d9692a')
   lc[6].set('#26a69a')

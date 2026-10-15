@@ -1,8 +1,8 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { GeoBuilder } from '../site/builder'
-import { transitUniforms } from './transitMaterial'
+import { abs } from 'three/tsl'
 import { TRAM_GAP, TRAM_SECTION, WIRE_HEIGHT } from './vehicles'
-import { InstancedPart, VM, createDetailGlassMaterial, createDetailMaterial, endRect, flatRect, ring, sideRect, tube, type V3, type VehicleGlsl } from './vehicleDetail'
+import { InstancedPart, VM, createDetailGlassMaterial, createDetailMaterial, endRect, flatRect, ring, sideRect, tube, ceilingLamps, sideWindowHit, type V3, type VehicleTsl } from './vehicleDetail'
 
 /**
  * 緑電 9100 形「ひらき」（3 両連接の低床車。vol3 4-3）の細かい形。花音が乗っている編成と、カメラから近い編成（2 本まで）だけ、この形で描く
@@ -557,42 +557,15 @@ function leafGeometry(sx: number) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* シェーダー（両の局所の中の決まり）                                                */
+/* 材質の決まり（両の局所の中の決まり）                                                */
 /* -------------------------------------------------------------------------- */
 
-const f = (v: number) => v.toFixed(4)
-
-const TRAM_GLSL: VehicleGlsl = {
+const TRAM_TSL: VehicleTsl = {
   name: 'tram',
-  glsl: /* glsl */ `
-    bool vehInside(vec3 p) {
-      return abs(p.x) < ${f(IW + 0.012)} && abs(p.z) < ${f(HL + 0.01)} && p.y > ${f(F - 0.03)} && p.y < ${f(T.ceilMid + 0.04)};
-    }
-    bool vehCamInside(vec3 c) { return abs(c.x) < ${f(IW)} && abs(c.z) < ${f(HL + 0.4)} && c.y > ${f(F)} && c.y < ${f(T.ceilMid)}; }
-    float vehSunThrough(vec3 p, vec3 L) {
-      if (abs(L.x) > 1e-3) {
-        float t = (sign(L.x) * ${f(IW)} - p.x) / L.x;
-        if (t > 0.0) {
-          vec3 h = p + L * t;
-          if (abs(h.z) < ${f(HL - 0.2)} && h.y > ${f(T.winY0)} && h.y < ${f(T.winY1)}) return 0.85;
-        }
-      }
-      return 0.0;
-    }
-    vec3 vehLamp(vec3 p, vec3 n) {
-      vec3 acc = vec3(0.0);
-      for (int i = 0; i < 2; i++) {
-        float x = i == 0 ? -0.5 : 0.5;
-        vec3 q = vec3(x, ${f(T.ceilSide + 0.08)}, clamp(p.z, ${f(-HL + 0.3)}, ${f(HL - 0.3)}));
-        vec3 Lv = q - p;
-        float d2 = dot(Lv, Lv);
-        vec3 Ll = Lv * inversesqrt(max(d2, 1e-4));
-        float ndl = max(dot(n, Ll), 0.0);
-        acc += vec3(1.0, 0.86, 0.68) * (ndl * 0.75 + 0.25) / (d2 * 1.4 + 0.6);
-      }
-      return acc * 1.25 + vec3(1.0, 0.88, 0.72) * 0.08;
-    }
-  `,
+  inside: (p) => abs(p.x).lessThan(IW + 0.012).and(abs(p.z).lessThan(HL + 0.01)).and(p.y.greaterThan(F - 0.03)).and(p.y.lessThan(T.ceilMid + 0.04)),
+  camInside: (c) => abs(c.x).lessThan(IW).and(abs(c.z).lessThan(HL + 0.4)).and(c.y.greaterThan(F)).and(c.y.lessThan(T.ceilMid)),
+  sunThrough: (p, L) => sideWindowHit(p, L, IW, -(HL - 0.2), HL - 0.2, T.winY0, T.winY1, 0.85),
+  lamp: (p, n) => ceilingLamps(p, n, 0.5, T.ceilSide + 0.08, -HL + 0.3, HL - 0.3, new THREE.Color(1.0, 0.86, 0.68), 1.4, 0.6, 1.25, new THREE.Color(0.08, 0.0704, 0.0576)),
 }
 
 /* -------------------------------------------------------------------------- */
@@ -618,8 +591,8 @@ export class TramDetail {
 
   constructor(capacity = 3) {
     this.capacity = capacity
-    const mat = createDetailMaterial(TRAM_GLSL, transitUniforms.uLineColors)
-    const glassMat = createDetailGlassMaterial(TRAM_GLSL)
+    const mat = createDetailMaterial(TRAM_TSL)
+    const glassMat = createDetailGlassMaterial(TRAM_TSL)
     const cab = sectionGeometry(true)
     const mid = sectionGeometry(false)
     this.cab = new InstancedPart(cab.body, mat, 'transit:tram:cab', capacity * 2)

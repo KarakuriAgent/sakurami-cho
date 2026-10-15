@@ -1,9 +1,36 @@
-import * as THREE from 'three'
-import { COMMON, SKY, TONE, outdoorUniforms } from '../materials'
+import * as THREE from 'three/webgpu'
+import {
+  Fn,
+  If,
+  abs,
+  atan,
+  cameraPosition,
+  clamp,
+  exp,
+  float,
+  floor,
+  fract,
+  length,
+  max,
+  mix,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  reflect,
+  select,
+  smoothstep,
+  step,
+  texture,
+  uniform,
+  vec2,
+  vec3,
+} from 'three/tsl'
+import { oNoise, outdoorHaze, outdoorUniforms, unlit, withUniforms } from '../materials'
 import { GeoBuilder } from '../site/builder'
-import { TOWN_LIGHT } from '../town/facades'
-import { TOWN_LAMPS, lampUniforms } from '../town/lamps'
-import { TOWN_SHADOW, townShadowUniforms } from '../town/shadows'
+import { townLight } from '../town/facades'
+import { townLamps } from '../town/lamps'
+import { townShadow } from '../town/shadows'
+import { envRefl, facingNormal, matAttr, metalFresnel, sunSpecular, vertexColorAttr } from './transitMaterial'
 
 /**
  * 花音のホバーの一人乗り（私物。docs/design/town.md §21・§7 の 211〜）の形と描き方。
@@ -372,115 +399,93 @@ function fan(g: GeoBuilder, fz: number) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* シェーダー                                                                     */
+/* 材質                                                                         */
 /* -------------------------------------------------------------------------- */
 
-const VERTEX = /* glsl */ `
-  attribute vec2 aMat;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  void main() {
-    vec4 wp = modelMatrix * vec4(position, 1.0);
-    vWorld = wp.xyz;
-    vNormal = normalize(mat3(modelMatrix) * normal);
-    vColor = color;
-    vMat = aMat;
-    vLocal = position;
-    gl_Position = projectionMatrix * viewMatrix * wp;
-  }
-`
-
-const FRAGMENT = /* glsl */ `
-  ${COMMON}
-  ${SKY}
-  ${TOWN_LIGHT}
-  ${TOWN_SHADOW}
-  ${TOWN_LAMPS}
-  uniform sampler2D uPlate;
-  uniform float uPower;
-  uniform float uLamp;
-  uniform float uSpin;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  void main() {
-    vec3 N = normalize(vNormal);
-    if (!gl_FrontFacing) N = -N;
-    float id = floor(vMat.x + 0.5);
-    float aux = vMat.y;
-    vec3 V = normalize(cameraPosition - vWorld);
-    float dist = length(cameraPosition - vWorld);
-    vec3 albedo = vColor;
-    float gloss = 0.3;
-    float metal = 0.0;
-    vec3 emit = vec3(0.0);
-    if (id < 0.5) {
-      gloss = 0.25 + 0.6 * aux;
-      albedo *= 0.97 + 0.04 * oNoise(vLocal.xz * 9.0 + vLocal.y * 3.0);
-    } else if (id < 1.5) {
-      gloss = 0.06 + 0.3 * aux;
-      // 床板の筋（前後の向きの細い溝）
-      if (aux > 0.9) albedo *= 0.75 + 0.35 * step(0.5, fract(vLocal.x * 38.0));
-    } else if (id < 2.5) {
-      metal = 1.0;
-      gloss = aux > 0.5 ? 0.6 : 0.78;
-      albedo *= 0.92 + 0.08 * oNoise(vLocal.xz * 40.0);
-    } else if (id < 3.5) {
-      gloss = 0.32;
-      albedo *= 0.9 + 0.1 * oNoise(vLocal.xz * 60.0) + 0.05 * sin(vLocal.z * 90.0);
-    } else if (id < 4.5) {
-      albedo = vColor * 0.45;
-      // 前照灯と尾灯は回っている間の夜、車幅灯は回っている間（昼も小さく）
-      float on = aux < 0.5 ? uLamp : aux < 1.5 ? max(uLamp, uPower * 0.35) : uPower * (0.25 + 0.75 * uLamp);
-      emit = vColor * (aux < 0.5 ? 0.05 + 3.2 * on : 0.08 + 2.6 * on);
-      gloss = 0.7;
-    } else if (id < 5.5) {
-      albedo = vec3(0.12);
-      emit = vColor * uPower * (0.6 + 1.6 * uLamp) * (0.9 + 0.1 * sin(uTime * 23.0));
-    } else if (id < 6.5) {
-      // 登録番号の板（白地に緑の字）
-      float u = clamp((0.12 - vLocal.x) / 0.24, 0.0, 1.0);
-      float v = clamp((vLocal.y - 0.37) / 0.1, 0.0, 1.0);
-      float a = texture2D(uPlate, vec2(u, v)).a;
-      albedo = mix(vec3(0.92, 0.91, 0.86), vec3(0.08, 0.27, 0.17), a);
-      gloss = 0.35;
-    } else if (id < 7.5) {
-      // 計器（暗い地に電球色の速さの字と、残りの電池の帯）
-      float bar = step(vLocal.x, -0.045 + 0.08 * (0.55 + 0.1 * sin(uTime * 0.05))) * step(-0.05, vLocal.x);
-      albedo = vec3(0.02);
-      emit = vec3(1.0, 0.62, 0.25) * uPower * (0.6 + 0.4 * bar) * 0.8;
-      gloss = 0.6;
-    } else {
-      // 羽根（6 枚）の模様を回す
-      vec2 q = vLocal.xz - vec2(0.0, vLocal.z > 0.0 ? ${H.fanZ[0].toFixed(3)} : ${H.fanZ[1].toFixed(3)});
-      float ang = atan(q.y, q.x) + uSpin;
-      float blade = smoothstep(0.35, 0.6, abs(sin(ang * 3.0)));
-      float blur = clamp(uPower * 1.2, 0.0, 1.0);
-      albedo *= mix(0.55 + 0.6 * blade, 0.85, blur);
-      gloss = 0.3;
-    }
-    float sh = townShadow(vWorld, N);
-    vec3 col = townLight(albedo * (1.0 - metal * 0.6), N, 1.0, sh);
-    vec3 Hh = normalize(V + uSunDir);
-    float pw = mix(10.0, 260.0, gloss);
-    float f0 = mix(0.04, 0.9, metal);
-    float fres = f0 + (1.0 - f0) * pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 5.0);
-    col += uSunLight * pow(max(dot(N, Hh), 0.0), pw) * (pw + 2.0) / 8.0 * fres * sh * max(dot(N, uSunDir), 0.0) * gloss;
-    vec3 R = reflect(-V, N);
-    vec3 env = R.y > 0.0 ? skyColor(R) : mix(skyColor(vec3(R.x, 0.02, R.z)) * 0.45, uSkyLight * 0.22 + uSunLight * 0.03, smoothstep(0.0, -0.25, R.y));
-    col += env * fres * mix(gloss * 0.5, 0.9, metal) * mix(vec3(1.0), albedo * 2.0, metal);
-    col += albedo * townLamps(vWorld, N) * 0.7;
-    col = outdoorHaze(col, vWorld);
-    col += emit * exp(-dist / (uHazeDist * 1.5));
-    gl_FragColor = vec4(col, 1.0);
-    ${TONE}
-  }
-`
+/** ホバーの色（不透明。局所の座標で模様と羽根を回す） */
+function hoverColor(u2: HoverUniforms) {
+  const u = outdoorUniforms
+  return Fn(() => {
+    const wp = positionWorld.toVar()
+    const N = facingNormal().toVar()
+    const vLocal = positionGeometry.toVar()
+    const mat = matAttr().toVar()
+    const id = floor(mat.x.add(0.5)).toVar()
+    const aux = mat.y.toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const dist = length(cameraPosition.sub(wp)).toVar()
+    const vColor = vertexColorAttr().toVar()
+    const albedo = vec3(vColor).toVar()
+    const gloss = float(0.3).toVar()
+    const metal = float(0.0).toVar()
+    const emit = vec3(0.0).toVar()
+    If(id.lessThan(0.5), () => {
+      gloss.assign(aux.mul(0.6).add(0.25))
+      albedo.mulAssign(oNoise(vLocal.xz.mul(9.0).add(vLocal.y.mul(3.0))).mul(0.04).add(0.97))
+    })
+      .ElseIf(id.lessThan(1.5), () => {
+        gloss.assign(aux.mul(0.3).add(0.06))
+        // 床板の筋（前後の向きの細い溝）
+        If(aux.greaterThan(0.9), () => {
+          albedo.mulAssign(step(0.5, fract(vLocal.x.mul(38.0))).mul(0.35).add(0.75))
+        })
+      })
+      .ElseIf(id.lessThan(2.5), () => {
+        metal.assign(1.0)
+        gloss.assign(select(aux.greaterThan(0.5), 0.6, 0.78))
+        albedo.mulAssign(oNoise(vLocal.xz.mul(40.0)).mul(0.08).add(0.92))
+      })
+      .ElseIf(id.lessThan(3.5), () => {
+        gloss.assign(0.32)
+        albedo.mulAssign(oNoise(vLocal.xz.mul(60.0)).mul(0.1).add(0.9).add(vLocal.z.mul(90.0).sin().mul(0.05)))
+      })
+      .ElseIf(id.lessThan(4.5), () => {
+        albedo.assign(vColor.mul(0.45))
+        // 前照灯と尾灯は回っている間の夜、車幅灯は回っている間（昼も小さく）
+        const on = select(aux.lessThan(0.5), u2.uLamp, select(aux.lessThan(1.5), max(u2.uLamp, u2.uPower.mul(0.35)), u2.uPower.mul(u2.uLamp.mul(0.75).add(0.25)))).toVar()
+        emit.assign(vColor.mul(select(aux.lessThan(0.5), on.mul(3.2).add(0.05), on.mul(2.6).add(0.08))))
+        gloss.assign(0.7)
+      })
+      .ElseIf(id.lessThan(5.5), () => {
+        albedo.assign(vec3(0.12))
+        emit.assign(vColor.mul(u2.uPower).mul(u2.uLamp.mul(1.6).add(0.6)).mul(u.uTime.mul(23.0).sin().mul(0.1).add(0.9)))
+      })
+      .ElseIf(id.lessThan(6.5), () => {
+        // 登録番号の板（白地に緑の字）
+        const pu = clamp(float(0.12).sub(vLocal.x).div(0.24), 0.0, 1.0)
+        const pv = clamp(vLocal.y.sub(0.37).div(0.1), 0.0, 1.0)
+        const a = u2.uPlate.sample(vec2(pu, pv)).a
+        albedo.assign(mix(vec3(0.92, 0.91, 0.86), vec3(0.08, 0.27, 0.17), a))
+        gloss.assign(0.35)
+      })
+      .ElseIf(id.lessThan(7.5), () => {
+        // 計器（暗い地に電球色の速さの字と、残りの電池の帯）
+        const bar = step(vLocal.x, u.uTime.mul(0.05).sin().mul(0.1).add(0.55).mul(0.08).sub(0.045)).mul(step(-0.05, vLocal.x))
+        albedo.assign(vec3(0.02))
+        emit.assign(vec3(1.0, 0.62, 0.25).mul(u2.uPower).mul(bar.mul(0.4).add(0.6)).mul(0.8))
+        gloss.assign(0.6)
+      })
+      .Else(() => {
+        // 羽根（6 枚）の模様を回す
+        const q = vLocal.xz.sub(vec2(0.0, select(vLocal.z.greaterThan(0.0), H.fanZ[0], H.fanZ[1]))).toVar()
+        const ang = atan(q.y, q.x).add(u2.uSpin)
+        const blade = smoothstep(0.35, 0.6, abs(ang.mul(3.0).sin()))
+        const blur = clamp(u2.uPower.mul(1.2), 0.0, 1.0)
+        albedo.mulAssign(mix(blade.mul(0.6).add(0.55), 0.85, blur))
+        gloss.assign(0.3)
+      })
+    const sh = townShadow(wp, N).toVar()
+    const col = townLight(albedo.mul(metal.mul(-0.6).add(1.0)), N, 1.0, sh).toVar()
+    const fres = metalFresnel(metal, N, V).toVar()
+    col.addAssign(sunSpecular(N, V, gloss, fres, sh))
+    const R = reflect(V.negate(), N)
+    col.addAssign(envRefl(R).mul(fres).mul(mix(gloss.mul(0.5), 0.9, metal)).mul(mix(vec3(1.0), albedo.mul(2.0), metal)))
+    col.addAssign(albedo.mul(townLamps(wp, N)).mul(0.7))
+    col.assign(outdoorHaze(col, wp))
+    col.addAssign(emit.mul(exp(dist.negate().div(u.uHazeDist.mul(1.5)))))
+    return col
+  })()
+}
 
 /** 登録番号の板の絵（白地は透明、字だけ。1 行） */
 function plateTexture(text: string) {
@@ -507,22 +512,29 @@ function plateTexture(text: string) {
   return t
 }
 
+type HoverUniforms = ReturnType<typeof hoverUniforms>
+
+function hoverUniforms() {
+  const plate = plateTexture(H.plate)
+  return {
+    uPlate: texture(plate ?? emptyPlate()),
+    uPower: uniform(0),
+    uLamp: uniform(0),
+    uSpin: uniform(0),
+  }
+}
+
+/** 字の無い板（透明の 1 画素。document の無い所） */
+function emptyPlate() {
+  const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1)
+  t.needsUpdate = true
+  return t
+}
+
 /** ホバーの描き方（1 台）。uniforms を毎コマ書く */
 export function createHoverMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'hover',
-    vertexColors: true,
-    side: THREE.DoubleSide,
-    uniforms: {
-      ...outdoorUniforms,
-      ...townShadowUniforms,
-      ...lampUniforms,
-      uPlate: { value: plateTexture(H.plate) },
-      uPower: { value: 0 },
-      uLamp: { value: 0 },
-      uSpin: { value: 0 },
-    },
-    vertexShader: VERTEX,
-    fragmentShader: FRAGMENT,
-  })
+  const uniforms = hoverUniforms()
+  const m = unlit('hover', { side: THREE.DoubleSide })
+  m.colorNode = hoverColor(uniforms)
+  return withUniforms(m, uniforms)
 }

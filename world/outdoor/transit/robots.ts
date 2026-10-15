@@ -1,13 +1,41 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  Fn,
+  If,
+  attribute,
+  cameraPosition,
+  clamp,
+  dot,
+  exp,
+  float,
+  floor,
+  int,
+  length,
+  max,
+  mix,
+  normalWorld,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  pow,
+  reflect,
+  select,
+  texture,
+  uniform,
+  uniformArray,
+  varying,
+  vec2,
+  vec3,
+} from 'three/tsl'
 import { CABLE_STATIONS, stationHeading, stationScene, type CableStationZone } from '../../../core/cableStations'
 import { SITE } from '../../../core/town'
 import { townEvents, townFocus } from '../../townHost'
 import { interiors } from '../interior/interiors'
-import { COMMON, SKY, TONE, outdoorUniforms } from '../materials'
+import { oNoise, outdoorHaze, outdoorUniforms, skyColor, unlit, withUniforms } from '../materials'
 import { GeoBuilder } from '../site/builder'
-import { TOWN_LIGHT } from '../town/facades'
-import { TOWN_LAMPS, lampUniforms } from '../town/lamps'
-import { TOWN_SHADOW, townShadowUniforms } from '../town/shadows'
+import { townLight } from '../town/facades'
+import { townLamps } from '../town/lamps'
+import { townShadow } from '../town/shadows'
 import { boatNet } from './boats'
 import { cableTrack } from './cable'
 import { CABLE_RUN, CABLE_TRIPS, cableTrip, tripStart } from '../../../core/transit/cableRun'
@@ -233,105 +261,104 @@ function armGeometry(right: boolean) {
 /* シェーダー                                                                     */
 /* -------------------------------------------------------------------------- */
 
-const VERTEX = /* glsl */ `
-  attribute vec2 aMat;
-  attribute vec4 iInfo;
-  attribute vec3 iRoom;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  varying vec4 vInfo;
-  varying vec3 vRoom;
-  void main() {
-    mat4 m = modelMatrix * instanceMatrix;
-    vec4 wp = m * vec4(position, 1.0);
-    vWorld = wp.xyz;
-    vNormal = normalize(mat3(m) * normal);
-    vColor = color;
-    vMat = aMat;
-    vInfo = iInfo;
-    vRoom = iRoom;
-    vLocal = position;
-    gl_Position = projectionMatrix * viewMatrix * wp;
-  }
-`
+/** 名前の札の絵が無いとき（document の無い所）の仮の画像（字の無い 1 画素） */
+function blankPlate() {
+  const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1)
+  t.needsUpdate = true
+  return t
+}
 
-const FRAGMENT = /* glsl */ `
-  ${COMMON}
-  ${SKY}
-  ${TOWN_LIGHT}
-  ${TOWN_SHADOW}
-  ${TOWN_LAMPS}
-  uniform sampler2D uPlate;
-  uniform float uPlateRows;
-  uniform vec3 uBands[3];
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying vec2 vMat;
-  varying vec3 vLocal;
-  varying vec4 vInfo;
-  varying vec3 vRoom;
-  void main() {
-    vec3 N = normalize(vNormal);
-    if (!gl_FrontFacing) N = -N;
-    float id = floor(vMat.x + 0.5);
-    float aux = vMat.y;
-    vec3 V = normalize(cameraPosition - vWorld);
-    float dist = length(cameraPosition - vWorld);
-    vec3 albedo = vColor;
-    float gloss = 0.3 + 0.4 * aux;
-    float metal = 0.0;
-    vec3 emit = vec3(0.0);
-    if (id < 0.5) {
-      albedo *= 0.96 + 0.05 * oNoise(vLocal.xy * 30.0);
-    } else if (id < 1.5) {
-      gloss = 0.08 + 0.4 * aux;
-    } else if (id < 2.5) {
-      metal = 1.0;
-      gloss = 0.65;
-    } else if (id < 3.5) {
-      gloss = 0.92;
-      albedo = vec3(0.02);
-    } else if (id < 4.5) {
-      // 目（まばたきは iInfo.x）と合図灯
-      albedo = vColor * 0.4;
-      emit = aux > 0.5 ? vColor * 0.5 : vColor * 2.4 * vInfo.x;
-      gloss = 0.6;
-    } else if (id < 5.5) {
-      // 名前の札（行 = iInfo.y）
-      float u = clamp((vLocal.x + 0.12) / 0.24, 0.0, 1.0);
-      float v = clamp((vLocal.y - 0.43) / 0.1, 0.0, 1.0);
-      vec4 tx = texture2D(uPlate, vec2(u, 1.0 - (vInfo.y + 1.0 - v) / uPlateRows));
-      albedo = mix(vec3(0.93, 0.9, 0.82), vec3(0.08, 0.2, 0.14), tx.a);
-      gloss = 0.4;
-    } else {
-      albedo = uBands[int(clamp(floor(vInfo.w + 0.5), 0.0, 2.0))];
-      gloss = 0.5;
-    }
-    float room = vInfo.z;
-    float sh = townShadow(vWorld, N);
-    vec3 col = townLight(albedo * (1.0 - metal * 0.6), N, 1.0, mix(sh, 1.0, room * 0.5)) * (1.0 - room * 0.75);
-    // 建物の中の光（まわりの明るさと灯りの色。上からの向き）
-    col += albedo * vRoom * (0.55 + 0.45 * max(N.y, 0.0)) * room;
-    vec3 H = normalize(V + uSunDir);
-    float pw = mix(10.0, 260.0, gloss);
-    float f0 = mix(0.04, 0.9, metal);
-    float fres = f0 + (1.0 - f0) * pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 5.0);
-    col += uSunLight * pow(max(dot(N, H), 0.0), pw) * (pw + 2.0) / 8.0 * fres * sh * max(dot(N, uSunDir), 0.0) * gloss * (1.0 - room * 0.8);
-    vec3 R = reflect(-V, N);
-    vec3 env = R.y > 0.0 ? skyColor(R) : uSkyLight * 0.3;
-    env = mix(env, vRoom * 0.8, room);
-    col += env * fres * mix(gloss * 0.4, 0.85, metal) * mix(vec3(1.0), albedo * 2.0, metal);
-    col += albedo * townLamps(vWorld, N) * 0.7;
-    col = outdoorHaze(col, vWorld);
-    col += emit * exp(-dist / (uHazeDist * 1.5));
-    gl_FragColor = vec4(col, 1.0);
-    ${TONE}
+/**
+ * 駅員ロボの材質（インスタンス。TSL）。町と同じ光（太陽・空・町の影・夜の灯りの表）に、建物の中の光（iRoom・iInfo.z）、
+ * 目と合図灯の光、名前の札の字。iInfo = (まばたき, 札の行, 中にいる割合, 襟の色の番号)
+ */
+function createRobotMaterial(plate: THREE.Texture | null, rows: number) {
+  const u = outdoorUniforms
+  const uniforms = {
+    uPlate: texture(plate ?? blankPlate()),
+    uPlateRows: uniform(rows),
+    uBands: uniformArray([new THREE.Color('#a82b23'), new THREE.Color('#d9a21b'), new THREE.Color('#2c3f66')], 'color'),
   }
-`
+  const m = unlit('stationRobot')
+  const vColor = attribute<'vec3'>('color', 'vec3')
+  const vMat = attribute<'vec2'>('aMat', 'vec2')
+  const vInfo = attribute<'vec4'>('iInfo', 'vec4')
+  const vRoom = attribute<'vec3'>('iRoom', 'vec3')
+  // 局所の位置（形の頂点のまま。名前の札の字・塗装のむら）
+  const vLocal = varying(positionGeometry)
+  m.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const N = normalize(normalWorld).toVar() // 両面: normalWorld は裏の面で反転済み（MeshBasicNodeMaterial の setupNormal）
+    const id = floor(vMat.x.add(0.5)).toVar()
+    const aux = vMat.y.toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const dist = length(cameraPosition.sub(wp)).toVar()
+    const albedo = vec3(vColor).toVar()
+    const gloss = aux.mul(0.4).add(0.3).toVar()
+    const metal = float(0.0).toVar()
+    const emit = vec3(0.0).toVar()
+    If(id.lessThan(0.5), () => {
+      albedo.mulAssign(oNoise(vLocal.xy.mul(30.0)).mul(0.05).add(0.96))
+    })
+      .ElseIf(id.lessThan(1.5), () => {
+        gloss.assign(aux.mul(0.4).add(0.08))
+      })
+      .ElseIf(id.lessThan(2.5), () => {
+        metal.assign(1.0)
+        gloss.assign(0.65)
+      })
+      .ElseIf(id.lessThan(3.5), () => {
+        gloss.assign(0.92)
+        albedo.assign(vec3(0.02))
+      })
+      .ElseIf(id.lessThan(4.5), () => {
+        // 目（まばたきは iInfo.x）と合図灯
+        albedo.assign(vColor.mul(0.4))
+        emit.assign(select(aux.greaterThan(0.5), vColor.mul(0.5), vColor.mul(2.4).mul(vInfo.x)))
+        gloss.assign(0.6)
+      })
+      .ElseIf(id.lessThan(5.5), () => {
+        // 名前の札（行 = iInfo.y）
+        const pu = clamp(vLocal.x.add(0.12).div(0.24), 0.0, 1.0)
+        const pv = clamp(vLocal.y.sub(0.43).div(0.1), 0.0, 1.0)
+        const tx = uniforms.uPlate.sample(vec2(pu, float(1.0).sub(vInfo.y.add(1.0).sub(pv).div(uniforms.uPlateRows))))
+        albedo.assign(mix(vec3(0.93, 0.9, 0.82), vec3(0.08, 0.2, 0.14), tx.a))
+        gloss.assign(0.4)
+      })
+      .Else(() => {
+        albedo.assign(uniforms.uBands.element(int(clamp(floor(vInfo.w.add(0.5)), 0.0, 2.0))))
+        gloss.assign(0.5)
+      })
+    const room = vInfo.z.toVar()
+    const sh = townShadow(wp, N).toVar()
+    const col = townLight(albedo.mul(metal.mul(-0.6).add(1.0)), N, float(1.0), mix(sh, 1.0, room.mul(0.5))).mul(room.mul(-0.75).add(1.0)).toVar()
+    // 建物の中の光（まわりの明るさと灯りの色。上からの向き）
+    col.addAssign(albedo.mul(vRoom).mul(max(N.y, 0.0).mul(0.45).add(0.55)).mul(room))
+    const H = normalize(V.add(u.uSunDir))
+    const pw = mix(10.0, 260.0, gloss).toVar()
+    const f0 = mix(0.04, 0.9, metal).toVar()
+    const fres = f0.add(f0.oneMinus().mul(pow(clamp(dot(N, V).oneMinus(), 0.0, 1.0), 5.0))).toVar()
+    col.addAssign(
+      u.uSunLight
+        .mul(pow(max(dot(N, H), 0.0), pw))
+        .mul(pw.add(2.0).div(8.0))
+        .mul(fres)
+        .mul(sh)
+        .mul(max(dot(N, u.uSunDir), 0.0))
+        .mul(gloss)
+        .mul(room.mul(-0.8).add(1.0)),
+    )
+    const R = reflect(V.negate(), N).toVar()
+    const env = select(R.y.greaterThan(0.0), skyColor(R), u.uSkyLight.mul(0.3)).toVar()
+    env.assign(mix(env, vRoom.mul(0.8), room))
+    col.addAssign(env.mul(fres).mul(mix(gloss.mul(0.4), 0.85, metal)).mul(mix(vec3(1.0), albedo.mul(2.0), metal)))
+    col.addAssign(albedo.mul(townLamps(wp, N)).mul(0.7))
+    col.assign(outdoorHaze(col, wp))
+    col.addAssign(emit.mul(exp(dist.negate().div(u.uHazeDist.mul(1.5)))))
+    return col
+  })()
+  return withUniforms(m, uniforms)
+}
 
 /** 名前の札の絵（1 行 = 1 体。上の大きな字「えきもり」と、下の小さな駅・停留所の名前） */
 function plateTexture(labels: string[]) {
@@ -483,20 +510,7 @@ export class StationRobots {
     this.spots = buildSpots(landings)
     const cap = Math.max(1, this.spots.length)
     const plate = plateTexture(this.spots.map((s) => s.label))
-    const mat = new THREE.ShaderMaterial({
-      name: 'stationRobot',
-      vertexColors: true,
-      uniforms: {
-        ...outdoorUniforms,
-        ...townShadowUniforms,
-        ...lampUniforms,
-        uPlate: { value: plate },
-        uPlateRows: { value: cap },
-        uBands: { value: [new THREE.Color('#a82b23'), new THREE.Color('#d9a21b'), new THREE.Color('#2c3f66')] },
-      },
-      vertexShader: VERTEX,
-      fragmentShader: FRAGMENT,
-    })
+    const mat = createRobotMaterial(plate, cap)
     this.base = new PartMesh(baseGeometry(), mat, 'robot:base', cap)
     this.torso = new PartMesh(torsoGeometry(), mat, 'robot:torso', cap)
     this.head = new PartMesh(headGeometry(), mat, 'robot:head', cap)
