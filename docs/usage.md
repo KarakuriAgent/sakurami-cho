@@ -51,6 +51,21 @@ minor の版を上げる。
 使う側が `gl.render` する）。ラボの形はテクスチャを読み終えてから `<Suspense>` の中の `<TownRoot town={town}>` が作る（`placements` を省けば地図の既定の置き場所の表）。
 `town.frame(f)`（4 つの段を続けて呼ぶ）は人を動かさない使い方だけ（乗る仕組みと歩きは `begin` と `update` の間、カメラは `view` の前でないといけないため）。
 
+## 描く物を減らす仕組み（WebGPU）
+
+WebGPURenderer は描く物 1 つごとの CPU の仕事が重いので、ラボは場面に付けるときに描く物を減らす（kanon-claire-thompson/kanon-stream-video#25 の第 3 段）。
+使う側がすることは無い（`<TownView>` と `town.attach`・`town.view` がする）が、次の決まりがある:
+
+- `town.attach` のあと（最初に描く前）、`lab.mergeStatic()` が殻と什器の動かない mesh を、素材・影の設定・レイヤー・頂点の並びごとに 1 つの形へ合わせ、
+  動かない物の行列を固める（`matrixAutoUpdate = false`。`world/staticMerge.ts`）。作ったあとで位置・回転・大きさ・見え隠れを変える物は、作るときに
+  `markDynamic(物)` で印を付ける（付け忘れると、その物は合わさって動かなくなる）。差し込み口（`slot:` の群）の中は触らない
+- 什器と空気は、見えないコマだけ隠す（`lab.cull`。`world/lab/labCull.ts`）。カメラがラボの箱の外で、箱が視野の外か、GPU の遮蔽のクエリで 3 回続けて
+  ほかの物の陰のとき。箱の `lab.cull.proxy` は `<TownView>` が場面に置く（何も描かない）。毎コマ `town.view` が `lab.cull.update(camera)` を呼ぶ
+- 1,024 個以下の InstancedMesh は、入れ物を 1,025 個以上で作って `count` で減らす（`world/instancing.ts` の `instancedMesh`。同じ素材の物がパイプラインを共有する）
+- 何度も描き直す Canvas は `createCanvas2D(w, h, { dynamic: true })`（CPU の側の Canvas。テクスチャへ写すのが速い）
+- 場面の根（R3F の `scene`）の行列を固めてよい（`matrixAutoUpdate = false`。例のアプリの `src/App.tsx`）。`matrixWorldAutoUpdate = false` にするなら、
+  描く前に使う側が `scene.updateMatrixWorld()` を呼ぶ（床の映り込みはその場合、撮る前に自分で呼ぶ）
+
 ## フォント
 
 ラボの看板・画面は Canvas に字を描く（`FONTS` の Orbitron・Share Tech Mono・Noto Sans JP が頭のフォント）。Web フォントは字の範囲（unicode-range）ごとに届き、

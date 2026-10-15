@@ -27,6 +27,8 @@ export default function App() {
         // 描画は WebGPURenderer（非同期に作って確かめる。src/gpu.ts）
         gl={gpuRenderer(QUALITY.lab === 'high')}
         camera={{ fov: 50, near: 0.05, far: 40000 }}
+        // 場面の根は動かさない（行列を固める。ラボの殻と什器の動かない物も固めてあるので、描くたびの行列の計算は動く物の下だけ。WebGPU への移行の第 3 段）
+        scene={{ matrixAutoUpdate: false }}
       >
         <Scene />
       </Canvas>
