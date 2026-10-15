@@ -69,6 +69,9 @@ export class HologramMaterial extends THREE.NodeMaterial {
     this.depthWrite = false
     this.blending = THREE.AdditiveBlending
     this.side = THREE.DoubleSide
+    // 両面を 1 回で描く（加算で深さを書かないので、裏と表を描く順で画は変わらない）。WebGPURenderer は両面の透明な物を「全部の裏 → 全部の表」の 2 回に
+    // 分けて描き（描く回数が 2 倍）、ほかの透明な物との順も前の WebGL（物ごとに裏 → 表）と違っていた。1 回なら前と同じ順（WebGPU への移行の第 3 段）
+    this.forceSinglePass = true
     this.toneMapped = false
     this.fog = false
     this.lights = false
