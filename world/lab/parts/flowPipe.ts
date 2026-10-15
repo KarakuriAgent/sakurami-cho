@@ -4,6 +4,7 @@ import { FlowMaterial } from '../../materials/effects'
 import type { LabMaterials } from '../../materials/labMaterials'
 import type { Vec3 } from '../../../core/lab/plan'
 import { mesh } from './object'
+import { instancedMesh } from '../../instancing'
 
 /**
  * エネルギーが流れるパイプを three で作る（docs/design/map-split.md §6 の「段 4」・4-2。案の §3.2）。半透明のガラス管の中を、光のパルスが流れていく。
@@ -138,7 +139,7 @@ export function flowPipe(o: FlowPipeOptions, mats: LabMaterials, channels: FlowP
   const collarCount = flowCollarCount(length, collarSpacing)
   let collars: THREE.InstancedMesh | null = null
   if (collarCount > 0) {
-    collars = new THREE.InstancedMesh(flowCollarGeometry(radius), mats.steel, collarCount)
+    collars = instancedMesh(flowCollarGeometry(radius), mats.steel, collarCount)
     collars.castShadow = false
     collars.receiveShadow = true
     placeFlowCollars(collars, curve, collarCount)

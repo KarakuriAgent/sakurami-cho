@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { enableSunShadow } from '../../environment/sunShadow'
+import { markDynamic, mergeStatic, type StaticMerge } from '../../staticMerge'
 import { addWallWashDimmer } from '../../materials/wallWash'
 import type { LabMaterials } from '../../materials/labMaterials'
 import type { LabFrame } from '../kit'
@@ -22,6 +23,8 @@ import { buildRoom } from './room'
  *   太陽の影の印は付けたまま。前も外していなかった）
  * - update(dt, f): 毎コマ。床の映り込みを描く（照明と町の遠景のあと、什器・KB-001・配信の部品の更新より前。案の E2・E3・E10）→
  *   見学エントランスの扉（扉を開ける物を前のコマの位置で見る。KB-001 の更新より前。案の E4）
+ * - mergeStatic(): 動かない物を合わせる（WebGPU への移行の第 3 段。world/staticMerge.ts）。太陽の影の印を付けたあと（attach のあと）に 1 回。
+ *   太陽の影を落とす物の群はその群の中で合わせる（印は群の下の物に付く）。床（映り込みで隠す）と見学エントランスの扉の板は動く物。2 回目からは前の結果を返す
  * - dispose(): 殻が作った形・素材・テクスチャ・映り込みの撮る先を捨てる（共有の素材・キャッシュの素材とテクスチャ・床のテクスチャは捨てない）
  */
 
@@ -38,6 +41,7 @@ export interface LabShell {
   readonly object: THREE.Group
   readonly floor: LabFloor
   attach(): () => void
+  mergeStatic(): StaticMerge
   update(dt: number, f: LabFrame): void
   dispose(): void
 }
@@ -47,6 +51,8 @@ export function createLabShell(o: LabShellOptions): LabShell {
   // 前の Room.tsx の Floor の順: 置き場所と下ごしらえ（繰り返し・1 タイル ≒ 3m 四方・異方性 16・色だけ sRGB）→ 床
   const floor = createLabFloor({ textures: prepareLabFloorTextures(o.floor), quality: o.quality })
   const room = buildRoom(b, floor)
+  // 床は映り込みを撮る間だけ隠す（動く物）
+  markDynamic(floor.mesh)
   // 北の壁の扉（北側の部屋）・中二階・南西の見学エントランス（見学エントランスは太陽の影を落とす物の群の中）
   const northDoors = buildNorthDoors(b)
   const mezzanine = buildMezzanine(b)
@@ -59,13 +65,23 @@ export function createLabShell(o: LabShellOptions): LabShell {
   object.name = 'lab:shell'
   object.add(room, northDoors, mezzanine, entranceCasters)
 
+  /** 太陽の影の印を付けたか（付けるのは 1 回。合わせたあとの大きな形に付け直さない） */
+  let sunMarked = false
+  let merged: StaticMerge | null = null
   return {
     object,
     floor,
     attach() {
-      for (const g of b.sunCasters) enableSunShadow(g)
+      if (!sunMarked) {
+        for (const g of b.sunCasters) enableSunShadow(g)
+        sunMarked = true
+      }
       const offs = b.washes.map(({ material, color }) => addWallWashDimmer(material, color))
       return () => offs.forEach((off) => off())
+    },
+    mergeStatic() {
+      merged ??= mergeStatic(object, { bodies: b.sunCasters })
+      return merged
     },
     update(dt, f) {
       floor.renderReflection(f.renderer, f.scene, f.camera)
@@ -84,6 +100,7 @@ export function createLabShell(o: LabShellOptions): LabShell {
       materials.forEach((m) => m.dispose())
       for (const t of b.textures) t.dispose()
       floor.dispose()
+      merged?.dispose()
     },
   }
 }

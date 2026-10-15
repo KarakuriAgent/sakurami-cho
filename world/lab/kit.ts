@@ -4,6 +4,7 @@ import type { LabMaterials } from '../materials/labMaterials'
 import { registerLabKitPlan } from '../../core/lab/kits/plans'
 import type { LabKitPlan, LabKitPlanFn, Obstacle, Placement } from '../../core/lab/plan'
 import type { LabScreen, ScreenDraw } from './screens'
+import { markDynamic } from '../staticMerge'
 
 /**
  * ラボの部品の共通の形（docs/design/map-split.md §6 の「段 4」。案の §2.1）: 1 コマの更新に渡す物・差し込み口・入力の値の結び付け（4-3）と、
@@ -47,6 +48,8 @@ export interface LabSlot {
 export function createLabSlot(name: string, content: LabSlotContent | null = null): LabSlot {
   const object = new THREE.Group()
   object.name = `slot:${name}`
+  // 中身は外から入れ替わり、持ち主が動かす（動く物。動かない物を合わせるときは中を触らない）
+  markDynamic(object)
   let current: LabSlotContent | null = null
   const slot: LabSlot = {
     name,

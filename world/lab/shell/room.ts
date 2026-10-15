@@ -8,6 +8,7 @@ import { group, mesh } from '../parts/object'
 import { CEILING_LIGHTS, ENTRANCE, MEZZANINE, ROOM, WALL_PANEL_DEPTH, type Vec3 } from '../../../core/lab/plan'
 import { keep, perforated, sunCasters, wallWash, type ShellBuild } from './build'
 import type { LabFloor } from './floor'
+import { instancedMesh } from '../../instancing'
 
 /**
  * 部屋そのもの（床・壁・天井・南のガラス壁。docs/design/map-split.md §6 の「段 4」・4-4。前の Room.tsx）。外の景色（空・町の遠景）は outdoor/landscape.ts。
@@ -100,7 +101,7 @@ export function panelField(b: ShellBuild, { x0, x1, y0, y1, cols, rows, gap = 0.
   }
 
   const boxGeom = new THREE.BoxGeometry(1, 1, 1)
-  const panels = new THREE.InstancedMesh(boxGeom, b.mats.wallPanel, count)
+  const panels = instancedMesh(boxGeom, b.mats.wallPanel, count)
   panels.receiveShadow = true
   const m = new THREE.Matrix4()
   const c = new THREE.Color()
@@ -376,7 +377,7 @@ function ceiling(b: ShellBuild): THREE.Group {
 
 /** ダクトの継ぎ目の環（InstancedMesh。影はどちらもしない） */
 function ductRings(material: THREE.Material, ductXs: readonly number[], ringZs: readonly number[]): THREE.InstancedMesh {
-  const rings = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.275, 0.275, 0.05, 28), material, ductXs.length * ringZs.length)
+  const rings = instancedMesh(new THREE.CylinderGeometry(0.275, 0.275, 0.05, 28), material, ductXs.length * ringZs.length)
   const m = new THREE.Matrix4()
   const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0))
   let i = 0

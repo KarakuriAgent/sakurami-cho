@@ -11,6 +11,7 @@ import { group, mesh, type MeshOptions } from '../parts/object'
 import type { Placement, Vec3 } from '../../../core/lab/plan'
 import type { LabScreen, ScreenDraw } from '../screens'
 import { DESK_H, devDeskPlan, MONITOR_X } from '../../../core/lab/kits/devDesk.plan'
+import { markDynamic } from '../../staticMerge'
 
 /**
  * 開発デスク（資料: 東寄りの窓際の L 字のデスク。x 3.6〜7.2・z 3.0〜4.7）。曲面マルチモニタ 3 面と短辺のモニタ 1 面・空中の透明 UI パネル・キーボード・椅子。
@@ -137,6 +138,8 @@ function holoPanel(b: Build, name: string, { position, rotation, width, height, 
     ],
     { p: position, r: rotation },
   )
+  // 漂うパネル（動く物）
+  markDynamic(object)
   return {
     object,
     screen,

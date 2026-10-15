@@ -14,12 +14,16 @@ export const FONTS = {
 
 export type Draw2D = (ctx: CanvasRenderingContext2D, w: number, h: number) => void
 
-/** Canvas と 2D の描き手を作る */
-export function createCanvas2D(w: number, h: number) {
+/**
+ * Canvas と 2D の描き手を作る。dynamic は何度も描き直してテクスチャへ送り直す Canvas（画面など）: 描き手を CPU の側に置く
+ * （willReadFrequently）。WebGPU では GPU の側の Canvas をテクスチャへ写すたびに読み戻しが入り、2048×886 の画面で 1 回 4〜5ms かかった
+ * （CPU の側なら 1.1〜1.4ms。WebGPU への移行の第 3 段）。一度だけ描く Canvas はそのまま
+ */
+export function createCanvas2D(w: number, h: number, o: { dynamic?: boolean } = {}) {
   const canvas = document.createElement('canvas')
   canvas.width = w
   canvas.height = h
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d', o.dynamic ? { willReadFrequently: true } : undefined)
   if (!ctx) throw new Error('Canvas 2D コンテキストを取得できませんでした')
   return { canvas, ctx }
 }

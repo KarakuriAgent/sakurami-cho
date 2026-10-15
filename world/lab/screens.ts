@@ -24,6 +24,8 @@ export interface LabScreen {
   setContent(draw: ScreenDraw | null): void
   /** 1 コマ進める（什器の更新が、今の順の位置で呼ぶ） */
   update(dt: number, camera: THREE.Camera): void
+  /** この画面を貼った物を描いた（貼った物の onBeforeRender から。createLab の bindScreenMeshes が付ける） */
+  markShown(): void
   dispose(): void
 }
 
@@ -46,6 +48,12 @@ export interface LabScreenOptions {
   maxAnisotropy: number
   /** 描き直す回数の決め方（省けば labScreenRate） */
   rate?: typeof labScreenRate
+  /**
+   * 描き直したらすぐテクスチャへ送る renderer（省けば描くときに送る）。前のコマで画面を描いた（markShown）ときだけ送る（見えていない画面は
+   * 今までどおり描くときまで送らない）。描くときに送ると、送る仕事（GPU の側で 2048×886 なら 1ms ほど）が描き終えるのを待つ間にずれ込むので、
+   * 早めに送ってほかの仕事と重ねる（WebGPU への移行の第 3 段）
+   */
+  renderer?: { initTexture(texture: THREE.Texture): void } | null
 }
 
 /**
@@ -53,7 +61,7 @@ export interface LabScreenOptions {
  * 描いたら texture.needsUpdate。前の useCanvasScreen（textures/canvas.ts）の中身と同じ
  */
 export function createLabScreen(key: string, w: number, h: number, defaultDraw: ScreenDraw, fps: number, o: LabScreenOptions): LabScreen {
-  const { canvas, ctx } = createCanvas2D(w, h)
+  const { canvas, ctx } = createCanvas2D(w, h, { dynamic: true })
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.anisotropy = Math.max(8, o.maxAnisotropy)
@@ -62,6 +70,10 @@ export function createLabScreen(key: string, w: number, h: number, defaultDraw: 
   let draw = defaultDraw
   let acc = Infinity
   let elapsed = 0
+  /** 更新の回数と、最後に貼った物を描いた回（早めに送るのは、前の 2 回のうちに描いた画面だけ） */
+  let ticks = 0
+  let shownAt = -Infinity
+  const renderer = o.renderer && typeof o.renderer.initTexture === 'function' ? o.renderer : null
 
   return {
     key,
@@ -73,12 +85,17 @@ export function createLabScreen(key: string, w: number, h: number, defaultDraw: 
       draw = next ?? defaultDraw
     },
     update(dt, camera) {
+      ticks++
       elapsed += dt
       acc += dt
       if (acc < 1 / rate(fps, camera)) return
       acc = 0
       draw(ctx, elapsed, w, h)
       texture.needsUpdate = true
+      if (renderer && ticks - shownAt <= 2) renderer.initTexture(texture)
+    },
+    markShown() {
+      shownAt = ticks
     },
     dispose() {
       texture.dispose()

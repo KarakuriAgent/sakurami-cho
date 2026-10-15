@@ -10,6 +10,7 @@ import { group, mesh } from '../parts/object'
 import { ENTRANCE, ENTRANCE_DOOR, ROOM, WALL_PANEL_DEPTH, type Vec3 } from '../../../core/lab/plan'
 import { keep, type ShellBuild } from './build'
 import { DOOR_CENTER, doorAngle, entranceDoor, stepEntranceDoor } from './entranceDoor'
+import { markDynamic } from '../../staticMerge'
 
 /**
  * 南西の角の見学エントランス（設定資料: 南の面の西端、入口の扉の横に若葉色の琺瑯の「ひらき札」（第二種））と、
@@ -162,6 +163,8 @@ function glassDoors(b: ShellBuild): { object: THREE.Group; update(dt: number): v
       { p: [p.hinge, 0, z] },
     ),
   )
+  // 開け閉めする扉の板（動く物）
+  markDynamic(...leaves)
   return {
     object: group(leaves),
     update(delta) {

@@ -151,6 +151,8 @@ export function TownView() {
       <primitive object={outdoor.landscape} />
       <primitive object={lab.shell.object} />
       <primitive object={lab.kits.object} />
+      {/* 什器が見えないコマを調べる箱（何も描かない。world/lab/labCull.ts） */}
+      <primitive object={lab.cull.proxy} />
     </>
   )
 }

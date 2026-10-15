@@ -7,6 +7,7 @@ import { boxInstances, matrixInstances, sticker, type InstanceItem } from '../pa
 import { group } from '../parts/object'
 import type { Placement } from '../../../core/lab/plan'
 import { serverRackPlan } from '../../../core/lab/kits/serverRack.plan'
+import { instancedMesh } from '../../instancing'
 
 /**
  * サーバラック 3 本（北の壁沿い、基地局の東。その東が資料庫の扉。設定資料（vol6 12-2・D-052）の「からくりラック 2 本＋図面棚サーバー 1」。
@@ -119,7 +120,7 @@ export function createServerRack(at: Placement, _opts: object | undefined, ctx: 
   children.push(own.add(boxInstances({ items: glow, material: topGlow, receiveShadow: false })))
   children.push(own.add(matrixInstances({ matrices: servers, geometry: serverGeom, material: mats.darkMetal })))
   children.push(own.add(matrixInstances({ matrices: vents, geometry: ventGeom, material: ventMat, receiveShadow: false })))
-  const ledMesh = own.mesh(new THREE.InstancedMesh(ledGeom, ledMat, leds.length))
+  const ledMesh = own.mesh(instancedMesh(ledGeom, ledMat, leds.length))
   children.push(ledMesh)
   children.push(
     own.mesh(

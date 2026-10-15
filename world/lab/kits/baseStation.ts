@@ -14,6 +14,7 @@ import { BASE_STATION_RING_Y, BASE_STATION_RING_Z, PLACE, ROOM, type Placement, 
 import type { LabScreen, ScreenDraw } from '../screens'
 import { baseStationPlan } from '../../../core/lab/kits/baseStation.plan'
 import { drawLinkScreen } from './baseStation.screen'
+import { markDynamic } from '../../staticMerge'
 
 /**
  * リンク基地局（設定資料の XW-08 本体。ラボの主役）。
@@ -224,6 +225,8 @@ function rings(b: Build) {
     { p: [0, RING_Y, RING_Z], s: RING_SCALE },
   )
   const [middle, inner, gimbal] = object.children.slice(5) as [THREE.Group, THREE.Group, THREE.Group]
+  // 回るリング（動かない物を合わせるときの体。world/staticMerge.ts）
+  markDynamic(middle, inner, gimbal)
 
   return {
     object,
@@ -312,6 +315,8 @@ function core(b: Build) {
   )
   const coreMesh = object.getObjectByName(CORE_NAME)!
   const energyRings = object.children[object.children.length - 1]!
+  // 脈打つコアと回るエネルギーリング（動く物）
+  markDynamic(coreMesh, ...energyRings.children)
   const sprite = glowSprite({ position: [0, 0, 0.3], size: 1.7, color: PALETTE.comm, opacity: 0.38 })
   own.mesh(sprite.inner.children[0] as THREE.Mesh)
   object.add(sprite.object)

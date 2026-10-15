@@ -10,6 +10,7 @@ import { group, mesh, type MeshOptions } from '../parts/object'
 import type { Placement, Vec3 } from '../../../core/lab/plan'
 import type { LabScreen } from '../screens'
 import { ASSEMBLY_SPOT_LOCAL, BENCH_ORIGIN, BENCH_TOP, PRINTER_CABINET, PRINTER_ORIGIN, workbenchPlan } from '../../../core/lab/kits/workbench.plan'
+import { markDynamic } from '../../staticMerge'
 
 /**
  * 作業台（工作ゾーンの西の壁沿いの置き場所 workshop。資料: 西側。入口から奥を向いて左）: 作業台 + 有孔ボード（ローカル x 0.4）・3D プリンタ（-1.2）・
@@ -389,6 +390,8 @@ function printer3D(b: Build, position: Vec3, ch: Readonly<WorkbenchChannels>) {
     { p: [0, 0.4, 0] },
   )
   const head = gantry.children[1]!
+  // 動くガントリーとヘッド・扉・育つ造形物（動く物）
+  markDynamic(gantry, head, door, part)
   inner.push(gantry)
   // 操作画面
   inner.push(m(b, new THREE.PlaneGeometry(0.14, 0.085), screenMaterial(b, screen, 1.1), { p: [0.18, 0.05, D / 2 + 0.02], r: [-0.3, 0, 0] }))

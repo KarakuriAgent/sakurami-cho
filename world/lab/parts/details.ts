@@ -3,6 +3,8 @@ import { glowMaterial, overlayGlowMaterial, type LabMaterials } from '../../mate
 import { cachedCanvasTexture, FONTS, radialGlowTexture, roundedRectPath } from '../../textures/canvas'
 import type { Vec3 } from '../../../core/lab/plan'
 import { mesh } from './object'
+import { markDynamic } from '../../staticMerge'
+import { instancedMesh } from '../../instancing'
 
 /**
  * ラボの細かい部品を three で作る（docs/design/map-split.md §6 の「段 4」・4-2。案の §3.2）。
@@ -75,7 +77,7 @@ export function placeBolts(mesh: THREE.InstancedMesh, positions: readonly Vec3[]
 
 /** 六角ボルトの頭をまとめて描く（1 ドローコール。影は落とさず受けない） */
 export function bolts(o: BoltsOptions, mats: LabMaterials): THREE.InstancedMesh {
-  const m = new THREE.InstancedMesh(boltGeometry(o.radius), o.material ?? mats.steel, o.positions.length)
+  const m = instancedMesh(boltGeometry(o.radius), o.material ?? mats.steel, o.positions.length)
   placeBolts(m, o.positions, o.axis)
   return m
 }
@@ -223,6 +225,8 @@ export function billboard(position?: Vec3): Billboard {
   if (position) object.position.fromArray(position)
   const inner = new THREE.Group()
   object.add(inner)
+  // カメラを向く群（動く物。置く群は動かず、update が自分で行列を直す）
+  markDynamic(inner)
   return {
     object,
     inner,
@@ -281,7 +285,7 @@ export function placeMatrices(mesh: THREE.InstancedMesh, matrices: readonly THRE
 
 /** 行列の配列を InstancedMesh で描く（フィン・目盛り・ボルトなど繰り返しの部品用） */
 export function matrixInstances(o: MatrixInstancesOptions): THREE.InstancedMesh {
-  const m = new THREE.InstancedMesh(o.geometry, o.material, o.matrices.length)
+  const m = instancedMesh(o.geometry, o.material, o.matrices.length)
   m.castShadow = o.castShadow ?? false
   m.receiveShadow = o.receiveShadow ?? true
   placeMatrices(m, o.matrices)
@@ -338,7 +342,7 @@ export interface BoxInstancesOptions {
  * 扉の枠・ラックの筐体・家具など、同じ材質の部品が多いところで描画の回数を減らすのに使う
  */
 export function boxInstances(o: BoxInstancesOptions): THREE.InstancedMesh {
-  const m = new THREE.InstancedMesh(o.geometry ?? UNIT_BOX, o.material, o.items.length)
+  const m = instancedMesh(o.geometry ?? UNIT_BOX, o.material, o.items.length)
   m.castShadow = o.castShadow ?? false
   m.receiveShadow = o.receiveShadow ?? true
   if (o.renderOrder !== undefined) m.renderOrder = o.renderOrder

@@ -7,6 +7,7 @@ import { bolts, glowBox, sticker } from '../parts/details'
 import { group, mesh, type MeshOptions } from '../parts/object'
 import type { Placement, Vec3 } from '../../../core/lab/plan'
 import { robotArmPlan } from '../../../core/lab/kits/robotArm.plan'
+import { markDynamic } from '../../staticMerge'
 
 /**
  * ロボットアーム（工作ゾーンの床の中ほどの置き場所 robotArm）: 床の作業範囲の印（半径 1.1m。中心が置き場所の原点）・ロボットアーム・治具の台。
@@ -133,6 +134,7 @@ export function createRobotArm(at: Placement, _opts: object | undefined, ctx: La
     const j5 = j3.children[5] as THREE.Group
     const j6 = j5.children[2] as THREE.Group
     const [fingerL, fingerR] = j6.children.slice(3) as [THREE.Object3D, THREE.Object3D]
+    markDynamic(j1, j2, j3, j5, j6, fingerL, fingerR)
     return {
       object: group([...base, j1], { p: position }),
       update(t: number) {

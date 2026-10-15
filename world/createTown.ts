@@ -40,14 +40,16 @@ import {
  * - buildLab(o): ラボを作る（ラボのテクスチャを読んでから。world/lab/createLab.ts。何度呼んでもよく、作るたびに新しいラボ。どれを毎コマ動かすかは attach で決める）
  * - buildOutdoor(): 外の光（太陽 → 太陽の target → 空の光 → trigger）と遠景の根（子は空の球・星・町の群）。初めて呼んだときに作り、あとは同じ物
  *   （作り直さず、捨てない）。作る順はラボのあと（素材の id の並びを前に合わせる）
- * - attach(lab, camera): 場面に付ける（照明の撮影と環境の強さ → ふだんのカメラに遠景のレイヤー → 殻の太陽の影の印と光のにじみ）。外す関数を返す
+ * - attach(lab, camera): 場面に付ける（照明の撮影と環境の強さ → ふだんのカメラに遠景のレイヤー → 殻の太陽の影の印と光のにじみ → 殻と什器の
+ *   動かない物を合わせる（lab.mergeStatic））。外す関数を返す
  * - start(): ?debug の道具を出して、地図データを読み始める（attach のあと）
  *
  * 毎コマは 4 つの段に分ける（間に使う側の物が挟まるため。kanon-lab では花音（−58）・配信の明るさ（−60）・カメラ（−1・15）・撮影の構図（0.5））。
  * 順に頼らない使う側は frame(f) で 4 つを続けて呼ぶ:
  * 1. begin(f): 共有の時計（sharedTime）→ 早送り・カットの分を町の時刻へ → 外の状態 → 交通の時計 → 観覧車（乗る人を動かす前。形が無くても進める）
  * 2. update(f): 遠景（町を組み立てる・影・中のある建物・交通・灯り）→ 外の光（外にいる度合いを知らせる）（注目点を動かしたあと、カメラの前）
- * 3. view(f): ラボの照明 → 星 → 遠景の窓の見え隠れと細かさの中心 → 殻（床の映り込み・見学エントランスの扉）→ 什器のキット（カメラを動かしたあと）
+ * 3. view(f): ラボの照明 → 星 → 遠景の窓の見え隠れと細かさの中心 → 什器の見え隠れ（lab.cull）→ 殻（床の映り込み・見学エントランスの扉）→
+ *    什器のキット（カメラを動かしたあと）
  * 4. exposure(f): 露出（撮影の構図・揺れのあと、描く前）
  *
  * ラボの明るさの入力は、前のままモジュールに 1 つ（world/labLight.ts）で、口は setLabLight
@@ -160,6 +162,8 @@ export function createTown(options: TownCreateOptions = {}): Town {
       const offLighting = next.lighting.attach()
       landscape().attach(camera)
       const offShell = next.shell.attach()
+      // 動かない物を合わせる（殻の太陽の影の印のあと、最初に描く前。WebGPU への移行の第 3 段。2 回目からは何もしない）
+      next.mergeStatic()
       return () => {
         offLighting()
         offShell()
@@ -193,6 +197,8 @@ export function createTown(options: TownCreateOptions = {}): Town {
         landscape().updateView(f)
       }
       if (lab) {
+        // 什器を見えないコマだけ描かない（カメラを動かしたあと、殻（床の映り込み）と什器の前。WebGPU への移行の第 3 段）
+        lab.cull.update(f.camera)
         lab.shell.update(f.dt, f)
         lab.kits.update(f.dt, f)
       }

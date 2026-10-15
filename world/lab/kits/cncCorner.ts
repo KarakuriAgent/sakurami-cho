@@ -8,6 +8,7 @@ import { boltGrid } from '../parts/geometry'
 import { group, mesh, type MeshOptions } from '../parts/object'
 import { WALL_PANEL_DEPTH, type Placement, type Vec3 } from '../../../core/lab/plan'
 import { cncCornerPlan, PARTS_CABINET_X } from '../../../core/lab/kits/cncCorner.plan'
+import { markDynamic } from '../../staticMerge'
 
 /**
  * CNC の隅（工作ゾーンの北の壁沿いの置き場所 workshopNorth。階段と電源室の扉の間）: CNC（ローカル x -0.5）・パーツケースと下の低いキャビネット（0.5）。
@@ -68,6 +69,7 @@ export function createCncCorner(at: Placement, _opts: object | undefined, ctx: L
       { p: [0, 0.4, 0] },
     )
     const bit = spindle.children[2]!
+    markDynamic(spindle, bit)
     body.push(spindle)
     const object = group(
       [
