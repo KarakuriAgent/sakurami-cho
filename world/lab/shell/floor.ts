@@ -75,6 +75,27 @@ export interface LabFloor {
   dispose(): void
 }
 
+type ShadowLight = THREE.Light & { shadow: THREE.LightShadow }
+const _held: ShadowLight[] = []
+/** 映り込みを撮るときに一度でも見た光（初めて見たコマは止めない。まだ描いていない影の地図（仮の大きさのテクスチャ）を映り込みで読まないように） */
+const _seen = new WeakSet<THREE.Light>()
+
+/** 場面の、影を毎コマ描き直す光の autoUpdate を止める（止めた光を返す。呼んだ側が戻す） */
+function holdShadows(scene: THREE.Object3D): ShadowLight[] {
+  _held.length = 0
+  scene.traverse((o) => {
+    const l = o as ShadowLight
+    if (!l.isLight || !l.castShadow || !l.shadow?.autoUpdate) return
+    if (!_seen.has(l)) {
+      _seen.add(l)
+      return
+    }
+    l.shadow.autoUpdate = false
+    _held.push(l)
+  })
+  return _held
+}
+
 /** 床を作る。textures は下ごしらえした床のテクスチャ（textures.ts の prepareLabFloorTextures） */
 export function createLabFloor(o: { textures: LabFloorTextures; quality: 'high' | 'low' }): LabFloor {
   const geometry = new THREE.PlaneGeometry(ROOM.width, ROOM.depth)
@@ -231,10 +252,17 @@ function createReflector(map: THREE.Texture) {
       parent.updateMatrixWorld()
       const prevVisible = parent.visible
       parent.visible = false
+      // 映り込みを撮る間は、毎コマ描き直す影の地図（作業台・舞台のスポット）を描き直さない（前のコマの地図を使う）。three の影の地図は
+      // カメラごとに描き直すので、折り返したカメラで撮るとふだんのカメラと 2 回描いていた（WebGPU への移行の第 3 段。1 コマ約 3ms）。
+      // 映り込みはぼかして混ぜるので、1 コマ前の影でも画は変わらない。描き直しを頼まれている地図（needsUpdate。太陽の影）はそのまま描く
+      const held = holdShadows(scene)
+      // 描くたびに場面の行列を計算しない使う側（matrixWorldAutoUpdate = false。kanon-lab）は、撮る前にここで計算する
+      if (!scene.matrixWorldAutoUpdate) scene.updateMatrixWorld()
       try {
         // material は reflector() が撮る間だけ隠す物（床は親ごと隠しているので、ここでは同じ床の素材を渡す）
         base.updateBefore({ scene, camera, renderer: gl, material } as never)
       } finally {
+        for (const l of held) l.shadow.autoUpdate = true
         parent.visible = prevVisible
       }
       if (!hasBlur) return
