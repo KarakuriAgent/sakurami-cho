@@ -1,8 +1,8 @@
 import * as THREE from 'three'
-import { getConsoleFunction, setConsoleFunction } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MToonMaterialLoaderPlugin, VRMExpressionTextureTransformBind, VRMLoaderPlugin, VRMUtils, type MToonMaterial, type VRM, type VRMHumanBoneName } from '@pixiv/three-vrm'
-import { MToonNodeMaterial } from '@pixiv/three-vrm/nodes'
+import type { MToonNodeMaterial } from '@pixiv/three-vrm/nodes'
+import { VrmMToonNodeMaterial } from './vrmMToonNode'
 import { SUN_SHADOW_LAYER } from '../../world/environment/sunShadow'
 import type { VrmMtoonConfig } from './visualConfig'
 
@@ -35,44 +35,6 @@ export interface VrmLoadOptions {
 }
 
 /**
- * MToonNodeMaterial の複製で alphaTest（glTF の alphaMode MASK の切り抜き）が落ちないようにした物（WebGPU への移行の第 2 段）。
- *
- * three r186 の NodeMaterial.copy は Material.copy を呼ばず、自分の欄（名前が _ で始まる物を除く）と、自分の class の prototype の setter だけを写す。
- * alphaTest は Material.prototype の getter / setter（中身は _alphaTest）なので写らず、複製すると 0 になる。読み込み（GLTFLoader と three-vrm）は
- * 材質を複製するので、kanon.vrm の白目・虹彩・ハイライト・まつ毛・眉（MASK）の切り抜きが消え、ハイライトの板の透けた所が虹彩を覆って瞳が
- * 灰色の板に見え、まつ毛・眉の縁も四角く出ていた（WebGL の MToonMaterial は ShaderMaterial の copy で写る）
- */
-export class VrmMToonNodeMaterial extends MToonNodeMaterial {
-  override copy(source: MToonNodeMaterial): this {
-    super.copy(source)
-    this.alphaTest = source.alphaTest
-    return this
-  }
-
-  /**
-   * 組み立ての間だけ、three-vrm（3.5.5。これより新しい版は無い）の MToon の光の式（MToonLightingModel・mtoonParametricRim）が読む
-   * 非推奨の transformedNormalView の警告（THREE.TSL: "transformedNormalView" is deprecated。中身は normalView と同じ）を出さない。
-   * ほかの警告と、この材質の外の警告はそのまま出す（three の setConsoleFunction を、組み立ての間だけ前の物に重ねる）。three-vrm が直したら外す
-   */
-  override setup(builder: Parameters<MToonNodeMaterial['setup']>[0]) {
-    const prev = getConsoleFunction()
-    setConsoleFunction((method: 'log' | 'warn' | 'error', message: string, ...params: unknown[]) => {
-      if (method === 'warn' && message.startsWith(DEPRECATED_NORMAL_WARNING)) return
-      if (prev) prev(method, message, ...params)
-      else console[method](message, ...params)
-    })
-    try {
-      return super.setup(builder)
-    } finally {
-      setConsoleFunction(prev)
-    }
-  }
-}
-
-/** three-vrm の MToonNodeMaterial が組み立ての時に出す非推奨の警告（VrmMToonNodeMaterial.setup がこれだけ出さない） */
-const DEPRECATED_NORMAL_WARNING = 'THREE.TSL: "transformedNormalView" is deprecated'
-
-/**
  * 表情の UV のずらし（texture transform bind）を MToonNodeMaterial でも効かせる（WebGPU への移行の第 2 段）。
  *
  * three-vrm（3.5.5）の VRMExpressionTextureTransformBind は、材質の isMeshStandardMaterial・isMeshBasicMaterial・isMToonMaterial を見て、
@@ -95,7 +57,7 @@ export async function loadVrm(url: string, rim: VrmRim, opts: VrmLoadOptions, on
     const loader = new GLTFLoader()
     // MToon は WebGPU（TSL）の版 MToonNodeMaterial で作る（WebGPURenderer は ShaderMaterial の MToonMaterial を描けない）。
     // 渡し方は mtoonMaterialPlugin（mtoonMaterialPluginOptions では効かず ShaderMaterial のまま。sakurami-cho#31・kanon-stream-video#25 の試作）。
-    // 材質の型は、複製で alphaTest が落ちない VrmMToonNodeMaterial（下）。表情の UV のずらし（texture transform bind。lookAt が expression の
+    // 材質の型は、WebGL の MToon と同じ見た目にした VrmMToonNodeMaterial（vrmMToonNode.ts。影の当たり方・リムの光・複製の alphaTest）。表情の UV のずらし（texture transform bind。lookAt が expression の
     // 方式の VRM の虹彩・ハイライト）は、three-vrm が MToonNodeMaterial を知らないので、読む前に enableNodeTextureTransformBind で足す（下）
     enableNodeTextureTransformBind()
     loader.register((parser) => new VRMLoaderPlugin(parser, { mtoonMaterialPlugin: new MToonMaterialLoaderPlugin(parser, { materialType: VrmMToonNodeMaterial }) }))
