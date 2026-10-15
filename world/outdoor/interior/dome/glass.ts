@@ -1,5 +1,36 @@
-import * as THREE from 'three'
-import { COMMON, SKY, TONE, outdoorUniforms } from '../../materials'
+import * as THREE from 'three/webgpu'
+import {
+  Discard,
+  Fn,
+  If,
+  abs,
+  asin,
+  atan,
+  cameraPosition,
+  clamp,
+  dot,
+  float,
+  fract,
+  fwidth,
+  max,
+  mix,
+  modelWorldMatrix,
+  normalGeometry,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  pow,
+  reflect,
+  select,
+  sin,
+  smoothstep,
+  sqrt,
+  uniform,
+  varying,
+  vec3,
+  vec4,
+} from 'three/tsl'
+import { oNoise, outdoorHaze, outdoorUniforms, skyColor, unlit, withUniforms } from '../../materials'
 
 /**
  * ガーデンドームの透けるガラスの半球（中を作っている間、町の不透明なドームの形の代わり）。
@@ -8,90 +39,68 @@ import { COMMON, SKY, TONE, outdoorUniforms } from '../../materials'
  * （外のドームの葉脈ライティングの骨の光と同じ）。両面・透ける
  */
 export function createDomeGlassMaterial(ribs = 16, rings = 5) {
-  return new THREE.ShaderMaterial({
-    name: 'domeGlass',
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    uniforms: { ...outdoorUniforms, uDome: { value: 0 }, uRibs: { value: ribs }, uRings: { value: rings }, uInner: { value: new THREE.Vector3() } },
-    vertexShader: /* glsl */ `
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vUnit;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vWorld = wp.xyz;
-        vNormal = normalize(mat3(modelMatrix) * normal);
-        vUnit = position;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      ${SKY}
-      uniform float uDome;
-      uniform float uRibs;
-      uniform float uRings;
-      uniform vec3 uInner;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vUnit;
-      void main() {
-        // 基壇（床から 3m）より下と、入口の張り出しの中はガラスが無い（局所: s = x、t = -z、高さ = y × 48 − 0.5）
-        float hLocal = vUnit.y * 48.0 - 0.5;
-        if (hLocal < 3.0) discard;
-        float ang = atan(-vUnit.z, vUnit.x);
-        float dS = abs(ang + 1.5707963);
-        float dN = abs(ang - 1.5707963);
-        float dW = 3.14159265 - abs(ang);
-        if ((dS < 0.095 && hLocal < 9.6) || ((dN < 0.058 || dW < 0.058) && hLocal < 5.6)) discard;
-        vec3 N = normalize(vNormal);
-        vec3 V = normalize(cameraPosition - vWorld);
-        bool outside = dot(N, V) > 0.0;
-        vec3 Nf = outside ? N : -N;
-        float az = atan(vUnit.z, vUnit.x) / 6.2831853 * uRibs;
-        float el = asin(clamp(vUnit.y, 0.0, 1.0)) / 1.5707963 * (uRings + 1.0);
-        // 斜めの格子（外のドームのシェーダーと同じ式。緯度で間隔を広げる）
-        float cosEl = sqrt(max(1.0 - vUnit.y * vUnit.y, 0.04));
-        float g1 = az * 2.0 + el * 2.4 / max(cosEl, 0.35);
-        float g2 = az * 2.0 - el * 2.4 / max(cosEl, 0.35);
-        float wg = fwidth(g1) * 0.9 + 0.012;
-        float lattice = max(smoothstep(0.5 - wg, 0.5, abs(fract(g1) - 0.5)), smoothstep(0.5 - wg, 0.5, abs(fract(g2) - 0.5)));
-        // 合わせガラスの継ぎ目（格子の間を 2 つに分ける細い線）
-        float g3 = az * 4.0;
-        float wj = fwidth(g3) * 0.7 + 0.006;
-        float joint = smoothstep(0.5 - wj, 0.5, abs(fract(g3) - 0.5)) * 0.5;
-        float fade = 1.0 - smoothstep(0.12, 0.3, fwidth(g1));
-        float bar = max(lattice, joint) * fade;
-        // ガラス: 外からは空を映し、中からはうっすらと部屋の明るさ
-        float ndv = abs(dot(N, V));
-        float fres = 0.04 + 0.96 * pow(clamp(1.0 - ndv, 0.0, 1.0), 5.0);
-        vec3 col;
-        float a;
-        if (outside) {
-          vec3 R = reflect(-V, Nf);
-          vec3 refl = skyColor(vec3(R.x, max(R.y, 0.02), R.z)) * vec3(0.92, 0.97, 1.0);
-          float spec = pow(max(dot(R, uSunDir), 0.0), 220.0) * 6.0 * smoothstep(-0.02, 0.06, uSunDir.y);
-          col = refl + uSunLight * spec;
-          a = clamp(fres * 0.9 + 0.07, 0.0, 0.92);
-        } else {
-          col = uInner + skyColor(V * -1.0) * 0.06;
-          a = clamp(fres * 0.45 + 0.03, 0.0, 0.6);
-        }
-        float smudge = oNoise(vUnit.xz * 60.0) * 0.5 + oNoise(vUnit.xz * 190.0) * 0.5;
-        a += 0.02 * smudge;
-        // 白い鋼の格子（不透明）。夕方は金緑色にほのかに光る
-        vec3 steel = vec3(0.8, 0.8, 0.78) * (uSunLight * max(dot(Nf, uSunDir), 0.0) * 0.8 + uSkyLight * 0.9 + uInner * 1.5);
-        float breath = 0.62 + 0.38 * sin(uTime * 0.55);
-        steel += vec3(0.7, 0.9, 0.5) * uDome * 0.25 * breath;
-        col = mix(col, steel, bar);
-        a = mix(a, 1.0, bar);
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, a);
-        ${TONE}
-      }
-    `,
-  })
+  const uniforms = { uDome: uniform(0), uRibs: uniform(ribs), uRings: uniform(rings), uInner: uniform(new THREE.Vector3()) }
+  const o = outdoorUniforms
+  // 法線は前と同じく mat3(modelMatrix) で回す（半球は縦と横で大きさが違うが、前の見た目に合わせる）
+  const vNormal = varying(normalize(modelWorldMatrix.mul(vec4(normalGeometry, 0.0)).xyz))
+  const vUnit = varying(positionGeometry)
+  const m = unlit('domeGlass', { transparent: true, depthWrite: false, side: THREE.DoubleSide })
+  m.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    // 基壇（床から 3m）より下と、入口の張り出しの中はガラスが無い（局所: s = x、t = -z、高さ = y × 48 − 0.5）
+    const hLocal = vUnit.y.mul(48.0).sub(0.5).toVar()
+    const ang = atan(vUnit.z.negate(), vUnit.x).toVar()
+    const dS = abs(ang.add(1.5707963))
+    const dN = abs(ang.sub(1.5707963))
+    const dW = float(3.14159265).sub(abs(ang))
+    If(hLocal.lessThan(3.0).or(dS.lessThan(0.095).and(hLocal.lessThan(9.6))).or(dN.lessThan(0.058).or(dW.lessThan(0.058)).and(hLocal.lessThan(5.6))), () => {
+      Discard()
+    })
+    const N = normalize(vNormal).toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const outside = dot(N, V).greaterThan(0.0).toVar()
+    const Nf = select(outside, N, N.negate()).toVar()
+    const az = atan(vUnit.z, vUnit.x).div(6.2831853).mul(uniforms.uRibs).toVar()
+    const el = asin(clamp(vUnit.y, 0.0, 1.0)).div(1.5707963).mul(uniforms.uRings.add(1.0))
+    // 斜めの格子（外のドームのシェーダーと同じ式。緯度で間隔を広げる）
+    const cosEl = sqrt(max(vUnit.y.mul(vUnit.y).oneMinus(), 0.04))
+    const gl = el.mul(2.4).div(max(cosEl, 0.35)).toVar()
+    const g1 = az.mul(2.0).add(gl).toVar()
+    const g2 = az.mul(2.0).sub(gl)
+    const wg = fwidth(g1).mul(0.9).add(0.012).toVar()
+    const lattice = max(smoothstep(float(0.5).sub(wg), 0.5, abs(fract(g1).sub(0.5))), smoothstep(float(0.5).sub(wg), 0.5, abs(fract(g2).sub(0.5))))
+    // 合わせガラスの継ぎ目（格子の間を 2 つに分ける細い線）
+    const g3 = az.mul(4.0).toVar()
+    const wj = fwidth(g3).mul(0.7).add(0.006)
+    const joint = smoothstep(float(0.5).sub(wj), 0.5, abs(fract(g3).sub(0.5))).mul(0.5)
+    const fade = smoothstep(0.12, 0.3, fwidth(g1)).oneMinus()
+    const bar = max(lattice, joint).mul(fade).toVar()
+    // ガラス: 外からは空を映し、中からはうっすらと部屋の明るさ
+    const ndv = abs(dot(N, V))
+    const fres = pow(clamp(ndv.oneMinus(), 0.0, 1.0), 5.0).mul(0.96).add(0.04).toVar()
+    const col = vec3(0.0).toVar()
+    const a = float(0.0).toVar()
+    If(outside, () => {
+      const R = reflect(V.negate(), Nf).toVar()
+      const refl = skyColor(vec3(R.x, max(R.y, 0.02), R.z)).mul(vec3(0.92, 0.97, 1.0))
+      const spec = pow(max(dot(R, o.uSunDir), 0.0), 220.0).mul(6.0).mul(smoothstep(-0.02, 0.06, o.uSunDir.y))
+      col.assign(refl.add(o.uSunLight.mul(spec)))
+      a.assign(clamp(fres.mul(0.9).add(0.07), 0.0, 0.92))
+    }).Else(() => {
+      col.assign(uniforms.uInner.add(skyColor(V.negate()).mul(0.06)))
+      a.assign(clamp(fres.mul(0.45).add(0.03), 0.0, 0.6))
+    })
+    const smudge = oNoise(vUnit.xz.mul(60.0)).mul(0.5).add(oNoise(vUnit.xz.mul(190.0)).mul(0.5))
+    a.addAssign(smudge.mul(0.02))
+    // 白い鋼の格子（不透明）。夕方は金緑色にほのかに光る
+    const steel = vec3(0.8, 0.8, 0.78).mul(o.uSunLight.mul(max(dot(Nf, o.uSunDir), 0.0)).mul(0.8).add(o.uSkyLight.mul(0.9)).add(uniforms.uInner.mul(1.5))).toVar()
+    const breath = sin(o.uTime.mul(0.55)).mul(0.38).add(0.62)
+    steel.addAssign(vec3(0.7, 0.9, 0.5).mul(uniforms.uDome).mul(0.25).mul(breath))
+    col.assign(mix(col, steel, bar))
+    a.assign(mix(a, 1.0, bar))
+    return vec4(outdoorHaze(col, wp), a)
+  })()
+  return withUniforms(m, uniforms)
 }
 
 /** 半球の形（単位球の上半分。scale で半径と高さ） */

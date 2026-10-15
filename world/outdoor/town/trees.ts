@@ -1,10 +1,49 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  Discard,
+  Fn,
+  If,
+  abs,
+  attribute,
+  cameraPosition,
+  clamp,
+  cos,
+  dot,
+  float,
+  floor,
+  fract,
+  fwidth,
+  int,
+  length,
+  log2,
+  max,
+  min,
+  mix,
+  mod,
+  modelWorldMatrixInverse,
+  normalGeometry,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  pow,
+  select,
+  sin,
+  smoothstep,
+  sqrt,
+  step,
+  uniform,
+  varying,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl'
+import type { Node } from 'three/webgpu'
 import { SITE } from '../../../core/town'
-import { COMMON, TONE, outdoorUniforms } from '../materials'
-import { TOWN_LIGHT } from './facades'
-import { TOWN_SHADOW, depthMaterial, townShadowUniforms } from './shadows'
-import { TEXTURE_DECL, townTextureUniforms } from './townTextures'
-import { TOWN_LAMPS, lampUniforms } from './lamps'
+import { oHash, oNoise, outdoorHaze, outdoorUniforms, unlit, withUniforms } from '../materials'
+import { townLight } from './facades'
+import { depthMaterial, townShadow } from './shadows'
+import { townTextureUniforms } from './townTextures'
+import { townLampsEx } from './lamps'
 import type { TownTile } from './townData'
 import { LANE_CORRIDOR_HALF_W, laneCorridor, type CorridorHit } from '../../walk/laneCorridor'
 
@@ -212,326 +251,269 @@ function impostorGeometry() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* シェーダー                                                                    */
+/* シェーダー（TSL。WebGPU への移行の第 2 段）                                         */
 /* -------------------------------------------------------------------------- */
 
-/** 頂点のシェーダーの共通部分: インスタンスの値（iA = 位置・高さ、iB = 樹冠の半径・種類・色のばらつき・種）と風 */
-const TREE_COMMON = /* glsl */ `
-attribute vec4 iA;
-attribute vec4 iB;
-uniform float uWind;
-varying vec3 vWorld;
-varying vec3 vLeaf;
-varying float vSeed;
-float treeHash(float n) {
-  return fract(sin(n * 91.345) * 47453.5453);
-}
-/** 風（木ごとに位相をずらす。高い所ほど大きく） */
-vec3 windOffset(vec3 base, float h01, float scaleH, float seed) {
-  float t = uTime;
-  float ph = seed * 6.2831 + base.x * 0.05 + base.z * 0.04;
-  float sway = sin(t * 1.1 + ph) * 0.6 + sin(t * 2.3 + ph * 1.7) * 0.25 + sin(t * 0.37 + ph * 0.3) * 0.5;
-  float k = uWind * h01 * h01 * scaleH * 0.018;
-  return vec3(sway * k, 0.0, sway * k * 0.6);
-}
-/** 葉の色（種類・季節・ばらつき） */
-vec3 leafTint(float kind, float tint) {
-  vec3 leaf = mix(vec3(0.62, 0.75, 0.5), vec3(0.85, 0.9, 0.62), tint);
-  if (kind > 2.5) leaf = mix(vec3(0.38, 0.5, 0.42), vec3(0.5, 0.6, 0.45), tint);
-  if (kind > 0.5 && kind < 1.5) leaf = mix(leaf, mix(vec3(1.6, 0.35, 0.12), vec3(1.5, 0.75, 0.15), tint), uAutumn);
-  if (kind > 1.5 && kind < 2.5) leaf = mix(leaf, vec3(1.45, 1.05, 1.15), uSpring);
-  return leaf;
-}
-`
+type F = Node<'float'>
+type V2 = Node<'vec2'>
+type V3 = Node<'vec3'>
 
-/** 近くの木の頂点のシェーダー */
-const NEAR_VERTEX = /* glsl */ `
-${COMMON}
-uniform float uAutumn;
-uniform float uSpring;
-${TREE_COMMON}
-attribute vec4 aCrown;
-attribute vec4 aUv;
-attribute vec3 aCard;
-/** 浮遊レーンの通り道（iC = 通り道の真ん中の線への法線 xz（幹の側を向く）・幹から線までの距離・幅の半分、iD = 下と上の高さ（シーン）。幅 0 なら無し） */
-attribute vec4 iC;
-attribute vec2 iD;
-varying vec3 vNormal;
-varying vec3 vCardN;
-varying vec4 vUv;
-varying float vAo;
-void main() {
-  float c = cos(iB.w * 6.2831);
-  float s = sin(iB.w * 6.2831);
-  vec3 scale = vec3(iB.x * 2.0, iA.w, iB.x * 2.0);
-  vec3 p = position;
-  p.xz = mat2(c, s, -s, c) * p.xz;
-  vec3 base = vec3(iA.x, iA.z - 0.3 - LAB_FLOOR, -iA.y);
-  vec3 wp = base + p * scale;
-  // 風: 幹は根元から曲がり、葉の板は小刻みに震える
-  wp += windOffset(base, clamp(position.y, 0.0, 1.2), iA.w, iB.w) * mix(0.3, 1.0, aUv.w);
-  float flutter = sin(uTime * 7.0 + dot(position, vec3(31.0, 17.0, 23.0)) + iB.w * 40.0) * 0.012 * uWind * aUv.w * iA.w;
-  wp.y += flutter;
-  // 浮遊レーンの通り道の剪定: 通り道の箱の中の葉・枝の頂点を、板の真ん中のある側の壁まで寄せる（幹は寄せない。town.md §7 の 214）
-  if (iC.w > 0.0 && !(aUv.z < -0.5 && aUv.w < 0.31) && wp.y > iD.x && wp.y < iD.y) {
-    vec2 nn = iC.xy;
-    vec3 cc = aCard;
-    cc.xz = mat2(c, s, -s, c) * cc.xz;
-    float sideC = dot(cc.xz * scale.xz, nn) + iC.z;
-    float sv = dot(wp.xz - base.xz, nn) + iC.z;
-    float sg = sideC >= 0.0 ? 1.0 : -1.0;
-    if (sg * sv < iC.w) wp.xz += nn * (sg * iC.w - sv);
-  }
-  vec3 n = normal;
-  n.xz = mat2(c, s, -s, c) * n.xz;
-  vec3 cn = aCrown.xyz;
-  cn.xz = mat2(c, s, -s, c) * cn.xz;
-  // 葉は樹冠の丸みの法線を多めに（ふんわりした陰影）、幹はそのまま
-  vNormal = aUv.z < -0.5 ? n : normalize(mix(cn, n, 0.3));
-  vCardN = n;
-  vUv = aUv;
-  vAo = aCrown.w;
-  vLeaf = leafTint(iB.y, iB.z);
-  vSeed = iB.w;
-  vWorld = wp;
-  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
-}
-`
-
-/** 遠くの木の頂点のシェーダー（カメラの方を向く板。縦の軸のまわりに回す） */
-const FAR_VERTEX = /* glsl */ `
-${COMMON}
-uniform float uAutumn;
-uniform float uSpring;
-${TREE_COMMON}
-varying vec2 vQuad;
-varying vec3 vRight;
-varying vec3 vToCam;
-varying float vCell;
-void main() {
-  vec3 base = vec3(iA.x, iA.z - 0.3 - LAB_FLOOR, -iA.y);
-  vec3 toCam = cameraPosition - base;
-  toCam.y = 0.0;
-  float l = length(toCam);
-  vec3 f = l > 1e-3 ? toCam / l : vec3(0.0, 0.0, 1.0);
-  vec3 right = vec3(f.z, 0.0, -f.x);
-  float wdt = iB.x * 2.25;
-  vec3 wp = base + right * position.x * wdt + vec3(0.0, position.y * iA.w * 1.05, 0.0);
-  wp += windOffset(base, position.y, iA.w, iB.w) * 0.6;
-  vQuad = vec2(position.x + 0.5, position.y);
-  vRight = right;
-  vToCam = f;
-  // 絵: 針葉樹・楓・広葉樹（2 つから木ごとに）
-  float kind = iB.y;
-  vCell = kind > 2.5 ? 3.0 : kind > 0.5 && kind < 1.5 ? 2.0 : (fract(iB.w * 7.7) < 0.5 ? 0.0 : 1.0);
-  vLeaf = leafTint(kind, iB.z);
-  vSeed = iB.w;
-  vWorld = wp;
-  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
-}
-`
-
-/** 葉の絵の読み方（2×2 の絵の番号と、その中の uv） */
-const FOLIAGE = /* glsl */ `
-uniform sampler2D uFoliage;
-vec4 foliage(vec2 uv, float cell) {
-  vec2 o = vec2(mod(cell, 2.0), floor(cell / 2.0)) * 0.5;
-  return texture(uFoliage, o + clamp(uv, 0.002, 0.998) * 0.5);
-}
-/** 遠いほど（ミップマップが進むほど）アルファを太らせる（遠くの木がミップマップで消えないように） */
-float foliageAlpha(float a, vec2 uv) {
-  vec2 d = fwidth(uv) * 512.0;
-  float lod = max(0.0, log2(max(max(d.x, d.y), 1.0)));
-  return a * (1.0 + 0.32 * lod);
-}
-/**
- * 近くの木の葉の板の太らせ方（段階 5 の植物の仕上げ）。遠くの木と同じだけ太らせると、20〜60m の木の板が葉の形の無い四角に埋まり、
- * 夕日で明るい四角の板に見えた。近くの木は少しだけ太らせ、残りは alphaToCoverage のやわらかい縁にまかせる
- */
-float foliageAlphaNear(float a, vec2 uv) {
-  vec2 d = fwidth(uv) * 512.0;
-  float lod = max(0.0, log2(max(max(d.x, d.y), 1.0)));
-  return a * (1.0 + 0.12 * lod);
-}
-`
+/** 根元の高さのずれ（ラボの床の標高。前の GLSL の define LAB_FLOOR と同じ値） */
+const LAB_FLOOR = Number(LAB.toFixed(2))
 
 /**
- * GLSL: 葉の影の受け方。葉は光を通して散らすので影の中でも真っ暗にしない。太陽が低い（朝夕）ほど、影の地図の 1 画素が太陽の向きに長く伸びて
- * 樹冠に明るい平行四辺形の縞が出るので、影をならして中くらいの明るさに寄せる（段階 5 の植物の仕上げ）
+ * 葉の影の受け方。葉は光を通して散らすので影の中でも真っ暗にしない。太陽が低い（朝夕）ほど、影の地図の 1 画素が太陽の向きに長く伸びて
+ * 樹冠に明るい平行四辺形の縞が出るので、影をならして中くらいの明るさに寄せる（段階 5 の植物の仕上げ）。町の木とドームの中の植物（dome/plants.ts）が使う
  */
-export const LEAF_SHADOW = /* glsl */ `
-float leafShadow(float sh) {
-  float lowSun = 1.0 - smoothstep(0.04, 0.24, uSunDir.y);
-  return mix(mix(0.3, 1.0, sh), 0.55, lowSun * 0.85);
-}
-`
-/** GLSL: ガラスの温室（ガーデンドーム）の中の木だけが使う光（夜の中の灯りの照り返し・葉脈ライティングの光の点）。町の木は 0 */
-const DOME_GLOW = /* glsl */ `
-uniform vec3 uExtraAmb;
-uniform float uVein;
-vec3 domeGlow(vec3 albedo, float ao, vec3 wp, float seed, float leaf) {
-  vec3 c = albedo * uExtraAmb * (0.6 + 0.4 * ao) * 1.6;
-  if (uVein > 0.0 && leaf > 0.5) {
-    float breath = 0.62 + 0.38 * sin(uTime * 0.55);
-    // 光の点: 3 次元の升（0.45m）ごとに 1 つ、升の中の決まった所に小さな丸い光（前は升の面がそのまま光って、明るい四角の板に見えた）
-    vec3 g = wp * 2.2;
-    vec3 cell = floor(g);
-    float hsh = oHash(cell.xz + cell.y * 17.31 + seed * 31.0);
-    vec3 ctr = vec3(oHash(cell.xz + 3.7 + cell.y), oHash(cell.zx + 9.1 + cell.y), oHash(cell.xz * 1.3 + 5.3 + cell.y)) * 0.6 + 0.2;
-    float r = length(g - cell - ctr);
-    float sp = step(0.8, hsh) * (1.0 - smoothstep(0.06, 0.2, r));
-    float flow = 0.55 + 0.45 * sin(wp.y * 1.4 - uTime * 1.1 + seed * 12.0);
-    c += vec3(0.55, 1.0, 0.32) * (0.008 + sp * 1.2 * flow) * uVein * breath;
-  }
-  return c;
-}
-`
+export const leafShadow = Fn(([sh]: [F]) => {
+  const lowSun = smoothstep(0.04, 0.24, outdoorUniforms.uSunDir.y).oneMinus()
+  return mix(mix(0.3, 1.0, sh), 0.55, lowSun.mul(0.85))
+})
 
-const NEAR_FRAGMENT = /* glsl */ `
-${TOWN_LAMPS}
-${COMMON}
-${TOWN_LIGHT}
-${TOWN_SHADOW}
-${LEAF_SHADOW}
-${TEXTURE_DECL}
-${FOLIAGE}
-${DOME_GLOW}
-varying vec3 vWorld;
-varying vec3 vNormal;
-varying vec3 vCardN;
-varying vec4 vUv;
-varying float vAo;
-varying vec3 vLeaf;
-varying float vSeed;
-void main() {
-  vec3 N = normalize(vNormal);
-  vec3 V = normalize(cameraPosition - vWorld);
-  vec3 albedo;
-  float ao = vAo;
-  if (vUv.z < -0.5) {
-    // 幹と枝: 樹皮の質感
-    vec3 bark = texture(uGndAlb, vec3(vUv.x * 2.0, vUv.y, 6.0)).rgb * 2.0;
-    albedo = vec3(0.075, 0.06, 0.05) * pow(max(bark, 0.0), vec3(2.2));
-  } else {
-    vec4 f = foliage(vec2(vUv.x, 1.0 - vUv.y), vUv.z);
-    // 横から見た板（葉が点の列に見える）は消す
-    float facing = abs(dot(normalize(vCardN), V));
-    if (foliageAlphaNear(f.a, vUv.xy) * smoothstep(0.12, 0.4, facing) < 0.5) discard;
-    albedo = pow(f.rgb, vec3(2.2)) * vLeaf * 1.1;
-    // 葉のかたまりごとの明るさのばらつき（板ごとに一様な色に見えないように）
-    albedo *= 0.78 + 0.44 * oNoise(vWorld.xz * 0.9 + vWorld.y * 0.7 + vSeed * 13.0);
-  }
-  // 葉は光を通して散らすので、影の中でも真っ暗にならない（影は浅く、空の光をよく受ける）
-  float sh = townShadow(vWorld, N);
-  if (vUv.z > -0.5) sh = leafShadow(sh);
-  vec3 col = townLight(albedo, N, ao, sh) + albedo * uSkyLight * 0.45 * ao;
-  // 逆光の葉が透ける
-  if (vUv.z > -0.5) {
-    col += albedo * uSunLight * pow(max(dot(-V, uSunDir), 0.0), 3.0) * 0.6 * sh;
-    // 下から見上げた樹冠（段階 5 の植物の仕上げ）: 葉は空と太陽の光を通して黄緑に明るい（前は下を向いた面の暗さだけで、見上げると黒い塊だった）
-    float under = smoothstep(0.05, 0.7, -V.y);
-    vec3 thru = albedo * vec3(1.1, 1.25, 0.6);
-    col += thru * (uSkyLight * 0.55 + uSunLight * 0.3 * sh * max(uSunDir.y, 0.0)) * under * (0.45 + 0.55 * ao);
-  }
-  col += domeGlow(albedo, ao, vWorld, vSeed, vUv.z > -0.5 ? 1.0 : 0.0);
-  // 夜: 街灯の下の葉（下から照らされる。葉は光を通すので回り込みを大きく）
-  col += albedo * townLampsEx(vWorld, N, 0.0, 0.45) * 0.8 * ao;
-  col = outdoorHaze(col, vWorld);
-  gl_FragColor = vec4(col, 1.0);
-  ${TONE}
+/** 葉の絵の読み方（2×2 の絵の番号と、その中の uv）。bias を渡すとミップマップを進めて読む（影の葉の形） */
+function foliage(uv: V2, cell: F, bias?: number) {
+  const o = vec2(mod(cell, 2.0), floor(cell.div(2.0))).mul(0.5)
+  const t = townTextureUniforms.uFoliage.sample(o.add(clamp(uv, 0.002, 0.998).mul(0.5)))
+  return bias === undefined ? t : t.bias(float(bias))
 }
-`
 
-const FAR_FRAGMENT = /* glsl */ `
-${COMMON}
-${TOWN_LIGHT}
-${TOWN_SHADOW}
-${LEAF_SHADOW}
-${FOLIAGE}
-${DOME_GLOW}
-varying vec3 vWorld;
-varying vec2 vQuad;
-varying vec3 vRight;
-varying vec3 vToCam;
-varying float vCell;
-varying vec3 vLeaf;
-varying float vSeed;
-void main() {
-  // 樹冠は板の上 82%、下は幹
-  vec2 cuv = vec2(vQuad.x, (vQuad.y - 0.18) / 0.82);
-  if (fract(vSeed * 3.1) < 0.5) cuv.x = 1.0 - cuv.x;
-  vec4 f = foliage(vec2(cuv.x, 1.0 - cuv.y), vCell);
-  float a = cuv.y > 0.0 ? foliageAlpha(f.a, cuv) : 0.0;
-  float trunk = step(abs(vQuad.x - 0.5), 0.035) * step(vQuad.y, 0.3) * (vCell > 2.5 ? 1.0 : 1.0);
-  if (a < 0.5 && trunk < 0.5) discard;
-  vec3 albedo;
-  vec3 N;
-  float ao;
-  if (a >= 0.5) {
-    albedo = pow(f.rgb, vec3(2.2)) * vLeaf * 0.95;
-    // 樹冠を球とみなした法線（板の位置から）
-    vec2 q = vec2(cuv.x - 0.5, cuv.y - 0.5) * 2.0;
-    float z = sqrt(max(0.0, 1.0 - min(1.0, dot(q, q))));
-    N = normalize(vRight * q.x + vec3(0.0, 1.0, 0.0) * (q.y * 0.8 + 0.25) + vToCam * (z + 0.2));
-    ao = 0.45 + 0.55 * smoothstep(-0.1, 0.9, cuv.y);
-  } else {
-    albedo = vec3(0.05, 0.04, 0.035);
-    N = vToCam;
-    ao = 0.6;
-  }
-  float sh = leafShadow(townShadow(vWorld, N));
-  vec3 col = townLight(albedo, N, ao, sh) + albedo * uSkyLight * 0.45 * ao;
-  vec3 V = normalize(cameraPosition - vWorld);
-  col += albedo * uSunLight * pow(max(dot(-V, uSunDir), 0.0), 3.0) * 0.5 * sh;
-  col += domeGlow(albedo, ao, vWorld, vSeed, a >= 0.5 ? 1.0 : 0.0);
-  col = outdoorHaze(col, vWorld);
-  gl_FragColor = vec4(col, 1.0);
-  ${TONE}
+/**
+ * 遠いほど（ミップマップが進むほど）アルファを太らせる（遠くの木がミップマップで消えないように）。k = 0.32（遠くの木）。
+ * 近くの木は 0.12（段階 5 の植物の仕上げ。遠くの木と同じだけ太らせると、20〜60m の木の板が葉の形の無い四角に埋まり、夕日で明るい四角の板に見えた。
+ * 近くの木は少しだけ太らせ、残りは alphaToCoverage のやわらかい縁にまかせる）
+ */
+function foliageAlpha(a: F, uv: V2, k: number) {
+  const d = fwidth(uv).mul(512.0)
+  const lod = max(0.0, log2(max(max(d.x, d.y), 1.0)))
+  return a.mul(lod.mul(k).add(1.0))
 }
-`
 
-const DEFINES = { LAB_FLOOR: LAB.toFixed(2) }
-
-/** 木のシェーダー（近く・遠く）と影の深さだけのシェーダー。uniform は共有 */
+/** 木のシェーダー（近く・遠く）と影の深さだけのシェーダー。uniform（material.uniforms.<名前>.value）は近くと遠くで共有 */
 export function createTreeMaterials() {
   const uniforms = {
-    ...outdoorUniforms,
-    ...townShadowUniforms,
-    ...townTextureUniforms,
-    ...lampUniforms,
-    uAutumn: { value: 0 },
-    uSpring: { value: 0 },
-    uWind: { value: 0.6 },
+    uAutumn: uniform(0),
+    uSpring: uniform(0),
+    uWind: uniform(0.6),
     /** ガラスの温室の中の木だけ（町の木は 0） */
-    uExtraAmb: { value: new THREE.Vector3() },
-    uVein: { value: 0 },
+    uExtraAmb: uniform(new THREE.Vector3()),
+    uVein: uniform(0),
   }
-  const near = new THREE.ShaderMaterial({ name: 'townTreesNear', defines: DEFINES, uniforms, vertexShader: NEAR_VERTEX, fragmentShader: NEAR_FRAGMENT, side: THREE.DoubleSide, alphaToCoverage: true })
-  const far = new THREE.ShaderMaterial({ name: 'townTreesFar', defines: DEFINES, uniforms, vertexShader: FAR_VERTEX, fragmentShader: FAR_FRAGMENT, side: THREE.DoubleSide, alphaToCoverage: true })
-  // 影の葉は、ぼかした葉の形（ミップマップを進めた値）で抜く（影の地図の画素より細かい葉が、ざらざらの点の影にならないように）
-  const depthFrag = (kind: 'near' | 'far') => /* glsl */ `
-    uniform sampler2D uFoliage;
-    vec4 foliage(vec2 uv, float cell) {
-      vec2 o = vec2(mod(cell, 2.0), floor(cell / 2.0)) * 0.5;
-      return texture(uFoliage, o + clamp(uv, 0.002, 0.998) * 0.5, 3.5);
-    }
-    varying vec3 vWorld;
-    ${kind === 'near' ? 'varying vec4 vUv;' : 'varying vec2 vQuad; varying float vCell; varying float vSeed;'}
-    void main() {
-      ${
-        kind === 'near'
-          ? 'if (vUv.z > -0.5 && foliage(vec2(vUv.x, 1.0 - vUv.y), vUv.z).a < 0.42) discard;'
-          : 'vec2 cuv = vec2(vQuad.x, (vQuad.y - 0.18) / 0.82); float a = cuv.y > 0.0 ? foliage(vec2(cuv.x, 1.0 - cuv.y), vCell).a : 0.0; if (a < 0.5 && !(abs(vQuad.x - 0.5) < 0.035 && vQuad.y < 0.3)) discard;'
-      }
-      gl_FragColor = vec4(1.0);
-    }
-  `
-  // WebGPU への移行（第 1 段）: 深さだけの材質は NodeMaterial の工場（town/shadows.ts）。本体の頂点の計算（NEAR_VERTEX・FAR_VERTEX と葉の形で抜く depthFrag）を positionNode で共有するのは、本体を TSL にする第 2 段で。今は形のまま（インスタンスの行列は NodeMaterial が扱う）で影を落とす
-  // 葉の形で抜く所（depthFrag）は第 2 段で maskNode にする（それまで使わない）
-  void depthFrag
-  const nearDepth = depthMaterial()
-  const farDepth = depthMaterial()
-  return { near, far, nearDepth, farDepth, uniforms }
+  const u = outdoorUniforms
+  const t = u.uTime
+
+  /* 頂点の共通部分: インスタンスの値（iA = 位置・高さ、iB = 樹冠の半径・種類・色のばらつき・種）と風 */
+  const iA = attribute<'vec4'>('iA', 'vec4')
+  const iB = attribute<'vec4'>('iB', 'vec4')
+  const base = vec3(iA.x, iA.z.sub(0.3).sub(LAB_FLOOR), iA.y.negate())
+  /** 風（木ごとに位相をずらす。高い所ほど大きく） */
+  const windOffset = (h01: F, scaleH: F, seed: F) => {
+    const ph = seed.mul(6.2831).add(base.x.mul(0.05)).add(base.z.mul(0.04))
+    const sway = sin(t.mul(1.1).add(ph)).mul(0.6).add(sin(t.mul(2.3).add(ph.mul(1.7))).mul(0.25)).add(sin(t.mul(0.37).add(ph.mul(0.3))).mul(0.5))
+    const k = uniforms.uWind.mul(h01).mul(h01).mul(scaleH).mul(0.018)
+    return vec3(sway.mul(k), 0.0, sway.mul(k).mul(0.6))
+  }
+  /**
+   * 葉の色（種類・季節・ばらつき）。Fn の中で途中の値を toVar にする（select の分岐の中で初めて組み立てた値を、ほかの分岐で使うと
+   * WGSL では代入されていない変数を読むことになるため）
+   */
+  const leafTint = Fn(([kind, tint]: [F, F]) => {
+    const l0 = mix(vec3(0.62, 0.75, 0.5), vec3(0.85, 0.9, 0.62), tint).toVar()
+    const l1 = select(kind.greaterThan(2.5), mix(vec3(0.38, 0.5, 0.42), vec3(0.5, 0.6, 0.45), tint), l0).toVar()
+    const l2 = select(kind.greaterThan(0.5).and(kind.lessThan(1.5)), mix(l1, mix(vec3(1.6, 0.35, 0.12), vec3(1.5, 0.75, 0.15), tint), uniforms.uAutumn), l1).toVar()
+    return select(kind.greaterThan(1.5).and(kind.lessThan(2.5)), mix(l2, vec3(1.45, 1.05, 1.15), uniforms.uSpring), l2)
+  })
+  const vLeaf = varying(leafTint(iB.y, iB.z))
+  const vSeed = varying(iB.w)
+
+  /** ガラスの温室（ガーデンドーム）の中の木だけが使う光（夜の中の灯りの照り返し・葉脈ライティングの光の点）。町の木は 0。画素の Fn の中で呼ぶ */
+  const domeGlow = (albedo: V3, ao: F, wp: V3, seed: F, leaf: F) => {
+    const c = albedo.mul(uniforms.uExtraAmb).mul(ao.mul(0.4).add(0.6)).mul(1.6).toVar()
+    If(uniforms.uVein.greaterThan(0.0).and(leaf.greaterThan(0.5)), () => {
+      const breath = sin(t.mul(0.55)).mul(0.38).add(0.62)
+      // 光の点: 3 次元の升（0.45m）ごとに 1 つ、升の中の決まった所に小さな丸い光（前は升の面がそのまま光って、明るい四角の板に見えた）
+      const g = wp.mul(2.2).toVar()
+      const cell = floor(g).toVar()
+      const hsh = oHash(cell.xz.add(cell.y.mul(17.31)).add(seed.mul(31.0)))
+      const ctr = vec3(oHash(cell.xz.add(3.7).add(cell.y)), oHash(cell.zx.add(9.1).add(cell.y)), oHash(cell.xz.mul(1.3).add(5.3).add(cell.y))).mul(0.6).add(0.2)
+      const r = length(g.sub(cell).sub(ctr))
+      const sp = step(0.8, hsh).mul(smoothstep(0.06, 0.2, r).oneMinus())
+      const flow = sin(wp.y.mul(1.4).sub(t.mul(1.1)).add(seed.mul(12.0))).mul(0.45).add(0.55)
+      c.addAssign(vec3(0.55, 1.0, 0.32).mul(sp.mul(1.2).mul(flow).add(0.008)).mul(uniforms.uVein).mul(breath))
+    })
+    return c
+  }
+
+  /* ---------------- 近くの木 ---------------- */
+  const aCrown = attribute<'vec4'>('aCrown', 'vec4')
+  const aUv = attribute<'vec4'>('aUv', 'vec4')
+  const aCard = attribute<'vec3'>('aCard', 'vec3')
+  /** 浮遊レーンの通り道（iC = 通り道の真ん中の線への法線 xz（幹の側を向く）・幹から線までの距離・幅の半分、iD = 下と上の高さ（シーン）。幅 0 なら無し） */
+  const iC = attribute<'vec4'>('iC', 'vec4')
+  const iD = attribute<'vec2'>('iD', 'vec2')
+  const ang = iB.w.mul(6.2831)
+  const cs = cos(ang)
+  const sn = sin(ang)
+  /** 前の GLSL の mat2(c, s, -s, c) * v */
+  const rot = (v: V2, c: F = cs, s: F = sn) => vec2(c.mul(v.x).sub(s.mul(v.y)), s.mul(v.x).add(c.mul(v.y)))
+  const scale = vec3(iB.x.mul(2.0), iA.w, iB.x.mul(2.0))
+  const nearWorld = Fn(() => {
+    const p = positionGeometry
+    const pr = rot(p.xz)
+    const wp = base.add(vec3(pr.x, p.y, pr.y).mul(scale)).toVar()
+    // 風: 幹は根元から曲がり、葉の板は小刻みに震える
+    wp.addAssign(windOffset(clamp(p.y, 0.0, 1.2), iA.w, iB.w).mul(mix(0.3, 1.0, aUv.w)))
+    const flutter = sin(t.mul(7.0).add(dot(p, vec3(31.0, 17.0, 23.0))).add(iB.w.mul(40.0))).mul(0.012).mul(uniforms.uWind).mul(aUv.w).mul(iA.w)
+    wp.addAssign(vec3(0.0, flutter, 0.0))
+    // 浮遊レーンの通り道の剪定: 通り道の箱の中の葉・枝の頂点を、板の真ん中のある側の壁まで寄せる（幹は寄せない。town.md §7 の 214）
+    const trunk = aUv.z.lessThan(-0.5).and(aUv.w.lessThan(0.31))
+    If(iC.w.greaterThan(0.0).and(trunk.not()).and(wp.y.greaterThan(iD.x)).and(wp.y.lessThan(iD.y)), () => {
+      const nn = iC.xy
+      const sideC = dot(rot(aCard.xz).mul(scale.xz), nn).add(iC.z)
+      const sv = dot(wp.xz.sub(base.xz), nn).add(iC.z).toVar()
+      const sg = select(sideC.greaterThanEqual(0.0), float(1.0), float(-1.0)).toVar()
+      If(sg.mul(sv).lessThan(iC.w), () => {
+        const d = nn.mul(sg.mul(iC.w).sub(sv))
+        wp.addAssign(vec3(d.x, 0.0, d.y))
+      })
+    })
+    return wp
+  })()
+  // 形はワールドの位置で計算する（前の GLSL は viewMatrix だけを掛けていた）。ローカルに戻して渡す（木の形は町の原点に置くので、ふつうは単位行列）
+  const nearPosition = modelWorldMatrixInverse.mul(vec4(nearWorld, 1.0)).xyz
+  // 法線（Fn の中で toVar にして、分岐（select）の両方から同じ値を読めるようにする）
+  const vCardN = varying(
+    Fn(() => {
+      const r = rot(normalGeometry.xz, cos(ang).toVar(), sin(ang).toVar()).toVar()
+      return vec3(r.x, normalGeometry.y, r.y)
+    })(),
+  )
+  // 葉は樹冠の丸みの法線を多めに（ふんわりした陰影）、幹はそのまま
+  const vNormal = varying(
+    Fn(() => {
+      const c = cos(ang).toVar()
+      const s = sin(ang).toVar()
+      const nr = rot(normalGeometry.xz, c, s).toVar()
+      const n = vec3(nr.x, normalGeometry.y, nr.y).toVar()
+      const cr = rot(aCrown.xz, c, s).toVar()
+      const cn = vec3(cr.x, aCrown.y, cr.y).toVar()
+      return select(aUv.z.lessThan(-0.5), n, normalize(mix(cn, n, 0.3)))
+    })(),
+  )
+  const vUv = varying(aUv)
+  const vAo = varying(aCrown.w)
+
+  const near = unlit('townTreesNear', { side: THREE.DoubleSide, alphaToCoverage: true })
+  near.positionNode = nearPosition
+  near.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const N = normalize(vNormal).toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const albedo = vec3(0.0).toVar()
+    const ao = vAo.toVar()
+    const leaf = vUv.z.greaterThan(-0.5).toVar()
+    // 葉の絵は分岐の外で読む（ミップマップの微分が、分岐でばらばらの画素の組でも正しくなるように）
+    const f = foliage(vec2(vUv.x, vUv.y.oneMinus()), vUv.z).toVar()
+    const fa = foliageAlpha(f.a, vUv.xy, 0.12).toVar()
+    // 横から見た板（葉が点の列に見える）は消す
+    const facing = abs(dot(normalize(vCardN), V))
+    If(leaf.and(fa.mul(smoothstep(0.12, 0.4, facing)).lessThan(0.5)), () => {
+      Discard()
+    })
+    If(leaf.not(), () => {
+      // 幹と枝: 樹皮の質感
+      const bark = townTextureUniforms.uGndAlb.sample(vec2(vUv.x.mul(2.0), vUv.y)).depth(int(6)).rgb.mul(2.0)
+      albedo.assign(vec3(0.075, 0.06, 0.05).mul(pow(max(bark, 0.0), vec3(2.2))))
+    }).Else(() => {
+      albedo.assign(pow(f.rgb, vec3(2.2)).mul(vLeaf).mul(1.1))
+      // 葉のかたまりごとの明るさのばらつき（板ごとに一様な色に見えないように）
+      albedo.mulAssign(oNoise(wp.xz.mul(0.9).add(wp.y.mul(0.7)).add(vSeed.mul(13.0))).mul(0.44).add(0.78))
+    })
+    // 葉は光を通して散らすので、影の中でも真っ暗にならない（影は浅く、空の光をよく受ける）
+    const sh = townShadow(wp, N).toVar()
+    If(leaf, () => {
+      sh.assign(leafShadow(sh))
+    })
+    const col = townLight(albedo, N, ao, sh).add(albedo.mul(u.uSkyLight).mul(0.45).mul(ao)).toVar()
+    // 逆光の葉が透ける
+    If(leaf, () => {
+      col.addAssign(albedo.mul(u.uSunLight).mul(pow(max(dot(V.negate(), u.uSunDir), 0.0), 3.0)).mul(0.6).mul(sh))
+      // 下から見上げた樹冠（段階 5 の植物の仕上げ）: 葉は空と太陽の光を通して黄緑に明るい（前は下を向いた面の暗さだけで、見上げると黒い塊だった）
+      const under = smoothstep(0.05, 0.7, V.y.negate())
+      const thru = albedo.mul(vec3(1.1, 1.25, 0.6))
+      col.addAssign(thru.mul(u.uSkyLight.mul(0.55).add(u.uSunLight.mul(0.3).mul(sh).mul(max(u.uSunDir.y, 0.0)))).mul(under).mul(ao.mul(0.55).add(0.45)))
+    })
+    col.addAssign(domeGlow(albedo, ao, wp, vSeed, select(leaf, float(1.0), float(0.0))))
+    // 夜: 街灯の下の葉（下から照らされる。葉は光を通すので回り込みを大きく）
+    col.addAssign(albedo.mul(townLampsEx(wp, N, float(0.0), float(0.45))).mul(0.8).mul(ao))
+    return outdoorHaze(col, wp)
+  })()
+
+  /* ---------------- 遠くの木（カメラの方を向く板。縦の軸のまわりに回す） ---------------- */
+  const toCam = cameraPosition.sub(base).mul(vec3(1.0, 0.0, 1.0))
+  const l = length(toCam)
+  const fwd = select(l.greaterThan(1e-3), toCam.div(max(l, 1e-3)), vec3(0.0, 0.0, 1.0))
+  const right = vec3(fwd.z, 0.0, fwd.x.negate())
+  const pg = positionGeometry
+  const farWorld = base
+    .add(right.mul(pg.x).mul(iB.x.mul(2.25)))
+    .add(vec3(0.0, pg.y.mul(iA.w).mul(1.05), 0.0))
+    .add(windOffset(pg.y, iA.w, iB.w).mul(0.6))
+  const farPosition = modelWorldMatrixInverse.mul(vec4(farWorld, 1.0)).xyz
+  const vQuad = varying(vec2(pg.x.add(0.5), pg.y))
+  const vRight = varying(right)
+  const vToCam = varying(fwd)
+  // 絵: 針葉樹・楓・広葉樹（2 つから木ごとに）
+  const kind = iB.y
+  const vCell = varying(select(kind.greaterThan(2.5), float(3.0), select(kind.greaterThan(0.5).and(kind.lessThan(1.5)), float(2.0), select(fract(iB.w.mul(7.7)).lessThan(0.5), float(0.0), float(1.0)))))
+
+  const far = unlit('townTreesFar', { side: THREE.DoubleSide, alphaToCoverage: true })
+  far.positionNode = farPosition
+  far.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    // 樹冠は板の上 82%、下は幹
+    const cuv = vec2(vQuad.x, vQuad.y.sub(0.18).div(0.82)).toVar()
+    If(fract(vSeed.mul(3.1)).lessThan(0.5), () => {
+      cuv.assign(vec2(cuv.x.oneMinus(), cuv.y))
+    })
+    const f = foliage(vec2(cuv.x, cuv.y.oneMinus()), vCell).toVar()
+    const a = select(cuv.y.greaterThan(0.0), foliageAlpha(f.a, cuv, 0.32), float(0.0)).toVar()
+    const trunk = step(abs(vQuad.x.sub(0.5)), 0.035).mul(step(vQuad.y, 0.3))
+    If(a.lessThan(0.5).and(trunk.lessThan(0.5)), () => {
+      Discard()
+    })
+    const albedo = vec3(0.05, 0.04, 0.035).toVar()
+    const N = vec3(vToCam).toVar()
+    const ao = float(0.6).toVar()
+    const leafy = a.greaterThanEqual(0.5).toVar()
+    If(leafy, () => {
+      albedo.assign(pow(f.rgb, vec3(2.2)).mul(vLeaf).mul(0.95))
+      // 樹冠を球とみなした法線（板の位置から）
+      const q = vec2(cuv.x.sub(0.5), cuv.y.sub(0.5)).mul(2.0).toVar()
+      const z = sqrt(max(0.0, min(1.0, dot(q, q)).oneMinus()))
+      N.assign(normalize(vRight.mul(q.x).add(vec3(0.0, 1.0, 0.0).mul(q.y.mul(0.8).add(0.25))).add(vToCam.mul(z.add(0.2)))))
+      ao.assign(smoothstep(-0.1, 0.9, cuv.y).mul(0.55).add(0.45))
+    })
+    const sh = leafShadow(townShadow(wp, N)).toVar()
+    const col = townLight(albedo, N, ao, sh).add(albedo.mul(u.uSkyLight).mul(0.45).mul(ao)).toVar()
+    const V = normalize(cameraPosition.sub(wp))
+    col.addAssign(albedo.mul(u.uSunLight).mul(pow(max(dot(V.negate(), u.uSunDir), 0.0), 3.0)).mul(0.5).mul(sh))
+    col.addAssign(domeGlow(albedo, ao, wp, vSeed, select(leafy, float(1.0), float(0.0))))
+    return outdoorHaze(col, wp)
+  })()
+
+  // 影: 本体と同じ頂点の計算（positionNode を共有）で深さを描き、葉は、ぼかした葉の形（ミップマップを進めた値）で抜く
+  // （影の地図の画素より細かい葉が、ざらざらの点の影にならないように）
+  const nearDepth = depthMaterial({
+    positionNode: nearPosition,
+    maskNode: vUv.z.lessThanEqual(-0.5).or(foliage(vec2(vUv.x, vUv.y.oneMinus()), vUv.z, 3.5).a.greaterThanEqual(0.42)),
+  })
+  const dcuv = vec2(vQuad.x, vQuad.y.sub(0.18).div(0.82))
+  const da = select(dcuv.y.greaterThan(0.0), foliage(vec2(dcuv.x, dcuv.y.oneMinus()), vCell, 3.5).a, float(0.0))
+  const farDepth = depthMaterial({
+    positionNode: farPosition,
+    maskNode: da.greaterThanEqual(0.5).or(abs(vQuad.x.sub(0.5)).lessThan(0.035).and(vQuad.y.lessThan(0.3))),
+  })
+  return { near: withUniforms(near, uniforms), far: withUniforms(far, uniforms), nearDepth, farDepth, uniforms }
 }
 
 export type TreeMaterials = ReturnType<typeof createTreeMaterials>
@@ -554,23 +536,21 @@ interface TreeItem {
 }
 
 function instanced(geo: THREE.InstancedBufferGeometry, list: TreeItem[], material: THREE.Material, depth: THREE.Material, name: string) {
-  const a = new Float32Array(Math.max(1, list.length) * 4)
-  const b = new Float32Array(Math.max(1, list.length) * 4)
-  const lc = new Float32Array(Math.max(1, list.length) * 4)
-  const ld = new Float32Array(Math.max(1, list.length) * 2)
+  // インスタンスの値は 1 つの交互の配列にまとめる（iA 4・iB 4・iC 4・iD 2）。WebGPU は 1 つの描画で読める頂点の配列が 8 本までで、
+  // 近くの木は形の 5 本（位置・法線・aCrown・aUv・aCard）と別々の 4 本で 9 本になって作れない
+  const STRIDE = 14
+  const data = new Float32Array(Math.max(1, list.length) * STRIDE)
   list.forEach((t, i) => {
-    a.set([t.x, t.y, t.z, t.h], i * 4)
-    b.set([t.r, t.kind, t.tint, t.seed], i * 4)
-    if (t.lane) {
-      lc.set([t.lane[0], t.lane[1], t.lane[2], t.lane[3]], i * 4)
-      ld.set([t.lane[4], t.lane[5]], i * 2)
-    }
+    const o = i * STRIDE
+    data.set([t.x, t.y, t.z, t.h, t.r, t.kind, t.tint, t.seed], o)
+    if (t.lane) data.set(t.lane, o + 8)
   })
-  geo.setAttribute('iA', new THREE.InstancedBufferAttribute(a, 4))
-  geo.setAttribute('iB', new THREE.InstancedBufferAttribute(b, 4))
+  const buf = new THREE.InstancedInterleavedBuffer(data, STRIDE)
+  geo.setAttribute('iA', new THREE.InterleavedBufferAttribute(buf, 4, 0))
+  geo.setAttribute('iB', new THREE.InterleavedBufferAttribute(buf, 4, 4))
   if (geo.getAttribute('aCard')) {
-    geo.setAttribute('iC', new THREE.InstancedBufferAttribute(lc, 4))
-    geo.setAttribute('iD', new THREE.InstancedBufferAttribute(ld, 2))
+    geo.setAttribute('iC', new THREE.InterleavedBufferAttribute(buf, 4, 8))
+    geo.setAttribute('iD', new THREE.InterleavedBufferAttribute(buf, 2, 12))
   }
   geo.instanceCount = list.length
   const mesh = new THREE.Mesh(geo, material)

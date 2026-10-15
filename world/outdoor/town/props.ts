@@ -1,11 +1,45 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  Discard,
+  Fn,
+  If,
+  abs,
+  attribute,
+  cameraPosition,
+  cos,
+  dot,
+  exp,
+  float,
+  floor,
+  fract as tslFract,
+  int,
+  length,
+  max,
+  mix,
+  modelWorldMatrixInverse,
+  normalGeometry,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  pow,
+  reflect,
+  select,
+  sin,
+  smoothstep,
+  step,
+  uniform,
+  varying,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl'
 import { SITE } from '../../../core/town'
-import { COMMON, SKY, TONE, outdoorUniforms } from '../materials'
+import { outdoorHaze, outdoorUniforms, unlit, withUniforms } from '../materials'
 import { ROOF } from './buildingKit'
-import { TOWN_LIGHT } from './facades'
-import { TOWN_SHADOW, depthMaterial, townShadowUniforms } from './shadows'
-import { TEXTURE_DECL, townTextureUniforms } from './townTextures'
-import { TOWN_LAMPS, lampUniforms, LAMP, type Lamp } from './lamps'
+import { townLight } from './facades'
+import { depthMaterial, townShadow } from './shadows'
+import { townTextureUniforms } from './townTextures'
+import { townLamps, LAMP, type Lamp } from './lamps'
 import type { TownTile } from './townData'
 
 /**
@@ -413,123 +447,127 @@ function instancedGeometry(base: THREE.BufferGeometry, wr: PropWriter) {
   return g
 }
 
-const PROP_VERTEX = /* glsl */ `
-attribute vec4 pA;
-attribute vec4 pB;
-attribute vec4 pC;
-varying vec3 vWorld;
-varying vec3 vNormal;
-varying vec3 vLocal;
-varying vec4 vColor;
-varying vec3 vSize;
-varying vec3 vLN;
-void main() {
-  vec3 p = position * pB.xyz;
-  vLN = normal;
-  vec3 n = normal;
-  // 傾き（局所の x の軸まわり）と向き（縦の軸まわり。建物の局所 x = 平面の (cos, sin)、シーンでは (cos, 0, -sin)）
-  float ct = cos(pB.w);
-  float st = sin(pB.w);
-  p = vec3(p.x, ct * p.y - st * p.z, st * p.y + ct * p.z);
-  n = vec3(n.x, ct * n.y - st * n.z, st * n.y + ct * n.z);
-  float c = cos(pA.w);
-  float s = sin(pA.w);
-  // 局所の (x, 上, y) → シーン（x = 東、z = -北）
-  vec3 wp = pA.xyz + vec3(c * p.x - s * p.z, p.y, -(s * p.x + c * p.z));
-  vNormal = vec3(c * n.x - s * n.z, n.y, -(s * n.x + c * n.z));
-  vLocal = position;
-  vSize = pB.xyz;
-  vColor = pC;
-  vWorld = wp;
-  gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
-}
-`
-
-const PROP_FRAGMENT = /* glsl */ `
-${TOWN_LAMPS}
-${COMMON}
-${SKY}
-${TOWN_LIGHT}
-${TOWN_SHADOW}
-${TEXTURE_DECL}
-uniform float uShop;
-uniform float uLightGain;
-varying vec3 vWorld;
-varying vec3 vNormal;
-varying vec3 vLocal;
-varying vec4 vColor;
-varying vec3 vSize;
-varying vec3 vLN;
-void main() {
-  vec3 N = normalize(vNormal);
-  vec3 V = normalize(cameraPosition - vWorld);
-  float kind = vColor.a;
-  vec3 albedo = vColor.rgb;
-  vec3 m = (vLocal + 0.5) * vSize;
-  float ao = 1.0;
-  vec3 emit = vec3(0.0);
-  float dist = length(cameraPosition - vWorld);
-  float fine = 1.0 - smoothstep(30.0, 120.0, dist);
-  if (kind < 0.5 || (kind > 9.5)) {
-    // コンクリートの床の板・仕切り: コンクリートの質感
-    vec3 t = texture(uBldAlb, vec3(vec2(m.x + m.z, m.y) / 3.2, 4.0)).rgb * 2.0;
-    albedo *= pow(max(t, 0.0), vec3(2.2));
-    if (N.y < -0.5) ao = 0.6;
-  } else if (kind < 1.5) {
-    // 金属の手すり（縦の格子。近くは格子の間を抜く）
-    float along = abs(vLN.x) > 0.5 ? m.z : m.x;
-    float bar = smoothstep(0.32, 0.45, abs(fract(along / 0.11) - 0.5));
-    float top = step(vSize.y - 0.06, m.y) + step(m.y, 0.05);
-    if (fine > 0.5 && bar < 0.5 && top < 0.5 && abs(vLN.y) < 0.5) discard;
-  } else if (kind < 2.5) {
-    // 手すりの板（すりガラス・金属の板）: 少し光る
-    albedo *= 0.9 + 0.1 * step(0.5, fract(m.x / 1.8));
-  } else if (kind < 3.5) {
-    // ひさしの布（縞）
-    float stripe = step(0.5, fract((m.x) / 0.45));
-    if (fract(vColor.r * 13.0 + vColor.g * 7.0) > 0.5) albedo = mix(albedo, vec3(0.75, 0.72, 0.66), stripe * 0.85);
-    if (N.y < 0.0) ao = 0.55;
-  } else if (kind < 4.5) {
-    // 袖看板（文字と、夜は光る）
-    float letters = step(0.5, fract(sin(dot(floor(vec2(m.z, m.y) / vec2(0.18, 0.22)), vec2(12.9, 78.2))) * 43758.5)) * step(0.1, m.z) * step(m.z, vSize.z - 0.1) * step(0.12, m.y) * step(m.y, vSize.y - 0.12);
-    vec3 lc = dot(albedo, vec3(0.33)) > 0.4 ? vec3(0.08) : vec3(0.85, 0.82, 0.72);
-    if (abs(vLN.x) > 0.5) albedo = mix(albedo, lc, letters * fine);
-    emit = (vColor.rgb * 1.8 + lc * letters * 1.2) * uShop;
-  } else if (kind < 5.5) {
-    // 室外機（前の面にファンの丸）
-    if (abs(vLN.z) > 0.5) {
-      vec2 q = vec2(m.x - vSize.x * 0.62, m.y - vSize.y * 0.5);
-      float fan = 1.0 - smoothstep(0.2, 0.24, length(q));
-      albedo = mix(albedo, vec3(0.12), fan * 0.8);
-    }
-  } else if (kind < 6.5) {
-    // 給水塔（パネルの継ぎ目）
-    albedo *= 0.9 + 0.1 * step(0.08, fract(m.y / 0.6));
-  } else if (kind > 7.5 && kind < 8.5) {
-    // 塔屋: 外壁の質感（漆喰）と扉
-    vec3 t = texture(uBldAlb, vec3(vec2(m.x + m.z, m.y) / 3.0, 1.0)).rgb * 2.0;
-    albedo *= pow(max(t, 0.0), vec3(2.2));
-    if (vLN.z > 0.5 && abs(m.x - vSize.x * 0.5) < 0.45 && m.y < 2.1) albedo = vec3(0.18, 0.19, 0.2);
-    ao = mix(0.7, 1.0, smoothstep(0.0, 1.0, m.y));
-  }
-  float sh = townShadow(vWorld, N);
-  vec3 col = townLight(albedo, N, ao, sh);
-  col += albedo * townLamps(vWorld, N) * ao;
-  // 金属の照り返し
-  if (kind > 0.5 && kind < 2.5 || kind > 4.5 && kind < 7.5) col += uSunLight * pow(max(dot(reflect(-V, N), uSunDir), 0.0), 30.0) * 0.15 * sh;
-  col = outdoorHaze(col, vWorld);
-  col += emit * uLightGain * exp(-dist / (uHazeDist * 1.5));
-  gl_FragColor = vec4(col, 1.0);
-  ${TONE}
-}
-`
-
+/**
+ * 小物の材質（TSL。WebGPU への移行の第 2 段）。インスタンスの値: pA = 位置（シーン）・向き、pB = 大きさ・傾き、pC = 色・種類。
+ * 形はワールドの位置で計算する（前の GLSL は viewMatrix だけを掛けていた）。影の深さだけの材質は同じ positionNode を使う
+ */
 export function createPropMaterials() {
-  const uniforms = { ...outdoorUniforms, ...townShadowUniforms, ...townTextureUniforms, ...lampUniforms, uShop: { value: 0 }, uLightGain: { value: 1 } }
-  const material = new THREE.ShaderMaterial({ name: 'townProps', uniforms, vertexShader: PROP_VERTEX, fragmentShader: PROP_FRAGMENT, side: THREE.DoubleSide })
-  // WebGPU への移行（第 1 段）: 深さだけの材質は NodeMaterial の工場（town/shadows.ts）。本体の頂点の計算（PROP_VERTEX）を positionNode で共有するのは、本体を TSL にする第 2 段で。今は形のまま（インスタンスの行列は NodeMaterial が扱う）で影を落とす
-  const depth = depthMaterial()
-  return { material, depth }
+  const uniforms = { uShop: uniform(0), uLightGain: uniform(1) }
+  const u = outdoorUniforms
+  const pA = attribute<'vec4'>('pA', 'vec4')
+  const pB = attribute<'vec4'>('pB', 'vec4')
+  const pC = attribute<'vec4'>('pC', 'vec4')
+  const p0 = positionGeometry.mul(pB.xyz)
+  const n0 = normalGeometry
+  // 傾き（局所の x の軸まわり）と向き（縦の軸まわり。建物の局所 x = 平面の (cos, sin)、シーンでは (cos, 0, -sin)）
+  const ct = cos(pB.w)
+  const st = sin(pB.w)
+  const p1 = vec3(p0.x, ct.mul(p0.y).sub(st.mul(p0.z)), st.mul(p0.y).add(ct.mul(p0.z)))
+  const n1 = vec3(n0.x, ct.mul(n0.y).sub(st.mul(n0.z)), st.mul(n0.y).add(ct.mul(n0.z)))
+  const c = cos(pA.w)
+  const s = sin(pA.w)
+  // 局所の (x, 上, y) → シーン（x = 東、z = -北）
+  const wp0 = pA.xyz.add(vec3(c.mul(p1.x).sub(s.mul(p1.z)), p1.y, s.mul(p1.x).add(c.mul(p1.z)).negate()))
+  const positionNode = modelWorldMatrixInverse.mul(vec4(wp0, 1.0)).xyz
+  const vNormal = varying(vec3(c.mul(n1.x).sub(s.mul(n1.z)), n1.y, s.mul(n1.x).add(c.mul(n1.z)).negate()))
+  const vLocal = varying(positionGeometry)
+  const vSize = varying(pB.xyz)
+  const vColor = varying(pC)
+  const vLN = varying(normalGeometry)
+
+  const material = unlit('townProps', { side: THREE.DoubleSide })
+  material.positionNode = positionNode
+  material.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const N = normalize(vNormal).toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const kind = vColor.a.toVar()
+    const albedo = vColor.rgb.toVar()
+    const m = vLocal.add(0.5).mul(vSize).toVar()
+    const ao = float(1.0).toVar()
+    const emit = vec3(0.0).toVar()
+    const dist = length(cameraPosition.sub(wp)).toVar()
+    const fine = smoothstep(30.0, 120.0, dist).oneMinus().toVar()
+    If(kind.lessThan(0.5).or(kind.greaterThan(9.5)), () => {
+      // コンクリートの床の板・仕切り: コンクリートの質感
+      const t = townTextureUniforms.uBldAlb.sample(vec2(m.x.add(m.z), m.y).div(3.2)).depth(int(4)).rgb.mul(2.0)
+      albedo.mulAssign(pow(max(t, 0.0), vec3(2.2)))
+      If(N.y.lessThan(-0.5), () => {
+        ao.assign(0.6)
+      })
+    })
+      .ElseIf(kind.lessThan(1.5), () => {
+        // 金属の手すり（縦の格子。近くは格子の間を抜く）
+        const along = select(abs(vLN.x).greaterThan(0.5), m.z, m.x)
+        const bar = smoothstep(0.32, 0.45, abs(tslFract(along.div(0.11)).sub(0.5)))
+        const top = step(vSize.y.sub(0.06), m.y).add(step(m.y, 0.05))
+        If(fine.greaterThan(0.5).and(bar.lessThan(0.5)).and(top.lessThan(0.5)).and(abs(vLN.y).lessThan(0.5)), () => {
+          Discard()
+        })
+      })
+      .ElseIf(kind.lessThan(2.5), () => {
+        // 手すりの板（すりガラス・金属の板）: 少し光る
+        albedo.mulAssign(step(0.5, tslFract(m.x.div(1.8))).mul(0.1).add(0.9))
+      })
+      .ElseIf(kind.lessThan(3.5), () => {
+        // ひさしの布（縞）
+        const stripe = step(0.5, tslFract(m.x.div(0.45)))
+        If(tslFract(vColor.r.mul(13.0).add(vColor.g.mul(7.0))).greaterThan(0.5), () => {
+          albedo.assign(mix(albedo, vec3(0.75, 0.72, 0.66), stripe.mul(0.85)))
+        })
+        If(N.y.lessThan(0.0), () => {
+          ao.assign(0.55)
+        })
+      })
+      .ElseIf(kind.lessThan(4.5), () => {
+        // 袖看板（文字と、夜は光る）
+        const cellP = floor(vec2(m.z, m.y).div(vec2(0.18, 0.22)))
+        const letters = step(0.5, tslFract(sin(dot(cellP, vec2(12.9, 78.2))).mul(43758.5)))
+          .mul(step(0.1, m.z))
+          .mul(step(m.z, vSize.z.sub(0.1)))
+          .mul(step(0.12, m.y))
+          .mul(step(m.y, vSize.y.sub(0.12)))
+          .toVar()
+        const lc = select(dot(albedo, vec3(0.33)).greaterThan(0.4), vec3(0.08), vec3(0.85, 0.82, 0.72)).toVar()
+        If(abs(vLN.x).greaterThan(0.5), () => {
+          albedo.assign(mix(albedo, lc, letters.mul(fine)))
+        })
+        emit.assign(vColor.rgb.mul(1.8).add(lc.mul(letters).mul(1.2)).mul(uniforms.uShop))
+      })
+      .ElseIf(kind.lessThan(5.5), () => {
+        // 室外機（前の面にファンの丸）
+        If(abs(vLN.z).greaterThan(0.5), () => {
+          const q = vec2(m.x.sub(vSize.x.mul(0.62)), m.y.sub(vSize.y.mul(0.5)))
+          const fan = smoothstep(0.2, 0.24, length(q)).oneMinus()
+          albedo.assign(mix(albedo, vec3(0.12), fan.mul(0.8)))
+        })
+      })
+      .ElseIf(kind.lessThan(6.5), () => {
+        // 給水塔（パネルの継ぎ目）
+        albedo.mulAssign(step(0.08, tslFract(m.y.div(0.6))).mul(0.1).add(0.9))
+      })
+      .ElseIf(kind.greaterThan(7.5).and(kind.lessThan(8.5)), () => {
+        // 塔屋: 外壁の質感（漆喰）と扉
+        const t = townTextureUniforms.uBldAlb.sample(vec2(m.x.add(m.z), m.y).div(3.0)).depth(int(1)).rgb.mul(2.0)
+        albedo.mulAssign(pow(max(t, 0.0), vec3(2.2)))
+        If(vLN.z.greaterThan(0.5).and(abs(m.x.sub(vSize.x.mul(0.5))).lessThan(0.45)).and(m.y.lessThan(2.1)), () => {
+          albedo.assign(vec3(0.18, 0.19, 0.2))
+        })
+        ao.assign(mix(0.7, 1.0, smoothstep(0.0, 1.0, m.y)))
+      })
+    const sh = townShadow(wp, N).toVar()
+    const col = townLight(albedo, N, ao, sh).toVar()
+    col.addAssign(albedo.mul(townLamps(wp, N)).mul(ao))
+    // 金属の照り返し
+    If(kind.greaterThan(0.5).and(kind.lessThan(2.5)).or(kind.greaterThan(4.5).and(kind.lessThan(7.5))), () => {
+      col.addAssign(u.uSunLight.mul(pow(max(dot(reflect(V.negate(), N), u.uSunDir), 0.0), 30.0)).mul(0.15).mul(sh))
+    })
+    col.assign(outdoorHaze(col, wp))
+    col.addAssign(emit.mul(uniforms.uLightGain).mul(exp(dist.negate().div(u.uHazeDist.mul(1.5)))))
+    return col
+  })()
+  const depth = depthMaterial({ positionNode })
+  return { material: withUniforms(material, uniforms), depth }
 }
 
 export type PropMaterials = ReturnType<typeof createPropMaterials>

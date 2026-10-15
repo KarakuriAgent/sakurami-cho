@@ -1,6 +1,38 @@
-import * as THREE from 'three'
-import { COMMON, SKY, TONE, outdoorUniforms } from '../../materials'
-import { TOWN_SHADOW, townShadowUniforms } from '../../town/shadows'
+import * as THREE from 'three/webgpu'
+import {
+  Discard,
+  Fn,
+  If,
+  abs,
+  attribute,
+  cameraPosition,
+  clamp,
+  cos,
+  dot,
+  float,
+  fract,
+  instancedBufferAttribute,
+  length,
+  max,
+  mix,
+  modelViewMatrix,
+  normalize,
+  positionWorld,
+  pow,
+  reflect,
+  screenDPR,
+  select,
+  sin,
+  smoothstep,
+  uniform,
+  uv,
+  varying,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl'
+import { oNoise, outdoorHaze, outdoorUniforms, skyColor, unlit, withUniforms } from '../../materials'
+import { townShadow } from '../../town/shadows'
 
 /**
  * ガーデンドームの水（池の水面・大滝「天の水」と回廊から落ちる細い滝・滝つぼのしぶき）と、雲霧林の霧（噴霧装置）。
@@ -13,69 +45,48 @@ type V3 = [number, number, number]
 /* 水面                                                                         */
 /* -------------------------------------------------------------------------- */
 
-const WATER_VERTEX = /* glsl */ `
-varying vec3 vWorld;
-varying vec2 vUv;
-attribute vec2 aUv;
-void main() {
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vWorld = wp.xyz;
-  vUv = aUv;
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}
-`
-
 /** 水面（空とドームの緑を映す・さざ波・深さの色・滝の落ちる所の白い泡・夜は葉脈の光を映す） */
 export function createPoolMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'domePool',
-    uniforms: { ...outdoorUniforms, ...townShadowUniforms, uVein: { value: 0 }, uFoam: { value: new THREE.Vector4(0, 0, 0, 0) }, uNightAmb: { value: new THREE.Vector3() } },
-    vertexShader: WATER_VERTEX,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      ${SKY}
-      ${TOWN_SHADOW}
-      uniform float uVein;
-      uniform vec4 uFoam;
-      uniform vec3 uNightAmb;
-      varying vec3 vWorld;
-      varying vec2 vUv;
-      void main() {
-        vec2 p = vWorld.xz;
-        float t = uTime;
-        // さざ波の法線（2 方向の流れ）
-        vec2 g = vec2(oNoise(p * 1.7 + vec2(t * 0.35, t * 0.2)) - oNoise(p * 1.7 + vec2(0.37, 0.0) + vec2(t * 0.35, t * 0.2)), oNoise(p * 1.7 + vec2(t * 0.35, t * 0.2)) - oNoise(p * 1.7 + vec2(0.0, 0.37) + vec2(t * 0.35, t * 0.2)));
-        g += 0.5 * vec2(oNoise(p * 4.3 - vec2(t * 0.6, -t * 0.4)) - 0.5, oNoise(p * 4.3 + vec2(t * 0.5, t * 0.7) + 3.1) - 0.5);
-        // 滝の落ちる所（uFoam: x, z = 中心、w = 半径）のまわりは波立つ
-        float df = length(p - uFoam.xy);
-        float foamK = 1.0 - smoothstep(uFoam.w * 0.3, uFoam.w * 1.6, df);
-        g *= 0.35 + 1.6 * foamK;
-        vec3 N = normalize(vec3(-g.x * 0.5, 1.0, -g.y * 0.5));
-        vec3 V = normalize(cameraPosition - vWorld);
-        float ndv = max(dot(N, V), 0.0);
-        float fres = 0.02 + 0.98 * pow(clamp(1.0 - ndv, 0.0, 1.0), 5.0);
-        vec3 R = reflect(-V, N);
-        // 映り込み: 上の空と、ドームの中の木々（水平に近いほど濃い緑）
-        vec3 sky = skyColor(vec3(R.x, max(R.y, 0.02), R.z));
-        vec3 green = vec3(0.025, 0.05, 0.025) * (0.6 + uDaylight) + uNightAmb * 0.4;
-        vec3 refl = mix(green, sky * 0.85, smoothstep(0.15, 0.7, R.y));
-        float sun = pow(max(dot(R, uSunDir), 0.0), 400.0) * 18.0 * townShadow(vWorld + vec3(0.0, 0.2, 0.0), vec3(0.0, 1.0, 0.0));
-        // 深さの色（底の石が透ける・縁は浅い）
-        float shallow = vUv.y;
-        vec3 deep = mix(vec3(0.012, 0.03, 0.03), vec3(0.04, 0.075, 0.06), shallow) * (uSkyLight * 2.0 + uNightAmb * 2.0 + 0.02);
-        vec3 col = mix(deep, refl, fres) + uSunLight * sun;
-        // 葉脈の光の映り込み（夕方から）
-        float breath = 0.62 + 0.38 * sin(uTime * 0.55);
-        col += vec3(0.55, 1.0, 0.32) * uVein * breath * 0.06 * (0.5 + 0.5 * oNoise(p * 0.8 + vec2(0.0, t * 0.1))) * fres * 4.0;
-        // 白い泡
-        float foam = foamK * smoothstep(0.35, 0.75, oNoise(p * 3.0 + vec2(t * 0.9, -t * 0.7)) * 0.6 + oNoise(p * 9.0 - t * 1.3) * 0.4 + foamK * 0.3);
-        col = mix(col, vec3(0.75, 0.8, 0.8) * (uSkyLight * 1.2 + uSunLight * 0.35 + uNightAmb * 2.0 + 0.02), foam * 0.85);
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, 1.0);
-        ${TONE}
-      }
-    `,
-  })
+  const uniforms = { uVein: uniform(0), uFoam: uniform(new THREE.Vector4(0, 0, 0, 0)), uNightAmb: uniform(new THREE.Vector3()) }
+  const u = outdoorUniforms
+  const vUv = varying(attribute<'vec2'>('aUv', 'vec2'))
+  const m = unlit('domePool')
+  m.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const p = wp.xz.toVar()
+    const t = u.uTime
+    // さざ波の法線（2 方向の流れ）
+    const q = p.mul(1.7).add(vec2(t.mul(0.35), t.mul(0.2))).toVar()
+    const n0 = oNoise(q).toVar()
+    const g = vec2(n0.sub(oNoise(q.add(vec2(0.37, 0.0)))), n0.sub(oNoise(q.add(vec2(0.0, 0.37))))).toVar()
+    g.addAssign(vec2(oNoise(p.mul(4.3).sub(vec2(t.mul(0.6), t.mul(-0.4)))).sub(0.5), oNoise(p.mul(4.3).add(vec2(t.mul(0.5), t.mul(0.7))).add(3.1)).sub(0.5)).mul(0.5))
+    // 滝の落ちる所（uFoam: x, z = 中心、w = 半径）のまわりは波立つ
+    const df = length(p.sub(uniforms.uFoam.xy))
+    const foamK = smoothstep(uniforms.uFoam.w.mul(0.3), uniforms.uFoam.w.mul(1.6), df).oneMinus().toVar()
+    g.mulAssign(foamK.mul(1.6).add(0.35))
+    const N = normalize(vec3(g.x.mul(-0.5), 1.0, g.y.mul(-0.5))).toVar()
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const ndv = max(dot(N, V), 0.0)
+    const fres = pow(clamp(ndv.oneMinus(), 0.0, 1.0), 5.0).mul(0.98).add(0.02).toVar()
+    const R = reflect(V.negate(), N).toVar()
+    // 映り込み: 上の空と、ドームの中の木々（水平に近いほど濃い緑）
+    const sky = skyColor(vec3(R.x, max(R.y, 0.02), R.z))
+    const green = vec3(0.025, 0.05, 0.025).mul(u.uDaylight.add(0.6)).add(uniforms.uNightAmb.mul(0.4))
+    const refl = mix(green, sky.mul(0.85), smoothstep(0.15, 0.7, R.y))
+    const sun = pow(max(dot(R, u.uSunDir), 0.0), 400.0).mul(18.0).mul(townShadow(wp.add(vec3(0.0, 0.2, 0.0)), vec3(0.0, 1.0, 0.0)))
+    // 深さの色（底の石が透ける・縁は浅い）
+    const shallow = vUv.y
+    const deep = mix(vec3(0.012, 0.03, 0.03), vec3(0.04, 0.075, 0.06), shallow).mul(u.uSkyLight.mul(2.0).add(uniforms.uNightAmb.mul(2.0)).add(0.02))
+    const col = mix(deep, refl, fres).add(u.uSunLight.mul(sun)).toVar()
+    // 葉脈の光の映り込み（夕方から）
+    const breath = sin(t.mul(0.55)).mul(0.38).add(0.62)
+    col.addAssign(vec3(0.55, 1.0, 0.32).mul(uniforms.uVein).mul(breath).mul(0.06).mul(oNoise(p.mul(0.8).add(vec2(0.0, t.mul(0.1)))).mul(0.5).add(0.5)).mul(fres).mul(4.0))
+    // 白い泡
+    const foam = foamK.mul(smoothstep(0.35, 0.75, oNoise(p.mul(3.0).add(vec2(t.mul(0.9), t.mul(-0.7)))).mul(0.6).add(oNoise(p.mul(9.0).sub(t.mul(1.3))).mul(0.4)).add(foamK.mul(0.3))))
+    col.assign(mix(col, vec3(0.75, 0.8, 0.8).mul(u.uSkyLight.mul(1.2).add(u.uSunLight.mul(0.35)).add(uniforms.uNightAmb.mul(2.0)).add(0.02)), foam.mul(0.85)))
+    return outdoorHaze(col, wp)
+  })()
+  return withUniforms(m, uniforms)
 }
 
 /** 輪の水面（中心・内と外の半径・高さ。v = 外ほど深い → aUv.y = 浅さ） */
@@ -114,58 +125,36 @@ export function poolGeometry(S: (s: number, t: number, h: number) => V3, r0: num
 
 /** 滝（流れ落ちる白い筋・透ける縁・下の泡。aUv = (横 0〜1, 落ちた割合 0〜1, 長さ m)） */
 export function createFallMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'domeFalls',
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    uniforms: { ...outdoorUniforms, uNightAmb: { value: new THREE.Vector3() }, uVein: { value: 0 } },
-    vertexShader: /* glsl */ `
-      attribute vec3 aUv;
-      varying vec3 vWorld;
-      varying vec3 vUv;
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vWorld = wp.xyz;
-        vUv = aUv;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      uniform vec3 uNightAmb;
-      uniform float uVein;
-      varying vec3 vWorld;
-      varying vec3 vUv;
-      void main() {
-        float u = vUv.x;
-        float v = vUv.y;
-        float L = vUv.z;
-        float t = uTime;
-        // 下へ流れる筋（縦に長い筋。落ちるほど速く、ほどけて白くなる）
-        float y = v * L;
-        float speed = 1.6 + 2.6 * v;
-        float w1 = u * 18.0 + 0.6 * sin(y * 0.7 + u * 5.0);
-        float s1 = oNoise(vec2(w1, y * 0.18 - t * speed * 0.18));
-        float s2 = oNoise(vec2(u * 47.0 + 3.0, y * 0.5 - t * speed * 0.5));
-        float s3 = oNoise(vec2(u * 110.0 + 7.0, y * 1.6 - t * speed * 1.6));
-        float streak = smoothstep(0.42, 0.9, s1 * 0.55 + s2 * 0.3 + s3 * 0.15);
-        float edge = smoothstep(0.0, 0.18, u) * smoothstep(1.0, 0.82, u);
-        float ragged = smoothstep(0.0, 0.35, (s2 - 0.25) + (0.5 - abs(u - 0.5)) * 1.6);
-        float a = (0.12 + 0.7 * streak) * edge * mix(1.0, ragged, 0.6);
-        a = mix(a, a * 0.7 + 0.15 * edge, v);
-        a *= smoothstep(0.0, 0.05, v);
-        vec3 base = vec3(0.84, 0.9, 0.93);
-        vec3 light = uSkyLight * 1.1 + uSunLight * 0.35 + uNightAmb * 2.5 + vec3(0.008);
-        vec3 col = base * light * (0.7 + 0.5 * streak);
-        float breath = 0.62 + 0.38 * sin(uTime * 0.55);
-        col += vec3(0.55, 1.0, 0.32) * uVein * breath * 0.12 * streak;
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, clamp(a, 0.0, 0.92));
-        ${TONE}
-      }
-    `,
-  })
+  const uniforms = { uNightAmb: uniform(new THREE.Vector3()), uVein: uniform(0) }
+  const o = outdoorUniforms
+  const vUv = varying(attribute<'vec3'>('aUv', 'vec3'))
+  const m = unlit('domeFalls', { transparent: true, depthWrite: false, side: THREE.DoubleSide })
+  m.colorNode = Fn(() => {
+    const u = vUv.x.toVar()
+    const v = vUv.y.toVar()
+    const L = vUv.z
+    const t = o.uTime
+    // 下へ流れる筋（縦に長い筋。落ちるほど速く、ほどけて白くなる）
+    const y = v.mul(L).toVar()
+    const speed = v.mul(2.6).add(1.6).toVar()
+    const w1 = u.mul(18.0).add(sin(y.mul(0.7).add(u.mul(5.0))).mul(0.6))
+    const s1 = oNoise(vec2(w1, y.mul(0.18).sub(t.mul(speed).mul(0.18))))
+    const s2 = oNoise(vec2(u.mul(47.0).add(3.0), y.mul(0.5).sub(t.mul(speed).mul(0.5)))).toVar()
+    const s3 = oNoise(vec2(u.mul(110.0).add(7.0), y.mul(1.6).sub(t.mul(speed).mul(1.6))))
+    const streak = smoothstep(0.42, 0.9, s1.mul(0.55).add(s2.mul(0.3)).add(s3.mul(0.15))).toVar()
+    const edge = smoothstep(0.0, 0.18, u).mul(smoothstep(0.82, 1.0, u).oneMinus()).toVar()
+    const ragged = smoothstep(0.0, 0.35, s2.sub(0.25).add(float(0.5).sub(abs(u.sub(0.5))).mul(1.6)))
+    const a = streak.mul(0.7).add(0.12).mul(edge).mul(mix(1.0, ragged, 0.6)).toVar()
+    a.assign(mix(a, a.mul(0.7).add(edge.mul(0.15)), v))
+    a.mulAssign(smoothstep(0.0, 0.05, v))
+    const base = vec3(0.84, 0.9, 0.93)
+    const light = o.uSkyLight.mul(1.1).add(o.uSunLight.mul(0.35)).add(uniforms.uNightAmb.mul(2.5)).add(vec3(0.008))
+    const col = base.mul(light).mul(streak.mul(0.5).add(0.7)).toVar()
+    const breath = sin(t.mul(0.55)).mul(0.38).add(0.62)
+    col.addAssign(vec3(0.55, 1.0, 0.32).mul(uniforms.uVein).mul(breath).mul(0.12).mul(streak))
+    return vec4(outdoorHaze(col, positionWorld), clamp(a, 0.0, 0.92))
+  })()
+  return withUniforms(m, uniforms)
 }
 
 /**
@@ -234,63 +223,63 @@ export function fallGeometry(out: { pos: number[]; uv: number[]; idx: number[] }
 /* 霧・しぶき（やわらかい粒）                                                      */
 /* -------------------------------------------------------------------------- */
 
-/** 霧の粒（点。aMist = (大きさ m, 種, 濃さ, 種類 0 = 霧・1 = しぶき)） */
-export function createMistMaterial() {
-  return new THREE.ShaderMaterial({
-    name: 'domeMist',
-    transparent: true,
-    depthWrite: false,
-    uniforms: { ...outdoorUniforms, uPx: { value: 600 }, uNightAmb: { value: new THREE.Vector3() }, uMist: { value: 1 } },
-    vertexShader: /* glsl */ `
-      ${COMMON}
-      attribute vec4 aMist;
-      uniform float uPx;
-      varying float vA;
-      varying float vKind;
-      varying vec3 vWorld;
-      void main() {
-        vec3 p = position;
-        float t = uTime;
-        float ph = aMist.y * 6.2831;
-        // 漂う（霧は横へゆっくり・しぶきは上へ舞う）
-        if (aMist.w < 0.5) {
-          p.x += sin(t * 0.07 + ph) * 1.6;
-          p.z += cos(t * 0.05 + ph * 1.3) * 1.6;
-          p.y += sin(t * 0.11 + ph) * 0.4;
-        } else {
-          float k = fract(t * 0.25 + aMist.y);
-          p.y += k * 2.2;
-          p.x += sin(ph) * k * 1.2;
-          p.z += cos(ph) * k * 1.2;
-          vA = 1.0 - k;
-        }
-        vec4 wp = modelMatrix * vec4(p, 1.0);
-        vWorld = wp.xyz;
-        vec4 mv = viewMatrix * wp;
-        gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(aMist.x * uPx / max(-mv.z, 0.5), 1.0, 900.0);
-        float pulse = aMist.w < 0.5 ? (0.6 + 0.4 * sin(t * 0.18 + ph)) : vA;
-        vA = aMist.z * pulse * smoothstep(0.8, 6.0, -mv.z);
-        vKind = aMist.w;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      ${COMMON}
-      uniform vec3 uNightAmb;
-      uniform float uMist;
-      varying float vA;
-      varying float vKind;
-      varying vec3 vWorld;
-      void main() {
-        vec2 q = gl_PointCoord * 2.0 - 1.0;
-        float r2 = dot(q, q);
-        if (r2 > 1.0) discard;
-        float a = (1.0 - r2) * (1.0 - r2) * vA * uMist;
-        vec3 col = vec3(0.86, 0.9, 0.92) * (uSkyLight * 1.1 + uSunLight * 0.25 + uNightAmb * 2.2 + 0.01);
-        col = outdoorHaze(col, vWorld);
-        gl_FragColor = vec4(col, a);
-        ${TONE}
-      }
-    `,
-  })
+/** 霧の粒の点ごとの値（位置 3・aMist 4 = 大きさ m, 種, 濃さ, 種類 0 = 霧・1 = しぶき） */
+export interface MistAttributes {
+  position: THREE.InstancedBufferAttribute
+  aMist: THREE.InstancedBufferAttribute
+}
+
+/**
+ * 霧の粒（Sprite を粒の数だけ並べる。WebGPU の点は 1px だけなので、1px を超える点は PointsNodeMaterial の sizeNode）。
+ * 大きさは uPx（描き先の画素。画面の高さから）。sizeNode は CSS の px で three が画素の比を掛けるので、画素の比で割って渡す
+ */
+export function createMistMaterial(attrs: MistAttributes) {
+  const uniforms = { uPx: uniform(600), uNightAmb: uniform(new THREE.Vector3()), uMist: uniform(1) }
+  const o = outdoorUniforms
+  const pos = instancedBufferAttribute(attrs.position, 'vec3' as const)
+  const aMist = instancedBufferAttribute(attrs.aMist, 'vec4' as const)
+  const t = o.uTime
+  // 頂点の値は Fn の中で toVar にしてから分岐（select）で使う（分岐の中で初めて組み立てた値を、ほかの分岐で読まないように）
+  const spray = aMist.w.greaterThanEqual(0.5)
+  const p = Fn(() => {
+    const ph = aMist.y.mul(6.2831).toVar()
+    const k = fract(t.mul(0.25).add(aMist.y)).toVar()
+    // 漂う（霧は横へゆっくり・しぶきは上へ舞う）
+    const drift = vec3(sin(t.mul(0.07).add(ph)).mul(1.6), sin(t.mul(0.11).add(ph)).mul(0.4), cos(t.mul(0.05).add(ph.mul(1.3))).mul(1.6)).toVar()
+    const rise = vec3(sin(ph).mul(k).mul(1.2), k.mul(2.2), cos(ph).mul(k).mul(1.2)).toVar()
+    return pos.add(select(spray, rise, drift))
+  })()
+  const depth = Fn(() => modelViewMatrix.mul(vec4(p, 1.0)).z.negate())()
+  const m = new THREE.PointsNodeMaterial({ transparent: true, depthWrite: false, sizeAttenuation: false, fog: false })
+  m.name = 'domeMist'
+  m.positionNode = p
+  m.sizeNode = clamp(aMist.x.mul(uniforms.uPx).div(max(depth, 0.5)), 1.0, 900.0).div(screenDPR)
+  const vA = varying(
+    Fn(() => {
+      const ph = aMist.y.mul(6.2831).toVar()
+      const k = fract(t.mul(0.25).add(aMist.y)).toVar()
+      const d = modelViewMatrix.mul(vec4(p, 1.0)).z.negate().toVar()
+      const pulse = select(spray, k.oneMinus(), sin(t.mul(0.18).add(ph)).mul(0.4).add(0.6))
+      return aMist.z.mul(pulse).mul(smoothstep(0.8, 6.0, d))
+    })(),
+  )
+  m.colorNode = Fn(() => {
+    const q = uv().mul(2.0).sub(1.0)
+    const r2 = dot(q, q).toVar()
+    If(r2.greaterThan(1.0), () => {
+      Discard()
+    })
+    const a = r2.oneMinus().mul(r2.oneMinus()).mul(vA).mul(uniforms.uMist)
+    const col = vec3(0.86, 0.9, 0.92).mul(o.uSkyLight.mul(1.1).add(o.uSunLight.mul(0.25)).add(uniforms.uNightAmb.mul(2.2)).add(0.01))
+    return vec4(outdoorHaze(col, positionWorld), a)
+  })()
+  return withUniforms(m, uniforms)
+}
+
+/** 霧の粒の Sprite（粒の数だけ並べた物）。pos = 位置の列（3 つずつ）、mist = aMist の列（4 つずつ） */
+export function createMistSprite(pos: number[], mist: number[]) {
+  const material = createMistMaterial({ position: new THREE.InstancedBufferAttribute(new Float32Array(pos), 3), aMist: new THREE.InstancedBufferAttribute(new Float32Array(mist), 4) })
+  const sprite = new THREE.Sprite(material)
+  sprite.count = pos.length / 3
+  return sprite as THREE.Sprite & { material: typeof material }
 }

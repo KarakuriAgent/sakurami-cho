@@ -6,7 +6,7 @@ import type { DecorContext, InteriorDecor } from '../types'
 import { createDomeGlassMaterial, domeGlassGeometry } from './glass'
 import { angDiff, chunkAt, coreRadius, DEG, DOME, planting, rng, type TreeKind } from './layout'
 import { createPlantMaterials, PlantWriter, writePlant } from './plants'
-import { createFallMaterial, createMistMaterial, createPoolMaterial, fallCurtain, fallGeometry, fallSheet, poolGeometry } from './water'
+import { createFallMaterial, createMistSprite, createPoolMaterial, fallCurtain, fallGeometry, fallSheet, poolGeometry } from './water'
 
 /**
  * ガーデンドームの、共通の形の外の物（中を作るときに 1 回作る）: 木（町の木の仕組み）・新しい形の植物（dome/plants.ts）・池の水面・
@@ -160,9 +160,6 @@ export function domeDecor(ctx: DecorContext): InteriorDecor {
   }
 
   // --- 霧（北の雲霧林の噴霧装置）と、滝つぼのしぶき ---
-  const mistMat = createMistMaterial()
-  mistMat.uniforms.uNightAmb.value = nightAmb
-  disposables.push(mistMat)
   const mp: number[] = []
   const ma: number[] = []
   const mr = rng(31)
@@ -188,11 +185,11 @@ export function domeDecor(ctx: DecorContext): InteriorDecor {
       ma.push(0.4 + mr() * 0.6, mr(), 0.1 + mr() * 0.1, 1)
     }
   }
-  const mg = new THREE.BufferGeometry()
-  mg.setAttribute('position', new THREE.Float32BufferAttribute(mp, 3))
-  mg.setAttribute('aMist', new THREE.Float32BufferAttribute(ma, 4))
-  mg.computeBoundingSphere()
-  const mist = new THREE.Points(mg, mistMat)
+  // 1px を超える点は Sprite（PointsNodeMaterial）を粒の数だけ並べる（WebGPU の点は 1px だけ）
+  const mist = createMistSprite(mp, ma)
+  const mistMat = mist.material
+  mistMat.uniforms.uNightAmb.value = nightAmb
+  disposables.push(mistMat)
   mist.name = 'dome:mist'
   mist.renderOrder = 25
   mist.frustumCulled = false
@@ -236,7 +233,8 @@ export function domeDecor(ctx: DecorContext): InteriorDecor {
     objects,
     update,
     dispose: () => {
-      for (const o of objects) o.traverse((c) => (c as THREE.Mesh).geometry?.dispose())
+      // Sprite の形（板 1 枚）は three の全部の Sprite が共有するので片付けない（霧の粒）
+      for (const o of objects) o.traverse((c) => !(c as THREE.Sprite).isSprite && (c as THREE.Mesh).geometry?.dispose())
       for (const d of disposables) d.dispose()
     },
   }

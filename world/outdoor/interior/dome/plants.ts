@@ -1,9 +1,49 @@
-import * as THREE from 'three'
-import { COMMON, TONE, outdoorUniforms } from '../../materials'
-import { TOWN_LIGHT } from '../../town/facades'
-import { TOWN_SHADOW, depthMaterial, townShadowUniforms } from '../../town/shadows'
+import * as THREE from 'three/webgpu'
+import {
+  Discard,
+  Fn,
+  If,
+  abs,
+  atan,
+  attribute,
+  cameraPosition,
+  clamp,
+  cos,
+  cross,
+  dFdx,
+  dFdy,
+  dot,
+  float,
+  floor,
+  fract,
+  frontFacing,
+  length,
+  max,
+  min,
+  mix,
+  modelWorldMatrix,
+  normalGeometry,
+  normalize,
+  positionGeometry,
+  positionWorld,
+  pow,
+  select,
+  sign,
+  sin,
+  smoothstep,
+  step,
+  uniform,
+  varying,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl'
+import type { Node } from 'three/webgpu'
+import { oNoise, outdoorHaze, outdoorUniforms, unlit, withUniforms } from '../../materials'
+import { townLight } from '../../town/facades'
+import { depthMaterial, townShadow } from '../../town/shadows'
 import type { PlantItem } from './layout'
-import { LEAF_SHADOW } from '../../town/trees'
+import { leafShadow } from '../../town/trees'
 
 /**
  * ガーデンドームの新しい形の植物（町の段階 4 の後半）: ヤシ・木生シダ・シダ・オオタニワタリ・アロカシア（大きな葉に葉脈ライティング）・
@@ -501,224 +541,218 @@ export function writePlant(w: PlantWriter, S: ToScene, p: PlantItem, rnd: () => 
 }
 
 /* -------------------------------------------------------------------------- */
-/* シェーダー                                                                    */
+/* シェーダー（TSL。WebGPU への移行の第 2 段）                                         */
 /* -------------------------------------------------------------------------- */
 
-const PLANT_VERTEX = /* glsl */ `
-${COMMON}
-attribute vec4 aUv;
-attribute vec4 aCol;
-attribute vec4 aWind;
-attribute float aAo;
-uniform float uWind;
-varying vec3 vWorld;
-varying vec3 vNormal;
-varying vec4 vUv;
-varying vec4 vCol;
-varying float vAo;
-varying float vSeed;
-void main() {
-  vec3 p = position;
-  float sway = aUv.w;
-  float h = max(0.0, p.y - aWind.y);
-  float ph = aWind.w * 6.2831 + aWind.x * 0.07 + aWind.z * 0.05;
-  float t = uTime;
-  vec2 w = vec2(sin(t * 0.8 + ph) + 0.45 * sin(t * 1.9 + ph * 1.3), cos(t * 0.63 + ph * 0.8) + 0.3 * sin(t * 1.4 + ph)) * 0.02 * uWind * sway * (0.4 + h * 0.6);
-  float fl = sin(t * 4.0 + dot(p, vec3(3.1, 1.7, 2.3)) + aWind.w * 30.0) * 0.02 * uWind * sway;
-  p.xz += w;
-  p.y += fl;
-  vec4 wp = modelMatrix * vec4(p, 1.0);
-  vWorld = wp.xyz;
-  vNormal = normalize(mat3(modelMatrix) * normal);
-  vUv = aUv;
-  vCol = aCol;
-  vAo = aAo;
-  vSeed = aWind.w;
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}
-`
+type F = Node<'float'>
+type N3 = Node<'vec3'>
+type V4 = Node<'vec4'>
 
-/** GLSL: 葉の形（uv から。透け抜き a と、葉脈 vein） */
-const LEAF_SHAPE = /* glsl */ `
-float leafShape(vec4 uv, out float vein) {
-  vein = 0.0;
-  float kind = uv.z;
-  float u = uv.x;
-  float v = uv.y;
-  float au = abs(u);
-  if (kind < 0.5 || (kind > 5.5 && kind < 6.5) || kind > 8.5) return 1.0;
-  if (kind < 1.5) {
-    // ヤシの羽状の葉: 斜めの小葉の列（先が尖る）。葉軸
-    float env = smoothstep(0.0, 0.12, v) * (1.0 - v * v * 0.6);
-    float g = fract(v * 34.0 - au * 2.6);
-    float duty = 0.52 * (1.0 - pow(au, 1.6));
-    float leaflet = step(g, duty) * step(au, env);
-    vein = 1.0 - smoothstep(0.0, 0.05, au) + (1.0 - smoothstep(0.0, 0.08, abs(g - duty * 0.5))) * leaflet * 0.5;
-    return max(leaflet, step(au, 0.05));
-  }
-  if (kind < 2.5) {
-    // シダの葉: 羽片の列と、羽片の縁の切れ込み
-    float env = pow(sin(3.14159 * clamp(v, 0.0, 1.0)), 0.6);
-    float g = fract(v * 22.0 - au * 1.4);
-    float lobe = 0.75 + 0.25 * sin(fract(au * 9.0) * 3.14159);
-    float duty = 0.62 * (1.0 - pow(au / max(env, 0.01), 2.0)) * lobe;
-    float pinna = step(g, duty) * step(au, env);
-    vein = 1.0 - smoothstep(0.0, 0.05, au);
-    return max(pinna, step(au, 0.04));
-  }
-  if (kind < 3.5) {
-    // 帯の葉: 先の尖った細長い葉（縁がゆるく波打つ）・中の筋
-    float W = (1.0 - pow(max(v, 0.0), 2.6)) * min(1.0, v * 7.0 + 0.2) * (0.93 + 0.07 * sin(v * 38.0));
-    vein = 1.0 - smoothstep(0.0, 0.08, au);
-    return step(au, W);
-  }
-  if (kind < 4.5) {
-    // ハートの形の葉（アロカシア）: 付け根の切れ込み・尖った先・中の筋と斜めの葉脈（光る）
-    float W = pow(sin(3.14159 * clamp(v * 0.9 + 0.1, 0.0, 1.0)), 0.55) * (1.0 - pow(max(v, 0.0), 5.0));
-    float notch = step(v, 0.16 - au * 0.42);
-    float d = fract((v - au * 0.42) * 7.0);
-    float lat = (1.0 - smoothstep(0.0, 0.06, min(d, 1.0 - d))) * step(0.06, au) * step(au, W * 0.92);
-    vein = max(1.0 - smoothstep(0.0, 0.035, au), lat);
-    return step(au, W) * (1.0 - notch);
-  }
-  if (kind < 5.5) {
-    // アシの葉
-    vein = 0.0;
-    return step(au, 1.0 - v * 0.95);
-  }
-  if (kind < 7.5) {
-    // 花（放射の花びら）
-    float r = length(vec2(u, v));
-    float th = atan(v, u);
-    float petal = 0.55 + 0.45 * abs(cos(th * 7.0));
-    vein = 1.0 - smoothstep(0.0, 0.25, r);
-    return step(r, petal);
-  }
-  // つる: ゆれる茎と、大きさも向きもばらばらの小さな葉（ハートの形）。ところどころ葉が無い
-  float stemU = 0.18 * sin(v * 23.0 + uv.w * 3.0);
-  float leaf = 0.0;
-  for (int i = -1; i <= 1; i++) {
-    float k = floor(v * 18.0) + float(i);
-    float h1 = fract(sin(k * 12.9898 + uv.w * 4.1) * 43758.5453);
-    float h2 = fract(sin(k * 78.233 + 1.7) * 24634.6345);
-    float cv = (k + 0.5 + (h1 - 0.5) * 0.6) / 18.0;
-    float sideU = (h2 < 0.5 ? 0.42 : -0.42) + stemU;
-    float sz = 0.65 + 0.5 * h1;
-    vec2 q = vec2((u - sideU) / (0.55 * sz), (v - cv) * 18.0 / (1.1 * sz));
-    q.y += abs(q.x) * 0.35;
-    leaf = max(leaf, step(dot(q, q), 1.0) * step(0.18, h2 * 1.3 - 0.1));
-  }
-  return max(leaf, step(abs(u - stemU), 0.05));
-}
-`
+const PI = 3.14159
 
-const PLANT_FRAGMENT = /* glsl */ `
-${COMMON}
+/** 葉の形（uv から。透け抜き a と、葉脈 vein）。呼ぶ側の Fn の中で式を組む（前の GLSL の out の引数を返すため） */
+function leafShape(uv: V4) {
+  const vein = float(0.0).toVar()
+  const a = float(1.0).toVar()
+  const kind = uv.z.toVar()
+  const u = uv.x.toVar()
+  const v = uv.y.toVar()
+  const au = abs(u).toVar()
+  If(kind.lessThan(0.5).or(kind.greaterThan(5.5).and(kind.lessThan(6.5))).or(kind.greaterThan(8.5)), () => {
+    a.assign(1.0)
+  })
+    .ElseIf(kind.lessThan(1.5), () => {
+      // ヤシの羽状の葉: 斜めの小葉の列（先が尖る）。葉軸
+      const env = smoothstep(0.0, 0.12, v).mul(v.mul(v).mul(0.6).oneMinus())
+      const g = fract(v.mul(34.0).sub(au.mul(2.6))).toVar()
+      const duty = pow(au, 1.6).oneMinus().mul(0.52).toVar()
+      const leaflet = step(g, duty).mul(step(au, env)).toVar()
+      vein.assign(smoothstep(0.0, 0.05, au).oneMinus().add(smoothstep(0.0, 0.08, abs(g.sub(duty.mul(0.5)))).oneMinus().mul(leaflet).mul(0.5)))
+      a.assign(max(leaflet, step(au, 0.05)))
+    })
+    .ElseIf(kind.lessThan(2.5), () => {
+      // シダの葉: 羽片の列と、羽片の縁の切れ込み
+      const env = pow(sin(clamp(v, 0.0, 1.0).mul(PI)), 0.6).toVar()
+      const g = fract(v.mul(22.0).sub(au.mul(1.4)))
+      const lobe = sin(fract(au.mul(9.0)).mul(PI)).mul(0.25).add(0.75)
+      const duty = pow(au.div(max(env, 0.01)), 2.0).oneMinus().mul(0.62).mul(lobe)
+      const pinna = step(g, duty).mul(step(au, env))
+      vein.assign(smoothstep(0.0, 0.05, au).oneMinus())
+      a.assign(max(pinna, step(au, 0.04)))
+    })
+    .ElseIf(kind.lessThan(3.5), () => {
+      // 帯の葉: 先の尖った細長い葉（縁がゆるく波打つ）・中の筋
+      const W = pow(max(v, 0.0), 2.6).oneMinus().mul(min(1.0, v.mul(7.0).add(0.2))).mul(sin(v.mul(38.0)).mul(0.07).add(0.93))
+      vein.assign(smoothstep(0.0, 0.08, au).oneMinus())
+      a.assign(step(au, W))
+    })
+    .ElseIf(kind.lessThan(4.5), () => {
+      // ハートの形の葉（アロカシア）: 付け根の切れ込み・尖った先・中の筋と斜めの葉脈（光る）
+      const W = pow(sin(clamp(v.mul(0.9).add(0.1), 0.0, 1.0).mul(PI)), 0.55).mul(pow(max(v, 0.0), 5.0).oneMinus()).toVar()
+      const notch = step(v, float(0.16).sub(au.mul(0.42)))
+      const d = fract(v.sub(au.mul(0.42)).mul(7.0)).toVar()
+      const lat = smoothstep(0.0, 0.06, min(d, d.oneMinus())).oneMinus().mul(step(0.06, au)).mul(step(au, W.mul(0.92)))
+      vein.assign(max(smoothstep(0.0, 0.035, au).oneMinus(), lat))
+      a.assign(step(au, W).mul(notch.oneMinus()))
+    })
+    .ElseIf(kind.lessThan(5.5), () => {
+      // アシの葉
+      vein.assign(0.0)
+      a.assign(step(au, v.mul(0.95).oneMinus()))
+    })
+    .ElseIf(kind.lessThan(7.5), () => {
+      // 花（放射の花びら）
+      const r = length(vec2(u, v)).toVar()
+      const th = atan(v, u)
+      const petal = abs(cos(th.mul(7.0))).mul(0.45).add(0.55)
+      vein.assign(smoothstep(0.0, 0.25, r).oneMinus())
+      a.assign(step(r, petal))
+    })
+    .Else(() => {
+      // つる: ゆれる茎と、大きさも向きもばらばらの小さな葉（ハートの形）。ところどころ葉が無い
+      const stemU = sin(v.mul(23.0).add(uv.w.mul(3.0))).mul(0.18).toVar()
+      const leaf = float(0.0).toVar()
+      for (let i = -1; i <= 1; i++) {
+        const k = floor(v.mul(18.0)).add(i).toVar()
+        const h1 = fract(sin(k.mul(12.9898).add(uv.w.mul(4.1))).mul(43758.5453)).toVar()
+        const h2 = fract(sin(k.mul(78.233).add(1.7)).mul(24634.6345)).toVar()
+        const cv = k.add(0.5).add(h1.sub(0.5).mul(0.6)).div(18.0)
+        const sideU = select(h2.lessThan(0.5), float(0.42), float(-0.42)).add(stemU)
+        const sz = h1.mul(0.5).add(0.65).toVar()
+        const qx = u.sub(sideU).div(sz.mul(0.55)).toVar()
+        const qy = v.sub(cv).mul(18.0).div(sz.mul(1.1)).add(abs(qx).mul(0.35))
+        const q = vec2(qx, qy)
+        leaf.assign(max(leaf, step(dot(q, q), 1.0).mul(step(0.18, h2.mul(1.3).sub(0.1)))))
+      }
+      a.assign(max(leaf, step(abs(u.sub(stemU)), 0.05)))
+    })
+  return { a, vein }
+}
+
 /** 高さ h（m）の凹凸で法線を倒す（画面の微分から。接空間の要らないバンプ） */
-vec3 bumpN(vec3 N, vec3 p, float h) {
-  vec3 dpx = dFdx(p);
-  vec3 dpy = dFdy(p);
-  float dhx = dFdx(h);
-  float dhy = dFdy(h);
-  vec3 r1 = cross(dpy, N);
-  vec3 r2 = cross(N, dpx);
-  float det = dot(dpx, r1);
-  if (abs(det) < 1e-12) return N;
-  vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
-  return normalize(abs(det) * N - grad);
+function bumpN(N: N3, p: N3, h: F) {
+  const dpx = dFdx(p).toVar()
+  const dpy = dFdy(p).toVar()
+  const dhx = dFdx(h)
+  const dhy = dFdy(h)
+  const r1 = cross(dpy, N).toVar()
+  const r2 = cross(N, dpx)
+  const det = dot(dpx, r1).toVar()
+  const grad = sign(det).mul(r1.mul(dhx).add(r2.mul(dhy)))
+  return select(abs(det).lessThan(1e-12), N, normalize(abs(det).mul(N).sub(grad)))
 }
-${TOWN_LIGHT}
-${TOWN_SHADOW}
-${LEAF_SHADOW}
-${LEAF_SHAPE}
-uniform vec3 uNightAmb;
-uniform float uVein;
-varying vec3 vWorld;
-varying vec3 vNormal;
-varying vec4 vUv;
-varying vec4 vCol;
-varying float vAo;
-varying float vSeed;
-void main() {
-  float vein;
-  float a = leafShape(vUv, vein);
-  if (a < 0.5) discard;
-  vec3 V = normalize(cameraPosition - vWorld);
-  vec3 N = normalize(vNormal);
-  float kind = vUv.z;
-  float leafy = (kind > 0.5 && kind < 8.5 && (kind < 5.5 || kind > 6.5)) ? 1.0 : 0.0;
-  // 葉は薄い板: 見ている側の面の向きにする（頂点の法線は葉の表 = 上の側）。back = 葉の裏が見えている
-  float back = 0.0;
-  if (leafy > 0.5) {
-    back = dot(N, V) < 0.0 ? 1.0 : 0.0;
-    if (back > 0.5) N = -N;
-  } else if (!gl_FrontFacing) N = -N;
-  vec3 albedo = vCol.rgb;
-  float ao = vAo;
-  if (leafy > 0.5) {
-    // 葉: 付け根は濃く先は明るい・葉脈は明るい・まだら・縁ほど少し黄色い
-    albedo *= 0.75 + 0.35 * vUv.y;
-    albedo = mix(albedo, albedo * vec3(1.25, 1.3, 0.95), vein * 0.5);
-    albedo *= 0.88 + 0.24 * oNoise(vWorld.xz * 3.0 + vSeed * 9.0);
-    albedo = mix(albedo, albedo * vec3(1.15, 1.1, 0.7), smoothstep(0.6, 1.0, abs(vUv.x)) * 0.35);
-    // 葉の裏は白っぽく黄みのある淡い緑（毛と気孔で光を散らす）
-    albedo = mix(albedo, albedo * vec3(1.35, 1.3, 1.05) + vec3(0.012, 0.014, 0.008), back * 0.75);
-    if (kind > 6.5 && kind < 7.5) albedo = mix(albedo * 1.1, vec3(0.9, 0.7, 0.2), vein * 0.6);
-    if (kind > 3.5 && kind < 4.5) {
-      // アロカシア: 葉脈の間がふくらむ凹凸（照り返しが脈ごとに並ぶ）・白みの強い葉脈・細かい肌理
-      float au = abs(vUv.x);
-      float d = fract((vUv.y - au * 0.42) * 7.0);
-      float h = (0.5 - 0.5 * cos(d * 6.2831)) * 0.006 * smoothstep(0.04, 0.12, au) + (oNoise(vWorld.xz * 60.0 + vWorld.y * 40.0) - 0.5) * 0.0006;
-      N = bumpN(N, vWorld, h);
-      albedo = mix(albedo, vec3(0.42, 0.5, 0.36) * 0.55, vein * 0.55);
-      albedo *= 0.9 + 0.2 * (0.5 - 0.5 * cos(d * 6.2831));
-    } else {
-      // ほかの葉: 細かい肌理の凹凸（板の平らさを崩す）
-      N = bumpN(N, vWorld, (oNoise(vWorld.xz * 45.0 + vWorld.y * 30.0) - 0.5) * 0.0015);
-    }
-  } else if (kind > 8.5) {
-    // 幹: ヤシの輪の模様・木生シダの毛の繊維
-    float rings = 0.5 + 0.5 * sin(vUv.y * 28.0);
-    albedo *= 0.7 + 0.35 * rings * (0.8 + 0.2 * oNoise(vec2(vUv.x * 30.0, vUv.y * 4.0)));
-  } else if (kind > 5.5 && kind < 6.5) {
-    // 苔: 細かいふわふわのまだら
-    float n = oNoise(vWorld.xz * 14.0) * 0.6 + oNoise(vWorld.xz * 41.0) * 0.4;
-    albedo *= 0.7 + 0.5 * n;
-  }
-  float sh0 = townShadow(vWorld, N);
-  float sh = leafy > 0.5 ? leafShadow(sh0) : sh0;
-  vec3 col = townLight(albedo, N, ao, sh) + albedo * uSkyLight * 0.22 * ao;
-  if (leafy > 0.5) {
-    // 透ける光（段階 5 の植物の仕上げ）: 太陽が葉の向こう側にあるとき、葉を通った黄緑の光。空の明るい側を背にした葉（下から見上げた葉）も、空の光で透ける
-    vec3 thru = albedo * vec3(1.15, 1.3, 0.55);
-    float behind = max(-dot(N, uSunDir), 0.0);
-    col += thru * uSunLight * (behind * 0.55 + pow(max(dot(-V, uSunDir), 0.0), 2.5) * 0.6) * sh0;
-    col += thru * uSkyLight * max(-N.y, 0.0) * 0.4 * ao;
-    // 葉の表のつや（ろうの膜）: 太陽の照り返しと、空の映り込み（浅い角度ほど）
-    vec3 H = normalize(uSunDir + V);
-    float fres = pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 5.0);
-    float gloss = (1.0 - back) * (kind > 3.5 && kind < 4.5 ? 1.0 : 0.55);
-    col += uSunLight * pow(max(dot(N, H), 0.0), 60.0) * 0.22 * gloss * sh0;
-    col += uSkyLight * (0.02 + 0.35 * fres) * 0.35 * gloss * ao;
-  }
-  // 夜: 中の灯りの照り返し
-  col += albedo * uNightAmb * (0.6 + 0.4 * ao) * 1.6;
-  // 葉脈ライティング（金緑色。外のドームと同じ呼吸の明滅）
-  float breath = 0.62 + 0.38 * sin(uTime * 0.55);
-  float flow = 0.6 + 0.4 * sin(vUv.y * 9.0 - uTime * 1.3 + vSeed * 20.0);
-  vec3 glow = mix(vec3(0.55, 1.0, 0.32), vec3(0.95, 1.0, 0.5), vein);
-  col += glow * (vein * 0.9 * flow + 0.01) * vCol.a * uVein * breath * leafy;
-  col = outdoorHaze(col, vWorld);
-  gl_FragColor = vec4(col, 1.0);
-  ${TONE}
-}
-`
 
-/** 植物のシェーダー（と、影の深さだけのシェーダー） */
+/** 植物のシェーダー（と、影の深さだけのシェーダー。頂点の計算（風）は positionNode を共有し、葉の形で抜く） */
 export function createPlantMaterials(nightAmb: THREE.Vector3) {
-  const uniforms = { ...outdoorUniforms, ...townShadowUniforms, uWind: { value: 0.35 }, uNightAmb: { value: nightAmb }, uVein: { value: 0 } }
-  const material = new THREE.ShaderMaterial({ name: 'domePlants', uniforms, vertexShader: PLANT_VERTEX, fragmentShader: PLANT_FRAGMENT, side: THREE.DoubleSide, alphaToCoverage: true })
-  // WebGPU への移行（第 1 段）: 深さだけの材質は NodeMaterial の工場（town/shadows.ts）。本体の頂点の計算（PLANT_VERTEX と葉の形 LEAF_SHAPE で抜く所）を positionNode で共有するのは、本体を TSL にする第 2 段で。今は形のまま（インスタンスの行列は NodeMaterial が扱う）で影を落とす
-  const depth = depthMaterial({ side: THREE.DoubleSide })
-  return { material, depth, uniforms }
+  const uniforms = { uWind: uniform(0.35), uNightAmb: uniform(nightAmb), uVein: uniform(0) }
+  const u = outdoorUniforms
+  const t = u.uTime
+  const aUv = attribute<'vec4'>('aUv', 'vec4')
+  const aCol = attribute<'vec4'>('aCol', 'vec4')
+  const aWind = attribute<'vec4'>('aWind', 'vec4')
+  const aAo = attribute<'float'>('aAo', 'float')
+  const p = positionGeometry
+  const sway = aUv.w
+  const h = max(0.0, p.y.sub(aWind.y))
+  const ph = aWind.w.mul(6.2831).add(aWind.x.mul(0.07)).add(aWind.z.mul(0.05))
+  const w = vec2(sin(t.mul(0.8).add(ph)).add(sin(t.mul(1.9).add(ph.mul(1.3))).mul(0.45)), cos(t.mul(0.63).add(ph.mul(0.8))).add(sin(t.mul(1.4).add(ph)).mul(0.3)))
+    .mul(0.02)
+    .mul(uniforms.uWind)
+    .mul(sway)
+    .mul(h.mul(0.6).add(0.4))
+  const fl = sin(t.mul(4.0).add(dot(p, vec3(3.1, 1.7, 2.3))).add(aWind.w.mul(30.0))).mul(0.02).mul(uniforms.uWind).mul(sway)
+  const positionNode = p.add(vec3(w.x, fl, w.y))
+  const vNormal = varying(normalize(modelWorldMatrix.mul(vec4(normalGeometry, 0.0)).xyz))
+  const vUv = varying(aUv)
+  const vCol = varying(aCol)
+  const vAo = varying(aAo)
+  const vSeed = varying(aWind.w)
+
+  const material = unlit('domePlants', { side: THREE.DoubleSide, alphaToCoverage: true })
+  material.positionNode = positionNode
+  material.colorNode = Fn(() => {
+    const wp = positionWorld.toVar()
+    const shape = leafShape(vUv)
+    If(shape.a.lessThan(0.5), () => {
+      Discard()
+    })
+    const vein = shape.vein
+    const V = normalize(cameraPosition.sub(wp)).toVar()
+    const N = normalize(vNormal).toVar()
+    const kind = vUv.z.toVar()
+    const leafy = kind.greaterThan(0.5).and(kind.lessThan(8.5)).and(kind.lessThan(5.5).or(kind.greaterThan(6.5))).toVar()
+    // 葉は薄い板: 見ている側の面の向きにする（頂点の法線は葉の表 = 上の側）。back = 葉の裏が見えている
+    const back = float(0.0).toVar()
+    If(leafy, () => {
+      back.assign(select(dot(N, V).lessThan(0.0), float(1.0), float(0.0)))
+      If(back.greaterThan(0.5), () => {
+        N.assign(N.negate())
+      })
+    }).ElseIf(frontFacing.not(), () => {
+      N.assign(N.negate())
+    })
+    const albedo = vCol.rgb.toVar()
+    const ao = vAo.toVar()
+    If(leafy, () => {
+      // 葉: 付け根は濃く先は明るい・葉脈は明るい・まだら・縁ほど少し黄色い
+      albedo.mulAssign(vUv.y.mul(0.35).add(0.75))
+      albedo.assign(mix(albedo, albedo.mul(vec3(1.25, 1.3, 0.95)), vein.mul(0.5)))
+      albedo.mulAssign(oNoise(wp.xz.mul(3.0).add(vSeed.mul(9.0))).mul(0.24).add(0.88))
+      albedo.assign(mix(albedo, albedo.mul(vec3(1.15, 1.1, 0.7)), smoothstep(0.6, 1.0, abs(vUv.x)).mul(0.35)))
+      // 葉の裏は白っぽく黄みのある淡い緑（毛と気孔で光を散らす）
+      albedo.assign(mix(albedo, albedo.mul(vec3(1.35, 1.3, 1.05)).add(vec3(0.012, 0.014, 0.008)), back.mul(0.75)))
+      If(kind.greaterThan(6.5).and(kind.lessThan(7.5)), () => {
+        albedo.assign(mix(albedo.mul(1.1), vec3(0.9, 0.7, 0.2), vein.mul(0.6)))
+      })
+      If(kind.greaterThan(3.5).and(kind.lessThan(4.5)), () => {
+        // アロカシア: 葉脈の間がふくらむ凹凸（照り返しが脈ごとに並ぶ）・白みの強い葉脈・細かい肌理
+        const au = abs(vUv.x)
+        const d = fract(vUv.y.sub(au.mul(0.42)).mul(7.0)).toVar()
+        const ridge = cos(d.mul(6.2831)).mul(-0.5).add(0.5).toVar()
+        const hh = ridge.mul(0.006).mul(smoothstep(0.04, 0.12, au)).add(oNoise(wp.xz.mul(60.0).add(wp.y.mul(40.0))).sub(0.5).mul(0.0006))
+        N.assign(bumpN(N, wp, hh))
+        albedo.assign(mix(albedo, vec3(0.42, 0.5, 0.36).mul(0.55), vein.mul(0.55)))
+        albedo.mulAssign(ridge.mul(0.2).add(0.9))
+      }).Else(() => {
+        // ほかの葉: 細かい肌理の凹凸（板の平らさを崩す）
+        N.assign(bumpN(N, wp, oNoise(wp.xz.mul(45.0).add(wp.y.mul(30.0))).sub(0.5).mul(0.0015)))
+      })
+    })
+      .ElseIf(kind.greaterThan(8.5), () => {
+        // 幹: ヤシの輪の模様・木生シダの毛の繊維
+        const rings = sin(vUv.y.mul(28.0)).mul(0.5).add(0.5)
+        albedo.mulAssign(rings.mul(0.35).mul(oNoise(vec2(vUv.x.mul(30.0), vUv.y.mul(4.0))).mul(0.2).add(0.8)).add(0.7))
+      })
+      .ElseIf(kind.greaterThan(5.5).and(kind.lessThan(6.5)), () => {
+        // 苔: 細かいふわふわのまだら
+        const n = oNoise(wp.xz.mul(14.0)).mul(0.6).add(oNoise(wp.xz.mul(41.0)).mul(0.4))
+        albedo.mulAssign(n.mul(0.5).add(0.7))
+      })
+    const sh0 = townShadow(wp, N).toVar()
+    const sh = select(leafy, leafShadow(sh0), sh0).toVar()
+    const col = townLight(albedo, N, ao, sh).add(albedo.mul(u.uSkyLight).mul(0.22).mul(ao)).toVar()
+    If(leafy, () => {
+      // 透ける光（段階 5 の植物の仕上げ）: 太陽が葉の向こう側にあるとき、葉を通った黄緑の光。空の明るい側を背にした葉（下から見上げた葉）も、空の光で透ける
+      const thru = albedo.mul(vec3(1.15, 1.3, 0.55)).toVar()
+      const behind = max(dot(N, u.uSunDir).negate(), 0.0)
+      col.addAssign(thru.mul(u.uSunLight).mul(behind.mul(0.55).add(pow(max(dot(V.negate(), u.uSunDir), 0.0), 2.5).mul(0.6))).mul(sh0))
+      col.addAssign(thru.mul(u.uSkyLight).mul(max(N.y.negate(), 0.0)).mul(0.4).mul(ao))
+      // 葉の表のつや（ろうの膜）: 太陽の照り返しと、空の映り込み（浅い角度ほど）
+      const H = normalize(u.uSunDir.add(V))
+      const fres = pow(clamp(dot(N, V).oneMinus(), 0.0, 1.0), 5.0)
+      const gloss = back.oneMinus().mul(select(kind.greaterThan(3.5).and(kind.lessThan(4.5)), float(1.0), float(0.55))).toVar()
+      col.addAssign(u.uSunLight.mul(pow(max(dot(N, H), 0.0), 60.0)).mul(0.22).mul(gloss).mul(sh0))
+      col.addAssign(u.uSkyLight.mul(fres.mul(0.35).add(0.02)).mul(0.35).mul(gloss).mul(ao))
+    })
+    // 夜: 中の灯りの照り返し
+    col.addAssign(albedo.mul(uniforms.uNightAmb).mul(ao.mul(0.4).add(0.6)).mul(1.6))
+    // 葉脈ライティング（金緑色。外のドームと同じ呼吸の明滅）
+    const breath = sin(t.mul(0.55)).mul(0.38).add(0.62)
+    const flow = sin(vUv.y.mul(9.0).sub(t.mul(1.3)).add(vSeed.mul(20.0))).mul(0.4).add(0.6)
+    const glow = mix(vec3(0.55, 1.0, 0.32), vec3(0.95, 1.0, 0.5), vein)
+    col.addAssign(glow.mul(vein.mul(0.9).mul(flow).add(0.01)).mul(vCol.a).mul(uniforms.uVein).mul(breath).mul(select(leafy, float(1.0), float(0.0))))
+    return outdoorHaze(col, wp)
+  })()
+  const depth = depthMaterial({ positionNode, maskNode: Fn(() => leafShape(vUv).a.greaterThanEqual(0.5))(), side: THREE.DoubleSide })
+  return { material: withUniforms(material, uniforms), depth, uniforms }
 }
