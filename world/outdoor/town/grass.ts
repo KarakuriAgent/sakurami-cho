@@ -1,10 +1,39 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  Fn,
+  If,
+  attribute,
+  cameraPosition,
+  cos,
+  dot,
+  float,
+  floor,
+  frontFacing,
+  instanceIndex,
+  length,
+  max,
+  mix,
+  mod,
+  normalGeometry,
+  normalize,
+  positionGeometry,
+  pow,
+  select,
+  sin,
+  smoothstep,
+  step,
+  texture,
+  uniform,
+  varying,
+  vec2,
+  vec3,
+} from 'three/tsl'
 import { SITE } from '../../../core/town'
-import { COMMON, TONE, outdoorUniforms } from '../materials'
-import { TOWN_LIGHT } from './facades'
-import { TOWN_SHADOW, townShadowUniforms } from './shadows'
-import { TOWN_LAMPS, lampUniforms } from './lamps'
-import { GROUND, groundUniforms } from './townMaterials'
+import { oHash, outdoorHaze, outdoorUniforms, unlit, withUniforms } from '../materials'
+import { townLight } from './facades'
+import { townShadow } from './shadows'
+import { townLampsEx } from './lamps'
+import { sampleGroundFlat } from './townMaterials'
 
 /**
  * 草むら（地面の近くの草の葉。インスタンス、風で揺れる、カメラの近くだけ）。
@@ -15,6 +44,7 @@ import { GROUND, groundUniforms } from './townMaterials'
  *   ラボのセット・小道・中のある建物の中など草を置かない所の印）。カメラが 16m 動いたら作り直す
  * - 色は地面の画像の色（芝の色と合う）に、根元を暗く・先を明るく黄色く。逆光で透ける。町の影と夜の灯りを受ける
  * - 遠い株ほど間引き、半径の縁で小さくして消す
+ * - WebGPU への移行（第 2 段）: 材質は TSL（NodeMaterial）。インスタンスの番号は instanceIndex
  */
 
 const LAB = SITE.labFloorElevation
@@ -83,106 +113,86 @@ function tuftGeometry(blades: number, seed: number) {
   return g
 }
 
-const VERTEX = /* glsl */ `
-  ${GROUND}
-  attribute float aH;
-  uniform vec3 uGrassCam;
-  uniform float uSpacing;
-  uniform float uRadius;
-  uniform float uScale;
-  uniform float uGridN;
-  uniform float uThin;
-  uniform sampler2D uHeight;
-  uniform vec4 uHInfo;
-  uniform float uTime;
-  uniform float uWind;
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying float vH;
-  float gHash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-  }
-  void main() {
-    // 格子の升（カメラの近くの升から順に、インスタンスの番号で）
-    float n = uGridN;
-    float id = float(gl_InstanceID);
-    vec2 cellBase = floor(uGrassCam.xz / uSpacing);
-    vec2 cell = cellBase + vec2(mod(id, n), floor(id / n)) - floor(n * 0.5);
-    float h1 = gHash(cell);
-    float h2 = gHash(cell + 17.31);
-    float h3 = gHash(cell + 51.7);
-    vec2 xz = (cell + vec2(h1, h2) * 0.9 + 0.05) * uSpacing;
-    float dist = length(xz - uGrassCam.xz);
-    // 遠いほど間引く・縁で小さく
-    float keep = step(h3, 1.0 - uThin * smoothstep(uRadius * 0.35, uRadius, dist));
-    float edge = 1.0 - smoothstep(uRadius * 0.8, uRadius, dist);
-    // 地面の補助の画像: 植生・舗装・水
-    vec2 plan = vec2(xz.x, -xz.y);
-    vec4 g;
-    vec4 aux;
-    sampleGround(plan, g, aux);
-    float grassy = smoothstep(0.38, 0.6, aux.g) * (1.0 - smoothstep(0.3, 0.5, aux.b)) * step(0.5, aux.a) * step(0.5, g.a);
-    // 高さの画像（CPU）: r = 高さ（シーンの y）、g = 置いてよいか
-    vec2 huv = (xz - uHInfo.xy) / (uHInfo.z * ${HN}.0);
-    vec4 hv = texture2D(uHeight, huv);
-    float inside = step(0.0, huv.x) * step(huv.x, 1.0) * step(0.0, huv.y) * step(huv.y, 1.0);
-    float s = keep * edge * grassy * inside * smoothstep(0.5, 0.9, hv.g) * uScale * (0.65 + 0.7 * gHash(cell + 3.3));
-    if (s < 0.05) {
-      gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
-      return;
-    }
-    float yaw = h1 * 6.2831853;
-    float c = cos(yaw);
-    float sn = sin(yaw);
-    vec3 p = position * s;
-    p.xz = vec2(c * p.x - sn * p.z, sn * p.x + c * p.z);
-    // 風: 上ほど大きく、株ごとに位相をずらし、ゆっくりした大きな波と小刻みな震え
-    float wave = sin(dot(xz, vec2(0.21, 0.17)) - uTime * 1.6) * 0.6 + sin(uTime * 4.3 + h2 * 20.0) * 0.18;
-    float bendAmt = aH * aH * s * 0.22 * uWind * (0.6 + 0.4 * wave);
-    p.x += bendAmt * 0.8;
-    p.z += bendAmt * 0.45;
-    vec3 wp = vec3(xz.x, hv.r + uHInfo.w - 0.03, xz.y) + p;
-    vWorld = wp;
-    vec3 nn = normal;
-    nn.xz = vec2(c * nn.x - sn * nn.z, sn * nn.x + c * nn.z);
-    vNormal = normalize(nn);
-    // 地面の画像の色（テクスチャは sRGB なので読んだ値はリニア）を株ごとにばらつかせる
-    vec3 base = g.rgb;
-    vColor = base * (0.85 + 0.35 * h3) * mix(vec3(1.0), vec3(1.08, 1.05, 0.8), gHash(cell + 9.1) * 0.6);
-    vH = aH;
-    gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
-  }
-`
+/** 草の材質の uniform（1 つの輪ごと） */
+interface GrassUniforms {
+  uGrassCam: THREE.UniformNode<'vec3', THREE.Vector3>
+  uSpacing: THREE.UniformNode<'float', number>
+  uRadius: THREE.UniformNode<'float', number>
+  uScale: THREE.UniformNode<'float', number>
+  uGridN: THREE.UniformNode<'float', number>
+  uThin: THREE.UniformNode<'float', number>
+  uHInfo: THREE.UniformNode<'vec4', THREE.Vector4>
+  uWind: THREE.UniformNode<'float', number>
+}
 
-const FRAGMENT = /* glsl */ `
-  ${COMMON}
-  ${TOWN_LIGHT}
-  ${TOWN_SHADOW}
-  ${TOWN_LAMPS}
-  varying vec3 vWorld;
-  varying vec3 vNormal;
-  varying vec3 vColor;
-  varying float vH;
-  void main() {
-    vec3 N = normalize(vNormal);
-    if (!gl_FrontFacing) N = vec3(-N.x, N.y, -N.z);
-    vec3 V = normalize(cameraPosition - vWorld);
+/**
+ * 草の材質（前の GLSL の VERTEX・FRAGMENT と同じ式）。株の位置は頂点のシェーダー（positionNode）が決める。生えない株は 1 点に潰す
+ * （三角形が面積 0 になって描かれない。前の GLSL はクリップの外へ出していた）
+ */
+function createGrassMaterial(name: string, u: GrassUniforms, height: THREE.Texture) {
+  const m = unlit(name, { side: THREE.DoubleSide })
+  const uHeight = texture(height)
+  const aH = attribute<'float'>('aH', 'float')
+  // 格子の升（カメラの近くの升から順に、インスタンスの番号で）
+  const n = u.uGridN
+  const id = float(instanceIndex)
+  const cellBase = floor(u.uGrassCam.xz.div(u.uSpacing))
+  const cell = cellBase.add(vec2(mod(id, n), floor(id.div(n)))).sub(floor(n.mul(0.5)))
+  const h1 = oHash(cell)
+  const h2 = oHash(cell.add(17.31))
+  const h3 = oHash(cell.add(51.7))
+  const xz = cell.add(vec2(h1, h2).mul(0.9)).add(0.05).mul(u.uSpacing)
+  const dist = length(xz.sub(u.uGrassCam.xz))
+  // 遠いほど間引く・縁で小さく
+  const keep = step(h3, float(1.0).sub(u.uThin.mul(smoothstep(u.uRadius.mul(0.35), u.uRadius, dist))))
+  const edge = smoothstep(u.uRadius.mul(0.8), u.uRadius, dist).oneMinus()
+  // 地面の補助の画像: 植生・舗装・水
+  const plan = vec2(xz.x, xz.y.negate())
+  const { g, aux } = sampleGroundFlat(plan)
+  const grassy = smoothstep(0.38, 0.6, aux.g).mul(smoothstep(0.3, 0.5, aux.b).oneMinus()).mul(step(0.5, aux.a)).mul(step(0.5, g.a))
+  // 高さの画像（CPU）: r = 高さ（シーンの y）、g = 置いてよいか
+  const huv = xz.sub(u.uHInfo.xy).div(u.uHInfo.z.mul(HN))
+  const hv = uHeight.sample(huv)
+  const inside = step(0.0, huv.x).mul(step(huv.x, 1.0)).mul(step(0.0, huv.y)).mul(step(huv.y, 1.0))
+  const sc = keep.mul(edge).mul(grassy).mul(inside).mul(smoothstep(0.5, 0.9, hv.g)).mul(u.uScale).mul(oHash(cell.add(3.3)).mul(0.7).add(0.65))
+  const yaw = h1.mul(6.2831853)
+  const c = cos(yaw)
+  const sn = sin(yaw)
+  const p0 = positionGeometry.mul(sc)
+  // 風: 上ほど大きく、株ごとに位相をずらし、ゆっくりした大きな波と小刻みな震え
+  const t = outdoorUniforms.uTime
+  const wave = sin(dot(xz, vec2(0.21, 0.17)).sub(t.mul(1.6))).mul(0.6).add(sin(t.mul(4.3).add(h2.mul(20.0))).mul(0.18))
+  const bendAmt = aH.mul(aH).mul(sc).mul(0.22).mul(u.uWind).mul(wave.mul(0.4).add(0.6))
+  const p = vec3(c.mul(p0.x).sub(sn.mul(p0.z)).add(bendAmt.mul(0.8)), p0.y, sn.mul(p0.x).add(c.mul(p0.z)).add(bendAmt.mul(0.45)))
+  const wp = vec3(xz.x, hv.r.add(u.uHInfo.w).sub(0.03), xz.y).add(p)
+  // 草の物は動かさないので、ローカルの位置 = シーンの位置
+  m.positionNode = select(sc.lessThan(0.05), vec3(0.0, -1.0e5, 0.0), wp)
+  const nn = normalGeometry
+  const vNormal = varying(normalize(vec3(c.mul(nn.x).sub(sn.mul(nn.z)), nn.y, sn.mul(nn.x).add(c.mul(nn.z)))))
+  // 地面の画像の色（テクスチャは sRGB なので読んだ値はリニア）を株ごとにばらつかせる
+  const vColor = varying(g.rgb.mul(h3.mul(0.35).add(0.85)).mul(mix(vec3(1.0), vec3(1.08, 1.05, 0.8), oHash(cell.add(9.1)).mul(0.6))))
+  const vH = varying(aH)
+  const vWorld = varying(wp)
+  m.colorNode = Fn(() => {
+    const o = outdoorUniforms
+    const wpos = vWorld.toVar()
+    const N = normalize(vNormal).toVar()
+    If(frontFacing.not(), () => {
+      N.assign(vec3(N.x.negate(), N.y, N.z.negate()))
+    })
+    const V = normalize(cameraPosition.sub(wpos))
     // 根元は暗く（株の中の陰）、先は明るく少し黄色く
-    vec3 albedo = vColor * mix(0.45, 1.25, vH) * mix(vec3(1.0), vec3(1.15, 1.08, 0.75), vH * vH * 0.5);
-    float sh = mix(0.25, 1.0, townShadow(vWorld, vec3(0.0, 1.0, 0.0)));
-    float ao = mix(0.5, 1.0, vH);
-    vec3 col = townLight(albedo, N, ao, sh) + albedo * uSkyLight * 0.25 * ao;
+    const albedo = vColor.mul(mix(0.45, 1.25, vH)).mul(mix(vec3(1.0), vec3(1.15, 1.08, 0.75), vH.mul(vH).mul(0.5))).toVar()
+    const sh = mix(0.25, 1.0, townShadow(wpos, vec3(0.0, 1.0, 0.0))).toVar()
+    const ao = mix(0.5, 1.0, vH).toVar()
+    const col = townLight(albedo, N, ao, sh).add(albedo.mul(o.uSkyLight).mul(0.25).mul(ao)).toVar()
     // 逆光で透ける
-    col += albedo * uSunLight * pow(max(dot(-V, uSunDir), 0.0), 4.0) * 0.8 * sh * vH;
-    col += albedo * townLampsEx(vWorld, N, 0.0, 0.5) * ao;
-    col = outdoorHaze(col, vWorld);
-    gl_FragColor = vec4(col, 1.0);
-    ${TONE}
-  }
-`
+    col.addAssign(albedo.mul(o.uSunLight).mul(pow(max(dot(V.negate(), o.uSunDir), 0.0), 4.0)).mul(0.8).mul(sh).mul(vH))
+    col.addAssign(albedo.mul(townLampsEx(wpos, N, float(0.0), float(0.5))).mul(ao))
+    return outdoorHaze(col, wpos)
+  })()
+  return withUniforms(m, u)
+}
 
 export interface GrassOptions {
   radius: number
@@ -197,7 +207,7 @@ export class Grass {
   private data: Uint16Array
   private info = new THREE.Vector4(0, 0, HCELL, 0)
   private last = new THREE.Vector2(1e9, 1e9)
-  private mats: THREE.ShaderMaterial[] = []
+  private mats: ReturnType<typeof createGrassMaterial>[] = []
   private opt: GrassOptions
 
   constructor(opt: GrassOptions, layer: number) {
@@ -219,27 +229,16 @@ export class Grass {
       const n = Math.ceil((ring.radius * 2) / ring.spacing)
       const geo = tuftGeometry(ring.blades, 1234 + i * 77)
       geo.instanceCount = n * n
-      const mat = new THREE.ShaderMaterial({
-        name: `townGrass${i}`,
-        side: THREE.DoubleSide,
-        uniforms: {
-          ...outdoorUniforms,
-          ...groundUniforms,
-          ...townShadowUniforms,
-          ...lampUniforms,
-          uGrassCam: { value: new THREE.Vector3() },
-          uSpacing: { value: ring.spacing },
-          uRadius: { value: ring.radius },
-          uScale: { value: ring.scale },
-          uGridN: { value: n },
-          uThin: { value: i === 0 ? 0.35 : 0.7 },
-          uHeight: { value: this.tex },
-          uHInfo: { value: this.info },
-          uWind: { value: 1 },
-        },
-        vertexShader: VERTEX,
-        fragmentShader: FRAGMENT,
-      })
+      const mat = createGrassMaterial(`townGrass${i}`, {
+        uGrassCam: uniform(new THREE.Vector3()),
+        uSpacing: uniform(ring.spacing),
+        uRadius: uniform(ring.radius),
+        uScale: uniform(ring.scale),
+        uGridN: uniform(n),
+        uThin: uniform(i === 0 ? 0.35 : 0.7),
+        uHInfo: uniform(this.info),
+        uWind: uniform(1),
+      }, this.tex)
       const mesh = new THREE.Mesh(geo, mat)
       mesh.frustumCulled = false
       mesh.layers.set(layer)

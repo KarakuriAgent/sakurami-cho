@@ -8,7 +8,7 @@ import { createBeamMaterial, createDomeMaterial, createLightsSprite, createStruc
 import { beamGeometry } from './shapes'
 import { skyParts } from './sky'
 import { OUTDOOR_LAYER } from './layers'
-import { collectInstances, instancedBuildingMesh, polyBuildingsGeometry, windowSpriteGeometry } from './town/buildingKit'
+import { collectInstances, instancedBuildingMesh, polyBuildingsGeometry } from './town/buildingKit'
 import { buildInfraGeometry, buildWaterGeometry, gardenDomeMesh, structurePlacements } from './town/infraMeshes'
 import { createSoranowa } from './town/soranowa'
 import { Grass } from './town/grass'
@@ -18,7 +18,7 @@ import { LIGHT_KIND, lightsGeometry } from './town/lights'
 import { buildTerrainGeometry, terrainGeometrySteps, terrainHeight, terrainOptions } from './town/terrain'
 import { townData } from './town/townData'
 import { TownShadows, depthMaterial } from './town/shadows'
-import { siteGroundUniforms, createGroundMaterial, createTownBuildingDepthMaterial, createTownBuildingMaterial, propsCenter, createWaterMaterial, createWindowSpriteMaterial, groundTexture, groundUniforms } from './town/townMaterials'
+import { siteGroundUniforms, createGroundMaterial, createTownBuildingDepthMaterial, createTownBuildingMaterial, propsCenter, createWaterMaterial, createWindowSprites, groundTexture, groundUniforms } from './town/townMaterials'
 import { createTreeMaterials, shrubMesh, treeMeshes } from './town/trees'
 import { createPropMaterials, propMeshes, shopFrontLamps } from './town/props'
 import { LAMP, buildLampTable, lampTableSteps, lampUniforms, setLampFade, updateLampUniforms, type Lamp } from './town/lamps'
@@ -146,9 +146,9 @@ function createTown(anisotropy: number) {
   polys.frustumCulled = false
   polys.name = 'townBuildings:poly'
   polys.userData.shadowMaterial = polyDepth
-  const spriteMat = createWindowSpriteMaterial()
-  const sprites = new THREE.Points(windowSpriteGeometry(all), spriteMat)
-  sprites.frustumCulled = false
+  // 遠くの窓明かりの点（Sprite を 1 棟 16 個。town/townMaterials.ts）
+  const sprites = createWindowSprites(all)
+  const spriteMat = sprites.material
   sprites.visible = quality.windowSprites
 
   // 木

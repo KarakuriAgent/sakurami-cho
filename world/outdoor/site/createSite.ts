@@ -97,7 +97,7 @@ export function createLabSite(anisotropy: number, treeMat: TreeMaterials | null)
   const heads = lampHeads().sort((a, b) => a.lengthSq() - b.lengthSq())
   const u = siteUniforms
   u.uLampCount.value = Math.min(MAX_LAMPS, heads.length)
-  heads.slice(0, MAX_LAMPS).forEach((h, i) => u.uLamps.value[i].set(h.x, h.y, h.z, 1))
+  heads.slice(0, MAX_LAMPS).forEach((h, i) => (u.uLamps.array[i] as THREE.Vector4).set(h.x, h.y, h.z, 1))
   const lightItems: LightItem[] = heads.map((h, i) => ({ x: h.x, y: -h.z, z: h.y + LAB - 0.02, kind: LIGHT_KIND.path, color: '#ffb866', size: 0.32, power: 1.5, seed: (i * 0.618) % 1 * 0.3 }))
 
   // 細かい影の地図に入れる物（殻とセット。花音と KB-001 は character/avatar/characterVisual・KB001 が入れる）

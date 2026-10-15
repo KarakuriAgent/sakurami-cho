@@ -359,36 +359,28 @@ export function collectInstances(
   return { byRoof, all }
 }
 
-/** 型のインスタンスの描画（Mesh + InstancedBufferGeometry。InstancedMesh の行列は使わない）。key = 屋根の形 × 2 + 遠いか */
+/**
+ * 型のインスタンスの描画（Mesh + InstancedBufferGeometry。InstancedMesh の行列は使わない）。key = 屋根の形 × 2 + 遠いか。
+ * インスタンスの値 6 つは 1 本の浮動小数のバッファに交互に並べる（WebGPU の頂点バッファは 8 本まで。型の頂点 3 本 + 6 本では足りない。
+ * バイトの値（iWall・iRoof・iMeta）も 0〜255 の浮動小数のまま入れ、シェーダーが 255 で割る）
+ */
 export function instancedBuildingMesh(key: number, set: InstanceSet, material: THREE.Material, depth?: THREE.Material) {
   const roof = key >> 1
   const g = (key & 1 ? ARCHETYPES_FAR : ARCHETYPES)[roof]()
-  for (const [name, attr] of Object.entries(set.attrs)) g.setAttribute(name, attr)
+  const stride = INSTANCE_ATTRIBUTES.length * 4
+  const data = new Float32Array(Math.max(1, set.count) * stride)
+  INSTANCE_ATTRIBUTES.forEach(([name], f) => {
+    const a = set.attrs[name].array
+    for (let i = 0; i < set.count; i++) for (let c = 0; c < 4; c++) data[i * stride + f * 4 + c] = a[i * 4 + c]!
+  })
+  const buf = new THREE.InstancedInterleavedBuffer(data, stride, 1)
+  INSTANCE_ATTRIBUTES.forEach(([name], f) => g.setAttribute(name, new THREE.InterleavedBufferAttribute(buf, 4, f * 4)))
   g.instanceCount = set.count
   const mesh = new THREE.Mesh(g, material)
   mesh.frustumCulled = false
   mesh.name = `townBuildings:${roof}${key & 1 ? ':far' : ''}`
   if (depth) mesh.userData.shadowMaterial = depth
   return mesh
-}
-
-/** 遠くの窓明かりの点（建物 1 棟につき 16 点。壁 4 面 × 2 × 2） */
-export function windowSpriteGeometry(all: InstanceSet) {
-  const g = new THREE.InstancedBufferGeometry()
-  const n = 16
-  const p = new Float32Array(n * 4)
-  const pos = new Float32Array(n * 3)
-  // 順番（aP.w）は、小さい建物でも 4 面に散るように並べる
-  for (let k = 0; k < n; k++) {
-    const side = k % 4
-    const slot = Math.floor(k / 4)
-    p.set([side, [0.3, 0.7, 0.15, 0.85][slot], [0.35, 0.75, 0.9, 0.15][slot], k], k * 4)
-  }
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-  g.setAttribute('aP', new THREE.BufferAttribute(p, 4))
-  for (const [name, attr] of Object.entries(all.attrs)) g.setAttribute(name, attr)
-  g.instanceCount = all.count
-  return g
 }
 
 /* -------------------------------------------------------------------------- */
