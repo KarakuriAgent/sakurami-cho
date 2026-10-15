@@ -105,7 +105,7 @@ function placeholderArray() {
 /**
  * 町の質感の uniform（建物・地面・木・小物のシェーダーが共有する。createTownTextures が中身を入れる）。
  * WebGPU への移行（第 1 段）から TSL の TextureNode（TSL の材質は townTextureUniforms.uBldAlb.sample(uv).depth(層) のように読む。value を替えると
- * 読む側の材質も替わる）。名前は前の GLSL の uniform と同じ（まだ TSL にしていない ShaderMaterial が uniforms に広げて使う）
+ * 読む側の材質も替わる）。名前は前の GLSL の uniform と同じ
  */
 export const townTextureUniforms = {
   uBldAlb: texture(placeholderArray()),
@@ -125,11 +125,3 @@ export function createTownTextures(images: TownTextureImages | null, anisotropy:
   u.uGndNrm.value = arrayTexture(images?.groundNormal ?? null, GROUND_LAYERS, false, anisotropy, [128, 128, 255, 255])
   u.uFoliage.value = plainTexture(images?.foliage ?? null, anisotropy)
 }
-
-/** GLSL: 質感の sampler の宣言（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す） */
-export const TEXTURE_DECL = /* glsl */ `
-uniform highp sampler2DArray uBldAlb;
-uniform highp sampler2DArray uBldNrm;
-uniform highp sampler2DArray uGndAlb;
-uniform highp sampler2DArray uGndNrm;
-`

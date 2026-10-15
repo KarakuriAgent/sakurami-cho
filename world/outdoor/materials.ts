@@ -10,7 +10,6 @@ import {
   clamp,
   dot,
   exp,
-  faceDirection,
   float,
   floor,
   fract,
@@ -66,7 +65,8 @@ type Node<T = unknown> = THREE.Node<T>
  *   出力の変換がするので無くした。使う側が毎コマ書く値は、前と同じ material.uniforms.<名前>.value（ノードの uniform）
  * - 1px を超える点（星・町の灯り）は Points ではなく Sprite（PointsNodeMaterial）を count 個（インスタンス）並べ、大きさは sizeNode（WebGPU の
  *   点は 1px だけ）。点ごとの値は InstancedBufferAttribute
- * - GLSL の COMMON・SKY・TONE は、まだ TSL にしていない ShaderMaterial のためだけに残す（WebGPU では描けない。第 2 段でそれぞれを TSL にしたら消す）
+ * - 第 2 段: 町・名前のある建物・中・乗り物・ラボのどの材質も TSL になり、GLSL の部品（COMMON・SKY・TONE・TOWN_LIGHT・TOWN_SHADOW・TOWN_LAMPS・
+ *   TEXTURE_DECL・GLSL_HASH）と、まだ移していない ShaderMaterial を描かない仮の決まり（materials/unported.ts）は消した
  */
 
 /**
@@ -191,92 +191,16 @@ export const skyColor = Fn(([d]: [Node<'vec3'>]) => {
 })
 
 /* -------------------------------------------------------------------------- */
-/* GLSL の部品（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す）     */
+/* 材質の土台                                                                     */
 /* -------------------------------------------------------------------------- */
 
-export const COMMON = /* glsl */ `
-uniform vec3 uSunDir;
-uniform vec3 uSunLight;
-uniform vec3 uSkyLight;
-uniform vec3 uHaze;
-uniform float uHazeDist;
-uniform float uNight;
-uniform float uDaylight;
-uniform float uTime;
-
-float oHash(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-float oNoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(oHash(i), oHash(i + vec2(1.0, 0.0)), u.x), mix(oHash(i + vec2(0.0, 1.0)), oHash(i + vec2(1.0, 1.0)), u.x), u.y);
-}
-
-/** 太陽の直射と空の光（ランバート。下向きの面には地面の照り返し） */
-vec3 outdoorShade(vec3 albedo, vec3 N) {
-  float ndl = max(dot(N, uSunDir), 0.0);
-  float up = N.y * 0.5 + 0.5;
-  vec3 amb = uSkyLight * (0.42 + 0.58 * up) + uSunLight * 0.07 * (1.0 - up);
-  return albedo * (uSunLight * ndl + amb);
-}
-
-/** 空気遠近（遠いほど地平線の空の色に溶け込む） */
-vec3 outdoorHaze(vec3 col, vec3 wp) {
-  vec3 dv = wp - cameraPosition;
-  float d = length(dv);
-  float f = 1.0 - exp(-d / uHazeDist);
-  // 太陽の方を見るほど、かすみは太陽の光を散らして明るく暖かい（前方散乱。逆光の町に奥行きが出る）
-  float toSun = max(dot(dv / max(d, 1e-3), uSunDir), 0.0);
-  vec3 haze = uHaze + uSunLight * (pow(toSun, 6.0) * 0.12 + pow(toSun, 40.0) * 0.2) * smoothstep(-0.05, 0.1, uSunDir.y);
-  return mix(col, haze, f);
-}
-`
-
-export const SKY = /* glsl */ `
-uniform vec3 uZenith;
-uniform vec3 uMid;
-uniform vec3 uHorizon;
-uniform vec3 uHorizonAnti;
-uniform vec3 uGlow;
-uniform vec3 uCityGlow;
-uniform vec2 uTownDir;
-
-/** 空の色（方向 d。地平線 → 中ほど → 天頂の 3 段のグラデーションと、太陽の側の地平線の光、夜の町明かり） */
-vec3 skyColor(vec3 d) {
-  float h = max(d.y, 0.0);
-  // 地平線の色は、太陽の側（朝夕の橙・桃色）と反対側（青紫）で変える
-  vec2 sxz = uSunDir.xz;
-  float side = dot(normalize(d.xz + vec2(1e-5)), sxz / max(length(sxz), 1e-4)) * 0.5 + 0.5;
-  vec3 horizon = mix(uHorizonAnti, uHorizon, smoothstep(0.1, 0.95, side));
-  vec3 c = mix(horizon, uMid, smoothstep(0.0, 0.32, pow(h, 0.85)));
-  c = mix(c, uZenith, smoothstep(0.2, 0.9, h));
-  float sunSide = max(dot(d, uSunDir), 0.0);
-  float band = exp(-h * 4.0);
-  c += uGlow * (pow(sunSide, 3.0) * band * 1.1 + pow(sunSide, 16.0) * 0.9);
-  vec2 dxz = normalize(d.xz + vec2(1e-5));
-  c += uCityGlow * smoothstep(0.0, 0.85, dot(dxz, uTownDir)) * exp(-h * 16.0);
-  // 地平線より下（海・地面の向こう）は地平線の色を少し暗く
-  c = mix(c, horizon * 0.75, smoothstep(0.0, -0.06, d.y));
-  return c;
-}
-`
-
-export const TONE = /* glsl */ `
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-`
-
 /** 材質に、使う側が毎コマ書く uniform（ノード）の一覧を付ける（前の ShaderMaterial の material.uniforms.<名前>.value と同じ書き方で使える） */
-function withUniforms<M extends THREE.Material, U extends object>(m: M, uniforms: U): M & { readonly uniforms: U } {
+export function withUniforms<M extends THREE.Material, U extends object>(m: M, uniforms: U): M & { readonly uniforms: U } {
   return Object.assign(m, { uniforms })
 }
 
 /** 色だけを自前の式で決める、ライトも霧も使わない材質（遠景の材質の土台） */
-function unlit(name: string, params: ConstructorParameters<typeof THREE.MeshBasicNodeMaterial>[0] = {}) {
+export function unlit(name: string, params: ConstructorParameters<typeof THREE.MeshBasicNodeMaterial>[0] = {}) {
   const m = new THREE.MeshBasicNodeMaterial({ fog: false, ...params })
   m.name = name
   return m
@@ -380,7 +304,7 @@ export function createStructureMaterial() {
   const m = unlit('outdoorStructures', { side: THREE.DoubleSide })
   m.colorNode = Fn(() => {
     const wp = positionWorld.toVar()
-    const N = normalize(normalWorld).mul(faceDirection).toVar()
+    const N = normalize(normalWorld).toVar() // 両面: normalWorld は裏の面で反転済み（MeshBasicNodeMaterial の setupNormal）
     const color = attribute<'vec3'>('color', 'vec3' as const)
     const emit = attribute<'vec4'>('aEmit', 'vec4')
     // 質感（三方向から投影。煉瓦色は煉瓦、ほかはコンクリート）と、雨の筋・足元の汚れ

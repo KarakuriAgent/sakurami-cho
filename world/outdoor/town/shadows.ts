@@ -16,7 +16,6 @@ import { Fn, If, clamp, dot, float, max, min, mix, smoothstep, sqrt, step, textu
  * - 材質の差し替えは renderer.setRenderObjectFunction で（形ごとに userData.shadowMaterial を使う。traverse で材質や visible を書き換えない）
  * - 影の座標の行列の前に掛ける bias の行列は renderer.coordinateSystem で切り替える（WebGPU は NDC の z が 0〜1、テクスチャの v が下向き）
  * - 描く前に読んでも誤りにならないので、前の ensureInit（一度描き先にしておく）は無くした
- * - GLSL の TOWN_SHADOW は、まだ TSL にしていない ShaderMaterial のためだけに残す（WebGPU では描けない。第 2 段でそれぞれを TSL にしたら消す）
  */
 
 /** 比べの設定のある、まだ描いていない深さのテクスチャ（影の地図を作る前に、読む側の材質を組み立てる時の仮の物） */
@@ -28,7 +27,7 @@ function placeholderDepth() {
 
 /**
  * 影の uniform（ノード）。影の地図の深さのテクスチャは TextureNode で、TownShadows を作ると value が替わる（読む側の材質は作り直さない）。
- * 名前は前の GLSL の uniform と同じ（まだ TSL にしていない ShaderMaterial が uniforms に広げて使う）
+ * 名前は前の GLSL の uniform と同じ
  */
 export const townShadowUniforms = {
   uShadowNear: texture(placeholderDepth()),
@@ -53,57 +52,11 @@ export const townShadowUniforms = {
  * 無ければ（花音のスキンのある形など）深さだけの共有の材質で描く
  */
 export const localShadowCasters = new Set<THREE.Object3D>()
-
-/** GLSL: townShadow(ワールドの位置, 法線) → 0〜1（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す） */
-export const TOWN_SHADOW = /* glsl */ `
-uniform highp sampler2DShadow uShadowNear;
-uniform highp sampler2DShadow uShadowFar;
-uniform mat4 uShadowM0;
-uniform mat4 uShadowM1;
-uniform vec4 uShadowInfo;
-uniform highp sampler2DShadow uShadowLocal;
-uniform mat4 uShadowM2;
-uniform vec2 uShadowLocalInfo;
-float shadowTap(highp sampler2DShadow map, mat4 m, vec3 wp, out float inside) {
-  vec4 p = m * vec4(wp, 1.0);
-  vec3 q = p.xyz;
-  vec2 e = min(q.xy, 1.0 - q.xy);
-  inside = smoothstep(0.0, 0.04, min(e.x, e.y)) * step(q.z, 1.0);
-  if (inside <= 0.0) return 1.0;
-  vec2 t = vec2(0.6 / float(textureSize(map, 0).x));
-  return 0.25 * (texture(map, vec3(q.xy + vec2(t.x, t.y * 0.4), q.z)) + texture(map, vec3(q.xy + vec2(-t.x * 0.4, t.y), q.z)) + texture(map, vec3(q.xy - vec2(t.x, t.y * 0.4), q.z)) + texture(map, vec3(q.xy + vec2(t.x * 0.4, -t.y), q.z)));
-}
-float townShadow(vec3 wp, vec3 N) {
-  if (uShadowInfo.z < 0.5 || uSunDir.y < -0.02) return 1.0;
-  float ndl = dot(N, uSunDir);
-  if (ndl <= 0.0) return 0.0;
-  float slope = clamp(sqrt(max(1.0 - ndl * ndl, 0.0)) / max(ndl, 0.05), 0.0, 6.0);
-  float in0;
-  vec3 p0 = wp + N * uShadowInfo.x * (2.0 + 1.0 * slope) + uSunDir * uShadowInfo.x * 0.8;
-  float s0 = shadowTap(uShadowNear, uShadowM0, p0, in0);
-  float s = s0;
-  if (in0 < 1.0) {
-    float in1;
-    vec3 p1 = wp + N * uShadowInfo.y * (2.0 + 1.0 * slope) + uSunDir * uShadowInfo.y * 0.8;
-    float s1 = shadowTap(uShadowFar, uShadowM1, p1, in1);
-    s1 = mix(1.0, s1, in1);
-    s = mix(s1, s0, in0);
-  }
-  if (uShadowLocalInfo.y > 0.5) {
-    float in2;
-    vec3 p2 = wp + N * uShadowLocalInfo.x * (1.5 + 1.0 * slope) + uSunDir * uShadowLocalInfo.x * 1.5;
-    float s2 = shadowTap(uShadowLocal, uShadowM2, p2, in2);
-    s *= mix(1.0, s2, in2);
-  }
-  return mix(1.0, s, smoothstep(-0.02, 0.06, uSunDir.y));
-}
-`
-
 type ShadowMapNode = typeof townShadowUniforms.uShadowNear
 type V3 = THREE.Node<'vec3'>
 
-/** 1 枚の影の地図を読む: [影 0〜1, 範囲の内側 0〜1]。4 点の PCF（ハードウェアの比較の双一次と合わせて、縁と木漏れ日をやわらかく） */
-function shadowTap(map: ShadowMapNode, m: THREE.Node<'mat4'>, wp: V3, texel: THREE.Node<'float'>) {
+/** 1 枚の影の地図を読む: [影 0〜1, 範囲の内側 0〜1]（中のある建物の窓から差す日なた（interiorMaterial.ts）も使う）。4 点の PCF（ハードウェアの比較の双一次と合わせて、縁と木漏れ日をやわらかく） */
+export function shadowTap(map: ShadowMapNode, m: THREE.Node<'mat4'>, wp: V3, texel: THREE.Node<'float'>) {
   const q = m.mul(vec4(wp, 1.0)).xyz.toVar()
   const e = min(q.xy, q.xy.oneMinus())
   const inside = smoothstep(0.0, 0.04, min(e.x, e.y)).mul(step(q.z, 1.0)).toVar()

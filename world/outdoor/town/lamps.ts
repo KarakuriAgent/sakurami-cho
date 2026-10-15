@@ -61,8 +61,8 @@ function placeholderTable() {
 }
 
 /**
- * 灯りの表の uniform（ノード。WebGPU への移行（第 1 段）から TSL の uniform・TextureNode。value は前と同じく読み書きでき、まだ TSL にしていない
- * ShaderMaterial の uniforms にも前のまま入れられる。uLampKind は配列の uniform で、中身は .array（Vector4 の配列）を書く）
+ * 灯りの表の uniform（ノード。WebGPU への移行（第 1 段）から TSL の uniform・TextureNode。value は前と同じく読み書きできる。
+ * uLampKind は配列の uniform で、中身は .array（Vector4 の配列）を書く）
  */
 export const lampUniforms = {
   /** 表の画像（buildLampTable が value を替える） */
@@ -161,79 +161,6 @@ export const townLampsMirror = Fn(([wp, R]: [V3, V3]) => {
   })
   return acc
 })
-
-
-/** GLSL の townLamps（まだ TSL にしていない ShaderMaterial のためだけ。WebGPU では描けない。第 2 段で消す） */
-export const TOWN_LAMPS = /* glsl */ `
-uniform highp sampler2D uLampTable;
-uniform vec4 uLampInfo;
-uniform vec4 uLampKind[${KINDS}];
-uniform vec2 uLampFade;
-uniform float uLampAny;
-vec3 townLampsEx(vec3 wp, vec3 N, float skipNamed, float wrap) {
-  vec3 acc = vec3(0.0);
-  if (uLampInfo.w < 0.5 || uLampAny < 0.5) return acc;
-  float fade = 1.0 - smoothstep(uLampFade.x, uLampFade.y, length(wp - cameraPosition));
-  if (fade <= 0.0) return acc;
-  vec2 c = floor((wp.xz - uLampInfo.xy) / uLampInfo.z);
-  if (c.x < 0.0 || c.y < 0.0 || c.x >= ${CELLS}.0 || c.y >= ${CELLS}.0) return acc;
-  ivec2 base = ivec2(int(c.x) * ${SLOTS}, int(c.y));
-  for (int i = 0; i < ${SLOTS}; i++) {
-    vec4 t = texelFetch(uLampTable, base + ivec2(i, 0), 0);
-    if (t.w <= 0.0) break;
-    float kind = floor(t.w);
-    if (skipNamed > 0.5 && abs(kind - 6.0) < 0.5) continue;
-    vec4 k = uLampKind[int(kind)];
-    if (dot(k.rgb, k.rgb) < 1e-8) continue;
-    float power = fract(t.w) * 16.0;
-    vec3 L = t.xyz - wp;
-    float d2 = dot(L, L);
-    float R = k.a;
-    if (d2 > R * R) continue;
-    float d = sqrt(d2);
-    vec3 l = L / max(d, 1e-3);
-    // 灯具は下向き（上は暗い）。面の向き（回り込み wrap）と距離の減衰
-    float spot = 0.3 + 0.7 * smoothstep(-0.25, 0.55, l.y);
-    float ndl = max(dot(N, l), 0.0) * (1.0 - wrap) + wrap;
-    float att = power / (1.0 + d2 * 0.09) * (1.0 - smoothstep(R * 0.45, R, d));
-    acc += k.rgb * att * ndl * spot;
-  }
-  return acc * fade;
-}
-vec3 townLamps(vec3 wp, vec3 N) { return townLampsEx(wp, N, 0.0, 0.08); }
-/**
- * 水面に映る灯り（段階 5 の色の仕上げ）: 映った向き R の近くに灯りがあれば、その光（さざ波の法線で揺れて縦に伸びる）。
- * 灯りは升の表の 8 つ（その升を照らす灯り）。映り込みは照らす範囲より遠くまで見えるので、届く距離の 2 倍まで
- */
-vec3 townLampsMirror(vec3 wp, vec3 R) {
-  vec3 acc = vec3(0.0);
-  if (uLampInfo.w < 0.5 || uLampAny < 0.5) return acc;
-  float fade = 1.0 - smoothstep(uLampFade.x, uLampFade.y, length(wp - cameraPosition));
-  if (fade <= 0.0) return acc;
-  vec2 c = floor((wp.xz - uLampInfo.xy) / uLampInfo.z);
-  if (c.x < 0.0 || c.y < 0.0 || c.x >= ${CELLS}.0 || c.y >= ${CELLS}.0) return acc;
-  ivec2 base = ivec2(int(c.x) * ${SLOTS}, int(c.y));
-  for (int i = 0; i < ${SLOTS}; i++) {
-    vec4 t = texelFetch(uLampTable, base + ivec2(i, 0), 0);
-    if (t.w <= 0.0) break;
-    vec4 k = uLampKind[int(floor(t.w))];
-    if (dot(k.rgb, k.rgb) < 1e-8) continue;
-    float power = fract(t.w) * 16.0;
-    vec3 L = t.xyz - wp;
-    float d2 = dot(L, L);
-    float Rr = k.a * 2.0;
-    if (d2 > Rr * Rr) continue;
-    vec3 l = L * inversesqrt(max(d2, 1e-4));
-    // 横には細く、縦に長い光の筋（水面のさざ波は縦の向きに映りを引き伸ばす）。dAz ≒ 方位の差の 2 乗 / 2、dEl = 高さの向きの差
-    float dAz = 1.0 - dot(normalize(R.xz + vec2(1e-5)), normalize(l.xz + vec2(1e-5)));
-    float dEl = R.y - l.y;
-    float spec = exp(-dAz / 0.00009 - dEl * dEl / 0.006) * 5.0 + exp(-dAz / 0.0018 - dEl * dEl / 0.05) * 0.35;
-    acc += k.rgb * spec * power / (1.0 + d2 * 0.004);
-  }
-  return acc * fade;
-}
-`
-
 const _c = new THREE.Color()
 
 /**

@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
-import { skipUnportedShaders } from '../materials/unported'
 import { createLabMaterials, type LabMaterials, type LabTextures } from '../materials/labMaterials'
 import { createLabAtmosphere, type LabAtmosphere } from './atmosphere'
 import { assembleLabKit, type LabAnchor, type LabFrame, type LabKit, type LabScreenFactory, type LabSlot } from './kit'
@@ -86,8 +85,6 @@ export interface Lab {
 }
 
 export function createLab(o: LabOptions): Lab {
-  // WebGPU への移行の途中: まだ TSL にしていない ShaderMaterial は描かない（world/materials/unported.ts。第 2 段で消す）
-  skipUnportedShaders(o.renderer)
   const placements = o.placements ?? LAB_PLACEMENTS
   const host = o.host ?? labOptions()
   const quality = o.quality
