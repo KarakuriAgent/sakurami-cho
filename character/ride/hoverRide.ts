@@ -81,7 +81,7 @@ const SPIN_DOWN = 1.6
 const STAND_Z = 0.12
 const SIDE_X = 0.78
 /** 腰掛け: 鞍（床板から 0.42m 上）・床板の立つ所から鞍の真ん中まで後ろへ・ハンドルの握り（床板から） */
-const SEAT: SeatSpec = { height: H.seatY - H.deckY, shift: H.seatZ - STAND_Z, hands: 'grip', desk: H.gripY - H.deckY, reach: H.gripZ - H.seatZ }
+const SEAT: SeatSpec = { height: H.seatY - H.deckY, shift: H.seatZ - STAND_Z, hands: 'grip', desk: H.gripY - H.deckY, reach: H.gripZ - H.seatZ, gripX: H.gripX }
 /** 並走する仲間（KB-001）の並ぶ所（局所。左の少し前・花音の肩より上） */
 const ESCORT_LOCAL = new THREE.Vector3(0.85, H.deckY + 1.55, 0.45)
 /** 並ぶ所が町の木の幹・建物にかかるときに逃げる所（花音の頭の後ろの上） */

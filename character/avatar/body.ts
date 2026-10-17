@@ -155,6 +155,47 @@ export interface SeatSpec {
   desk?: number
   /** hands = grip のとき、座面の真ん中（腰）から握りまでの前への距離（m） */
   reach?: number
+  /** hands = grip のとき、体の真ん中から左右の握りの真ん中まで（m。省けば肩の幅の半分） */
+  gripX?: number
+}
+
+/**
+ * 腕を解く先の、握り（ハンドルの棒の真ん中）からのずれ（上・後ろ・外、m）。腕の式（reachArm）は肩の位置と手首の向きを単純にしているので、
+ * VRM（2026-10-05）で撮って、指の付け根が棒の真ん中に来る所に合わせた（棒の位置そのままだと、手が 3〜4cm 手前・内側に来た）
+ */
+const GRIP_PALM = { up: -0.005, back: -0.025, out: 0.035 }
+/** 前傾の回る所（股関節から上、m。背骨の spine・chest の間あたり） */
+const LEAN_PIVOT = 0.15
+/** 握りに届かないときに前へ倒す前傾の上限（rad） */
+const GRIP_LEAN_MAX = 0.32
+const _gripAt: BodyPoint = { right: 0, up: 0, fwd: 0 }
+
+/**
+ * 座ってハンドルを握る腕（hands = grip）: 握りの位置（座面の真ん中から前へ reach・床から desk・左右 gripX）を、前傾 lean の上半身の中の点に直して、
+ * 腕を手のひらの真ん中がそこへ届く角度にする（reachArm）。届かなければ前傾を GRIP_LEAN_MAX まで深くして届かせる。使った前傾を返す
+ */
+function gripArms(out: BodyPose, seat: SeatSpec, h: number, seatToHip: number, lean: number, body: BodyMetrics) {
+  const gx = (seat.gripX ?? body.shoulderHalf) + GRIP_PALM.out
+  // 股関節の上の前傾の回る所から見た握り（座った体の中。前 fwd・上 up）
+  const fwd0 = (seat.reach ?? 0.5) - GRIP_PALM.back
+  const up0 = (seat.desk ?? h + 0.3) + GRIP_PALM.up - (h + seatToHip) - LEAN_PIVOT
+  const shoulderUp = body.shoulderAboveHip - LEAN_PIVOT
+  let l = lean
+  for (; l < GRIP_LEAN_MAX; l += 0.01) {
+    // 前傾 l の上半身の中へ（上半身ごと l だけ後ろへ戻した向き）
+    const f = fwd0 * Math.cos(l) - up0 * Math.sin(l)
+    const u = up0 * Math.cos(l) + fwd0 * Math.sin(l)
+    if (Math.hypot(f, u - shoulderUp, gx - body.shoulderHalf) <= armReach(body) - 0.02) break
+  }
+  const f = fwd0 * Math.cos(l) - up0 * Math.sin(l)
+  const u = up0 * Math.cos(l) + fwd0 * Math.sin(l)
+  _gripAt.fwd = f
+  _gripAt.up = body.hipHeight + LEAN_PIVOT + u
+  _gripAt.right = -gx
+  reachArm(out.armL, 1, _gripAt, body)
+  _gripAt.right = gx
+  reachArm(out.armR, -1, _gripAt, body)
+  return l
 }
 
 /**
@@ -375,27 +416,12 @@ export function actionPose(
         armOnDesk(out.armR, drop, body)
       }
       if (seat?.hands === 'grip') {
-        // ハンドルを握る（ホバーの一人乗り）: 背すじを起こして前を見る。腕は肩から握り（前へ reach・座面から desk の高さ）へ、
-        // 上腕と前腕（と手のひらの真ん中まで）の 2 本の骨で届かせる（肘は少し曲げて下へ）。手は握る形
-        out.lean = 0.08 + Math.sin(t * 0.21) * 0.008
-        const U = body.upperArm
-        const F = body.foreArm + 0.07
-        const fwd = (seat.reach ?? 0.5) - Math.sin(out.lean) * body.shoulderAboveHip
-        const down = h + seatToHip + sitShoulderAboveHip(out.lean, body) - (seat.desk ?? h + 0.3)
-        const D = THREE.MathUtils.clamp(Math.hypot(fwd, down), Math.abs(U - F) + 0.02, U + F - 0.015)
-        const toward = Math.atan2(fwd, down)
-        const atShoulder = Math.acos(THREE.MathUtils.clamp((U * U + D * D - F * F) / (2 * U * D), -1, 1))
-        const elbow = Math.PI - Math.acos(THREE.MathUtils.clamp((U * U + F * F - D * D) / (2 * U * F), -1, 1))
-        for (const [a, k] of [
-          [out.armL, 1],
-          [out.armR, 0.97],
-        ] as const) {
-          a.raise = (toward - atShoulder) * k + breath * 0.006
-          a.elbow = elbow
-          a.out = 0.16
-          a.twist = 0
-          a.elbowSide = 0
-        }
+        // ハンドルを握る（ホバーの一人乗り）: 背すじを起こして前を見る。腕は、手のひらの真ん中がハンドルの握り（乗り物の局所の握りの位置から
+        // 座面の真ん中・前傾を引いた所）に届くように（reachArm。肘は少し曲げて下へ）。届かなければ前傾を深くして届かせる。手は握る形。
+        // 前は左右の握りの幅を見ずに、肩の前の縦の面だけで解いていて、手が握りの内側・手前に浮いていた
+        out.lean = gripArms(out, seat, h, seatToHip, 0.08 + Math.sin(t * 0.21) * 0.008, body)
+        out.armL.raise += breath * 0.006
+        out.armR.raise += breath * 0.006
         setHand(out.handL, HANDS.hold)
         setHand(out.handR, HANDS.hold)
         out.handL.wrist += 0.1
