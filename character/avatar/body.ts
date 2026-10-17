@@ -539,28 +539,39 @@ export function blendPose(a: BodyPose, b: BodyPose, k: number, out: BodyPose) {
 
 /** 手を振るときの腕（ラジアン）。swing は肘の曲げの振れ幅（片側） */
 const WAVE_ARM = { raise: 0.55, out: 1.0, twist: -1.1, elbow: 1.95, swing: 0.3 } as const
+/**
+ * 座って手を振るときの腕: 肘を肩の高さ近くまで上げ、手を肩より上へ。座る姿勢は上半身が前へ傾き（前傾 0.13）、立って振る角度のままでは
+ * 肘が下がって手があごの高さに留まり、手首だけで振っているように見えた
+ */
+const WAVE_ARM_SEATED = { raise: 0.5, out: 1.38, twist: -1.2, elbow: 2.0, swing: 0.3 } as const
 
 /** 手を振る速さ（振りの位相 = 振り始めてからの秒 × これ。11 で 1 秒に約 1.75 往復） */
 export const WAVE_RATE = 11
 
 /**
  * 手を振る（本人の左手 = カメラから見て右手）。w は強さ、ph は振りの位相（ラジアン。1 秒に約 1.75 往復の速さで渡す）。
+ * seated は座る姿勢の強さ（0〜1。座っているときは肘を肩の高さ近くまで上げる形 WAVE_ARM_SEATED へ）。
  *
  * 人の「バイバイ」と同じ形にする: 上腕は横へ肩より少し下まで上げて少し前に出し、外へひねって肘の曲がる向きを上にする。
  * 肘を曲げて前腕を立て、肘の曲げ伸ばしで前腕を左右（頭の方と外側）に振る。手のひらはカメラの方。
  * （前は肘を伸ばしたまま横へ倒して振っていたので、肘が曲がらない向きに折れて見えた）
  */
-export function applyWave(p: BodyPose, w: number, ph: number) {
+export function applyWave(p: BodyPose, w: number, ph: number, seated = 0) {
   if (w <= 0.001) return p
   const L = THREE.MathUtils.lerp
   const a = p.armL
   const sway = Math.sin(ph)
+  // 座っている（seated = 座る姿勢の強さ）なら、肘を上げた形へ
+  const raise = L(WAVE_ARM.raise, WAVE_ARM_SEATED.raise, seated)
+  const out = L(WAVE_ARM.out, WAVE_ARM_SEATED.out, seated)
+  const twist = L(WAVE_ARM.twist, WAVE_ARM_SEATED.twist, seated)
+  const elbow = L(WAVE_ARM.elbow, WAVE_ARM_SEATED.elbow, seated)
   // 振りの中で肩も少しだけ動かす（前腕だけが動くと機械っぽい）
-  a.raise = L(a.raise, WAVE_ARM.raise + Math.sin(ph - 0.6) * 0.03, w)
-  a.out = L(a.out, WAVE_ARM.out + sway * 0.05, w)
-  a.twist = L(a.twist, WAVE_ARM.twist, w)
+  a.raise = L(a.raise, raise + Math.sin(ph - 0.6) * 0.03, w)
+  a.out = L(a.out, out + sway * 0.05, w)
+  a.twist = L(a.twist, twist, w)
   // 肘は上げ下ろしの途中では浅く曲げる（w の 2 乗）。曲げたまま上腕のひねりが戻ると、前腕が胸の前を横切るため
-  a.elbow = L(a.elbow, WAVE_ARM.elbow + sway * WAVE_ARM.swing, w * w)
+  a.elbow = L(a.elbow, elbow + sway * WAVE_ARM.swing, w * w)
   a.elbowSide = L(a.elbowSide, 0, w)
   lerpHand(p.handL, HANDS.wave, w)
   // 手首は前腕より少し遅れて付いてくる

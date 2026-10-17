@@ -27,6 +27,30 @@ import { PLACE, type Vec3 } from './lab/plan'
  */
 export type PlaceAction = 'present' | 'holo' | 'work' | 'type' | 'look' | 'gaze' | 'pet' | 'sit'
 
+/**
+ * 前の物に手を使う行動と、その物がある立ち寄り先の行動（holo = ホロテーブル、work・type = 作業台・机、pet = KB-001 のドック）。sit は座る椅子（seat）のある所。
+ * ほかの行動（present・look・gaze）は物が要らないので、どこでもできる
+ */
+export const ACTIVITY_NEEDS: Readonly<Partial<Record<PlaceAction, readonly PlaceAction[]>>> = {
+  holo: ['holo'],
+  work: ['work', 'type'],
+  type: ['type', 'work'],
+  pet: ['pet'],
+  sit: ['sit'],
+}
+
+/**
+ * 行動 action を、立ち寄り先 place（立ち寄り先の外なら null）でできるか（前に物の要る行動は、その物の前でだけ。ACTIVITY_NEEDS）。
+ * できないのに行動させると、宙を触る・何も無い所に座る形になる。kanon-lab は kanon.activity をそのとき待機（present）に置き換え、脚本の確かめと実行で注意を出す
+ */
+export function activityFits(action: PlaceAction, place: Pick<TownPlace, 'action' | 'seat'> | null): boolean {
+  const needs = ACTIVITY_NEEDS[action]
+  if (!needs) return true
+  if (!place) return false
+  if (action === 'sit') return !!place.seat
+  return needs.includes(place.action)
+}
+
 /** 立ち寄り先の名前（使う側の表の名前も入るので、地図の側では文字列） */
 export type PlaceId = string
 
