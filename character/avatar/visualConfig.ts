@@ -42,13 +42,25 @@ export const VISUAL_DEFAULTS = {
    */
   eyeHeightRatio: 0.93,
 
-  /** 視線・首の追従（ラジアン）。目は vrm.lookAt、首は自前で少しだけ回す */
+  /**
+   * 視線・首の追従（ラジアン）。目は vrm.lookAt、首は自前で回す。maxYaw・maxPitchUp・maxPitchDown は首（neck・head）で回せる範囲
+   * （上は前の 0.25 から 0.4 に。見上げる先へ顔が上がって見えるように）
+   */
   lookAt: {
     maxYaw: 0.6,
-    maxPitchUp: 0.25,
+    maxPitchUp: 0.4,
     maxPitchDown: 0.35,
     /** カメラ方向のうち、首で追う割合（残りは目） */
     headFollow: 0.35,
+    /** 注意している間（層の look。kanon.look_at など）に首で追う割合（前は 0.75 で、首だけでは横の物まで向かなかった） */
+    attendFollow: 0.92,
+    /** 注意している間、首の範囲を超える分を胸・腰（spine・chest・upperChest）で回す最大（左右・上へ反る） */
+    torsoYaw: 0.5,
+    torsoPitchUp: 0.12,
+    /** 行動の視線（カメラを見ない間）で頭を下げているとき、目を顔の正面より下（手元）へ向ける量 */
+    focusDown: 0.14,
+    /** 視線の細かい動き（サッカード）: 左右・上下のずれの最大と、動かす間隔（秒、最小〜最大） */
+    saccade: { yaw: 0.035, pitch: 0.02, interval: [0.7, 2.4] as [number, number] },
     /** 追従のなめらかさ（大きいほど速く追う） */
     damping: 3.5,
   },
@@ -104,7 +116,18 @@ export interface VisualConfig {
   normalizeHeight: boolean
   allowedHeightError: number
   eyeHeightRatio: number
-  lookAt: { maxYaw: number; maxPitchUp: number; maxPitchDown: number; headFollow: number; damping: number }
+  lookAt: {
+    maxYaw: number
+    maxPitchUp: number
+    maxPitchDown: number
+    headFollow: number
+    attendFollow: number
+    torsoYaw: number
+    torsoPitchUp: number
+    focusDown: number
+    saccade: { yaw: number; pitch: number; interval: readonly [number, number] }
+    damping: number
+  }
   idle: VisualIdleConfig
   blink: string
   mtoon: VrmMtoonConfig

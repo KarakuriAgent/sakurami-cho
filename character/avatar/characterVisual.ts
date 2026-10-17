@@ -163,6 +163,8 @@ function animatedBones(basePose: Pose): VRMHumanBoneName[] {
  * 行動の強さ（actionBlend）が 1 のまま行動だけが替わると、前は 1 コマで姿勢が飛んだ（混ぜていたのは手の形だけ）
  */
 export const ACTION_SWITCH_SEC = 0.5
+/** 物に手を置く・座る行動（見る先を胸・腰でも追うときに、手が物から離れないよう半分に） */
+const HANDS_ON: ReadonlySet<string> = new Set(['holo', 'work', 'type', 'pet', 'sit'])
 /** 切り替えで混ぜないボーン（目・あご。視線と表情が毎コマ決める） */
 const SWITCH_SKIP = new Set<VRMHumanBoneName>(['leftEye', 'rightEye', 'jaw'])
 
@@ -262,7 +264,7 @@ class VrmCharacterVisual implements CharacterVisual {
   private readonly jumpLook = createJumpLook()
   private readonly jumpWeights = createJumpClipWeights()
   // アニメーションの状態
-  private readonly anim = { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0 }
+  private readonly anim = { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0, torsoYaw: 0, torsoPitch: 0 }
   private readonly poses = { rest: createPose(), action: createPose(), out: createPose() }
   /** 行動で手を伸ばす先（体の中の点。Character の actionTarget から毎コマ作る） */
   private readonly reach: BodyPoint = { right: 0, up: 0, fwd: 0 }
@@ -287,6 +289,8 @@ class VrmCharacterVisual implements CharacterVisual {
     at: -100,
   }
   private readonly lookProxy = new THREE.Object3D()
+  /** 視線の細かい動き（n = 何回目、next = 次に動かす時刻、last = 前のコマの時刻、yaw・pitch = 今のずれ（rad）） */
+  private readonly sacc = { n: 0, next: 0, last: -1, yaw: 0, pitch: 0 }
   private readonly tmp = {
     q: new THREE.Quaternion(),
     v: new THREE.Vector3(),
@@ -323,7 +327,8 @@ class VrmCharacterVisual implements CharacterVisual {
     // 読み込むたびに初めから（揺れもの・足・まばたき・首・手の形）
     this.springCarry = -1
     Object.assign(this.footIk, { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null })
-    Object.assign(this.anim, { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0 })
+    Object.assign(this.anim, { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0, torsoYaw: 0, torsoPitch: 0 })
+    Object.assign(this.sacc, { n: 0, next: 0, last: -1, yaw: 0, pitch: 0 })
     Object.assign(this.jumpLook, createJumpLook())
     setHand(this.hands.L, HANDS.relaxed)
     setHand(this.hands.R, HANDS.relaxed)
@@ -498,6 +503,29 @@ class VrmCharacterVisual implements CharacterVisual {
     const u = (t - sw.at) / ACTION_SWITCH_SEC
     if (u >= 1 || u < 0) return 0
     return 1 - u * u * (3 - 2 * u)
+  }
+
+  /**
+   * 視線の細かい動き（サッカード）を進める: lookAt.saccade.interval の間隔で、見る先のずれ（左右 ±yaw・上下 ±pitch rad）を跳ばす。
+   * 間隔とずれは回数 n から決まった乱数で決める（シーンの時計だけを使うので、撮影で毎回同じ）。注意している間（attend）は小さく
+   */
+  private saccade(t: number, attend: number) {
+    const sc = this.sacc
+    const S = this.config.lookAt.saccade
+    if (t < sc.last) Object.assign(sc, { n: 0, next: 0, yaw: 0, pitch: 0 })
+    sc.last = t
+    if (t < sc.next) return
+    sc.n++
+    const h = (i: number) => {
+      const x = Math.sin(sc.n * 12.9898 + i * 78.233) * 43758.5453
+      return x - Math.floor(x)
+    }
+    const k = 1 - 0.4 * attend
+    // 3 回に 1 回ほどは真ん中へ戻る（見つめ直す）
+    const center = h(3) < 0.33
+    sc.yaw = center ? 0 : (h(1) * 2 - 1) * S.yaw * k
+    sc.pitch = center ? 0 : (h(2) * 2 - 1) * S.pitch * k
+    sc.next = t + S.interval[0] + h(4) * (S.interval[1] - S.interval[0])
   }
 
   /** 取り消した読み込みの VRM が届いた: dispose() のあとなら、すぐ片付ける（stop() だけなら今までどおり何もしない） */
@@ -719,19 +747,41 @@ class VrmCharacterVisual implements CharacterVisual {
       if (l.look) attend = Math.max(attend, l.look(tmp.target, f))
     }
     const L = cfg.lookAt
+    const clamp = THREE.MathUtils.clamp
+    const lerp = THREE.MathUtils.lerp
     tmp.v.subVectors(tmp.target, tmp.head)
     group.getWorldQuaternion(tmp.inv)
     tmp.v.applyQuaternion(tmp.inv.invert())
-    const camYaw = THREE.MathUtils.clamp(Math.atan2(tmp.v.x, tmp.v.z), -L.maxYaw, L.maxYaw)
-    const camPitch = THREE.MathUtils.clamp(Math.atan2(tmp.v.y, Math.hypot(tmp.v.x, tmp.v.z)), -L.maxPitchDown, L.maxPitchUp)
+    // 見る先の向き（体の向きから。左 = +・上 = +）
+    const rawYaw = Math.atan2(tmp.v.x, tmp.v.z)
+    const rawPitch = Math.atan2(tmp.v.y, Math.hypot(tmp.v.x, tmp.v.z))
     const lookCam = Math.max(pose.lookCamera * (1 - m.walk * 0.7), attend)
-    const follow = THREE.MathUtils.lerp(L.headFollow, 0.75, attend)
+    // ふだん（カメラの方）: 首の回せる範囲に収めて、その headFollow 倍だけ首で追う（残りは目）。
+    // 注意している間（層の look。kanon.look_at・コメントのパネル）: attendFollow 倍を首で追い、首の範囲（maxYaw・maxPitchUp）を超える分は
+    // 胸・腰（spine・chest・upperChest）へ torsoYaw・torsoPitchUp まで分ける。物に手を置く行動・座っている間は胸・腰の分を半分に
+    const yawA = clamp(rawYaw * L.attendFollow, -(L.maxYaw + L.torsoYaw), L.maxYaw + L.torsoYaw)
+    const pitchA = clamp(rawPitch * L.attendFollow, -L.maxPitchDown, L.maxPitchUp + L.torsoPitchUp)
+    const headYawA = clamp(yawA, -L.maxYaw, L.maxYaw)
+    const headPitchA = clamp(pitchA, -L.maxPitchDown, L.maxPitchUp)
+    const camYaw = lerp(clamp(rawYaw, -L.maxYaw, L.maxYaw) * L.headFollow, headYawA, attend)
+    const camPitch = lerp(clamp(rawPitch, -L.maxPitchDown, L.maxPitchUp) * L.headFollow, headPitchA, attend)
+    const handsOn = m.action && HANDS_ON.has(m.action) ? m.actionBlend : 0
+    const torsoK = attend * (1 - mw) * (1 - 0.5 * handsOn)
     // 立ったままの全身の身ぶりの間は、首の追従を弱めて、モーションの頭の動き（見回す・見上げるなど）を打ち消さない
-    const yawT = THREE.MathUtils.lerp(pose.headYaw, camYaw * follow, lookCam) * (1 - mw)
-    const pitchT = THREE.MathUtils.lerp(-pose.headPitch, camPitch * follow, lookCam) * (1 - mw)
+    const yawT = lerp(pose.headYaw, camYaw, lookCam) * (1 - mw)
+    const pitchT = lerp(-pose.headPitch, camPitch, lookCam) * (1 - mw)
     const k = 1 - Math.exp(-delta * L.damping)
     a.headYaw += (yawT - a.headYaw) * k
     a.headPitch += (pitchT - a.headPitch) * k
+    // 胸・腰は首より少し遅れて付いてくる
+    const kt = 1 - Math.exp(-delta * L.damping * 0.6)
+    a.torsoYaw += ((yawA - headYawA) * torsoK - a.torsoYaw) * kt
+    a.torsoPitch += ((pitchA - headPitchA) * torsoK - a.torsoPitch) * kt
+    if (Math.abs(a.torsoYaw) > 1e-4 || Math.abs(a.torsoPitch) > 1e-4) {
+      addBoneRotation(vrm, 'spine', -a.torsoPitch * 0.3, a.torsoYaw * 0.3, 0)
+      addBoneRotation(vrm, 'chest', -a.torsoPitch * 0.35, a.torsoYaw * 0.35, 0)
+      addBoneRotation(vrm, 'upperChest', -a.torsoPitch * 0.35, a.torsoYaw * 0.35, 0)
+    }
     // うなずき（層の分を 0 から足す）
     let nod = 0
     for (let i = 0; i < layers.length; i++) {
@@ -740,17 +790,32 @@ class VrmCharacterVisual implements CharacterVisual {
     }
     addBoneRotation(vrm, 'neck', -a.headPitch * 0.4, a.headYaw * 0.4, 0)
     addBoneRotation(vrm, 'head', -a.headPitch * 0.6 + nod, a.headYaw * 0.6, pose.headRoll)
-    // 目は vrm.lookAt で（モデルの可動域の設定に従う）。見る先は首と同じ範囲に収める
+    // 目は vrm.lookAt で（モデルの可動域の設定に従う）。見る先は首（注意している間は胸・腰まで）と同じ範囲に収める
     if (vrm.lookAt) {
       const dist = tmp.v.length() || 1
-      tmp.v.set(Math.sin(camYaw) * Math.cos(camPitch), Math.sin(camPitch), Math.cos(camYaw) * Math.cos(camPitch)).multiplyScalar(dist)
+      const eyeYaw = clamp(rawYaw, -(L.maxYaw + L.torsoYaw * attend), L.maxYaw + L.torsoYaw * attend)
+      const eyePitch = clamp(rawPitch, -L.maxPitchDown, L.maxPitchUp + L.torsoPitchUp * attend)
+      tmp.v.set(Math.sin(eyeYaw) * Math.cos(eyePitch), Math.sin(eyePitch), Math.cos(eyeYaw) * Math.cos(eyePitch)).multiplyScalar(dist)
       group.getWorldQuaternion(tmp.q)
       lookProxy.position.copy(tmp.v.applyQuaternion(tmp.q)).add(tmp.head)
-      // 立ったままの全身の身ぶりの間は、目も頭の向き（顔の正面）へ寄せる（VRM 0.x の正規化したボーンは -Z が前）
-      const headNode = mw > 0.001 ? vrm.humanoid.getNormalizedBoneNode('head') : null
+      // 行動の視線（カメラを見ない分 1 - lookCam）と立ったままの全身の身ぶりの間は、目を頭の向き（顔の正面）へ寄せる（VRM 0.x の正規化したボーンは -Z が前）。
+      // 手元を見る行動（頭を下げている）では、目は顔の正面より少し下（手元）へ
+      const toHead = Math.max(1 - lookCam, mw)
+      const headNode = toHead > 0.001 ? vrm.humanoid.getNormalizedBoneNode('head') : null
       if (headNode) {
-        tmp.fwd.set(0, 0, vrm.meta.metaVersion === '0' ? -1 : 1).applyQuaternion(headNode.getWorldQuaternion(tmp.q))
-        lookProxy.position.lerp(tmp.fwd.multiplyScalar(dist).add(tmp.head), mw)
+        headNode.getWorldQuaternion(tmp.q)
+        const down = L.focusDown * clamp(pose.headPitch / 0.3, 0, 1) * (1 - lookCam) * (1 - mw)
+        tmp.fwd.set(0, -Math.sin(down), Math.cos(down) * (vrm.meta.metaVersion === '0' ? -1 : 1)).applyQuaternion(tmp.q)
+        lookProxy.position.lerp(tmp.fwd.multiplyScalar(dist).add(tmp.head), toHead)
+      }
+      // 視線の細かい動き（サッカード）: 決まった間隔の乱れで、見る先を少しだけずらす（シーンの時計と決まった乱数。撮影で毎回同じ）
+      this.saccade(t, attend)
+      const sc = this.sacc
+      if (sc.yaw !== 0 || sc.pitch !== 0) {
+        group.getWorldQuaternion(tmp.q)
+        tmp.fwd.set(1, 0, 0).applyQuaternion(tmp.q)
+        lookProxy.position.addScaledVector(tmp.fwd, dist * sc.yaw)
+        lookProxy.position.y += dist * sc.pitch
       }
       lookProxy.updateMatrixWorld()
       vrm.lookAt.target = lookProxy

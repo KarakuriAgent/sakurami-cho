@@ -93,6 +93,9 @@ export interface CharacterNav {
   lastT: number
   /** 遠くのセットで、まだ町のデータ（中の決まり）が無いうちに置いた: 決まりができたら階の床へ置き直す */
   snapPending: boolean
+  /** 見る先へ体ごと向き直る前の向き（向き直っていなければ null。character/avatar/locomotion.ts の faceToward）と、その時の置き直しの回数 */
+  faceHome: number | null
+  facePlace: number
 }
 
 /** 経路が見つからなかった行き先と理由（Hub の命令に返すため。zone = ゾーンが違う（kanon.place を使う）、data = 町のデータがまだ無い、path = 通り道が無い） */
@@ -148,11 +151,14 @@ export interface CharacterDrivers {
  * - wander: 自分で立ち寄り先を巡ってよいか。乗り物に乗っていないコマに 1 回、町の中の移動（drivers.travel）を進める前に呼ぶ
  * - held: 巡るのを止めているか（true の間は、次へ歩き出す時刻を先へ延ばす）。乗り物に乗っていないコマに 1 回、町の中の移動を進めたあとに呼ぶ
  * - takeArriveAction: 歩いて着いたコマ（向きを合わせ終えたとき）に 1 回。立ち寄り先の行動の代わりにする行動（無ければ null）。呼んだら使う側は消す
+ * - faceToward: 止まって立っている間（待機・present・look・gaze）の毎コマ。見る先（シーンの座標。無ければ null）が立っていた向きから大きく横・後ろなら、
+ *   その場で体ごと向き直る（locomotion.ts の FACE_START・FACE_KEEP）。null に戻ったら元の向きへ戻る。首・胸で見る分は見た目（characterVisual.ts）が層の look から決める
  */
 export interface CharacterPolicy {
   wander?: () => boolean
   held?: () => boolean
   takeArriveAction?: () => PlaceAction | null
+  faceToward?: () => THREE.Vector3 | null
 }
 
 export interface CharacterInit {
@@ -229,7 +235,7 @@ export class Character implements TownFocus {
     this.rnd = init.rnd
     this.travel = init.travel
     this.ride = init.ride
-    this.nav = { curve: null, curveLen: 0, travelled: 0, pending: null, dwellUntil: 0, lastT: 0, snapPending: init.motion.zone !== 'lab' }
+    this.nav = { curve: null, curveLen: 0, travelled: 0, pending: null, dwellUntil: 0, lastT: 0, snapPending: init.motion.zone !== 'lab', faceHome: null, facePlace: 0 }
     this.rides = init.rides(this)
   }
 

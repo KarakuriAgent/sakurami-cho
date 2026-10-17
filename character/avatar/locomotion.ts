@@ -31,6 +31,16 @@ const ACCEL = 1.3
 const DECEL = 1.0
 /** その場で向きを変える最大の速さ（rad/s） */
 const TURN_RATE = 2.6
+/**
+ * 見る先へ体ごと向き直る（使う側の決まり faceToward。kanon-lab は kanon.look_at で大きく後ろ寄りの物を見るとき）:
+ * 見る先が立っていた向きから FACE_START（rad）より横・後ろなら、首と胸で届く分 FACE_KEEP を残して、FACE_RATE（rad/s）までの速さで
+ * その場で向き直る（向きを変える速さが 0.25rad/s を超える間は足を踏み替える。finishFrame の stepping）。見るのをやめたら元の向きへ戻る。
+ * 向き直るのは止まって立っている間（待機・present・展示を眺める look・窓の外を眺める gaze）だけ。座っている・物に手を置く行動の間は首と胸だけで見る
+ */
+export const FACE_START = 1.2
+export const FACE_KEEP = 0.7
+const FACE_RATE = 1.1
+const FACE_ACTIONS: ReadonlySet<string> = new Set(['present', 'look', 'gaze'])
 
 /** 歩幅（1 歩、m）。速さに合わせて伸び縮みさせ、足が床を滑って見えないようにする */
 export function stepLength(speed: number) {
@@ -296,6 +306,7 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
   nav.lastT = t
   // 観覧車に乗っている間（乗り込み・降りるの途中も）は、ride.ts が位置・向き・速さを決める
   if (ch.drivers.motion?.(ch, t, dt)) {
+    nav.faceHome = null
     nav.pending = null
     nav.curve = null
     m.outside = true
@@ -333,9 +344,11 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
   }
 
   let speedTarget = 0
+  if (traveling || m.phase !== 'idle') nav.faceHome = null
   switch (traveling ? 'travel' : m.phase) {
     case 'idle':
       m.turnRate *= Math.exp(-dt * 8)
+      faceToward(ch, dt)
       break
     case 'turnStart': {
       if (!nav.curve) {
@@ -423,6 +436,38 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
     if (model) m.level = model.levelAt(m.position.x, m.position.z, base)
   } else m.indoor = false
   finishFrame(ch, t, dt)
+}
+
+/**
+ * 止まって立っている間、使う側の決まり faceToward の見る先が横・後ろ（FACE_START より）なら、その場で体ごと向き直る（FACE_KEEP を残して）。
+ * 見るのをやめた・向き直れない行動になったら、向き直る前の向き（nav.faceHome）へ戻る。置き直した（placeSerial が進んだ）ら戻らない
+ */
+function faceToward(ch: Character, dt: number) {
+  const m = ch.motion
+  const nav = ch.nav
+  if (nav.faceHome !== null && nav.facePlace !== m.placeSerial) nav.faceHome = null
+  const free = m.seat === null && m.jump.phase === 'none' && (m.action === null || FACE_ACTIONS.has(m.action))
+  const p = free ? (ch.policy.faceToward?.() ?? null) : null
+  if (p) {
+    const want = Math.atan2(p.x - m.position.x, p.z - m.position.z)
+    const home = nav.faceHome ?? m.heading
+    const rel = wrapAngle(want - home)
+    if (nav.faceHome === null) {
+      if (Math.abs(rel) <= FACE_START) return
+      nav.faceHome = m.heading
+      nav.facePlace = m.placeSerial
+    }
+    const target = Math.abs(rel) > FACE_KEEP ? wrapAngle(want - Math.sign(rel) * FACE_KEEP) : home
+    turnToward(m, target, dt, FACE_RATE)
+  } else if (nav.faceHome !== null) {
+    const err = turnToward(m, nav.faceHome, dt, FACE_RATE)
+    if (Math.abs(err) < 0.004) {
+      m.heading = nav.faceHome
+      m.turnRate = 0
+      nav.faceHome = null
+    }
+  }
+  m.moveDir.set(Math.sin(m.heading), 0, Math.cos(m.heading))
 }
 
 /** 毎コマの終わり（進む向き・歩きの周期・行動の強さ）。ふだんの歩きと、観覧車に乗っている間の両方 */
