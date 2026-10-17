@@ -13,6 +13,7 @@ import { createJump } from './jump'
 import { createVrmRim } from './loadVrm'
 import { createTravelRun } from './travel'
 import { VISUAL_DEFAULTS, type VrmMtoonConfig } from './visualConfig'
+import { createTurnStep } from './turnStep'
 
 /** VRM を読むまでの体の目安の身長（m。anchorGuess を省いたとき。kanon-lab の花音の GUIDE_HEIGHT と同じ値） */
 const DEFAULT_HEIGHT = 1.65
@@ -82,6 +83,7 @@ export function createCharacter(o: CharacterOptions): Character {
     timeScale: 1,
     stride: null,
     jump: createJump(position.y),
+    step: createTurnStep(),
   }
   const [gx, gy, gz] = o.anchorGuess?.position ?? motion.position.toArray()
   const gh = o.anchorGuess?.height ?? DEFAULT_HEIGHT

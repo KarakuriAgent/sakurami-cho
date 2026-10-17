@@ -26,6 +26,7 @@ import { propsNear } from '../../world/walk/townProps'
 import { findPath } from './nav'
 import { groundHeight, seatApproach, stopWalking, stopZone, TOWN_WALK_SPEED, WALK_SPEED } from './locomotion'
 import type { Character, CharacterMotion } from './character'
+import { stepTurn, turnStepBusy } from './turnStep'
 
 /**
  * 花音が町の中を移動する（kanon.travel。docs/design/town.md §18）。
@@ -1564,10 +1565,11 @@ export function driveTravel(ch: Character, t: number, dt: number): boolean {
     // 行き先の方へ向き、行動の姿勢を解いてから歩き出す
     const q = pointAt(seg, Math.min(seg.length, 1.2))
     const p = seg.pts[0]
-    const err = turnToward(m, Math.atan2(q.x - p.x, q.z - p.z), dt)
+    // 足踏みで向く（character/avatar/turnStep.ts。歩の途中は歩き出さない）
+    const err = stepTurn(m, Math.atan2(q.x - p.x, q.z - p.z), dt, { min: 0.25 })
     m.phase = 'turnStart'
     m.speed = Math.max(0, m.speed - dt * 2)
-    if (Math.abs(err) < 0.4 && m.actionBlend < 0.35) {
+    if (Math.abs(err) < 0.4 && !m.step.foot && m.actionBlend < 0.35) {
       run.phase = 'walk'
       run.startedAt = t
     }
@@ -1873,8 +1875,9 @@ function arriveStep(ch: Character, dt: number): boolean {
   const plan = run.plan!
   m.phase = 'turnEnd'
   m.speed = 0
-  const err = turnToward(m, plan.heading ?? m.heading, dt)
-  if (Math.abs(err) < 0.02 && Math.abs(m.turnRate) < 0.1) {
+  // 足踏みで向きを合わせる（遅れた足もそろえる。character/avatar/turnStep.ts）
+  const err = stepTurn(m, plan.heading ?? m.heading, dt, { exact: true, close: true })
+  if (Math.abs(err) < 0.02 && !turnStepBusy(m.step, m.heading)) {
     m.phase = 'idle'
     m.turnRate = 0
     m.stopId = null

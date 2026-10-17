@@ -11,6 +11,7 @@ import { VRMLookAtQuaternionProxy } from '@pixiv/three-vrm-animation'
 import { estimateHeight, getBone, loadVrm, measureLowestPoint, releaseVrm } from './loadVrm'
 import { addBoneRotation, idleBasePose, poseQuaternion, setBone, type Pose } from './pose'
 import { applyFootIk, type FootIkState } from './footIk'
+import { applyTurnStepPose, createTurnStepPose } from './turnStepPose'
 import { applyJumpPose, createJumpClipWeights, createJumpLook, jumpClipWeights, jumpCodeAmounts, updateJumpLook } from './jumpPose'
 import { loadVrmAnimation } from './vrmAnimation'
 import { VISUAL_DEFAULTS, type VisualConfig } from './visualConfig'
@@ -45,6 +46,8 @@ import type { Car } from '../../world/outdoor/transit/vehicle'
  * - 跳ぶ（ch.motion.jump。character/avatar/jump.ts）: 跳ぶ .vrma（踏み切り・跳んでいる間・着く。visualConfig.ts の animations.jump）が読めていれば、
  *   段階に合わせて再生する所と強さを決めて待機・歩きの上に重ねる（character/avatar/jumpPose.ts。その分だけ待機・歩き・身ぶり・行動の腰から下を弱める）。
  *   読めていない・待機の .vrma が無いときは、コードの姿勢（しゃがむ → 伸びる → 着いてしゃがむ）を重ねる。跳んでいる間は足の高さ合わせを弱める
+ * - その場で向きを変える足踏み（ch.motion.step。character/avatar/turnStep.ts）: 床に残る足をその場に留め、持ち上げた足を次の所へ運ぶ
+ *   （character/avatar/turnStepPose.ts。行動の姿勢を作った後・足の高さ合わせの前）
  */
 
 /** 読み込みの状態（idle = まだ読み込んでいない・やめた。使う側へは loading 以降を知らせる） */
@@ -260,6 +263,8 @@ class VrmCharacterVisual implements CharacterVisual {
   private springCarry = -1
   // 足の高さ合わせの状態（足ごとのなめらかにした高さの差）
   private readonly footIk: FootIkState = { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null }
+  // その場で向きを変える足踏みを脚に入れる強さ（character/avatar/turnStepPose.ts）
+  private readonly turnPose = createTurnStepPose()
   // 跳ぶ姿勢の様子と、跳ぶ .vrma の時刻と強さ（character/avatar/jumpPose.ts）
   private readonly jumpLook = createJumpLook()
   private readonly jumpWeights = createJumpClipWeights()
@@ -327,6 +332,7 @@ class VrmCharacterVisual implements CharacterVisual {
     // 読み込むたびに初めから（揺れもの・足・まばたき・首・手の形）
     this.springCarry = -1
     Object.assign(this.footIk, { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null })
+    Object.assign(this.turnPose, createTurnStepPose())
     Object.assign(this.anim, { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0, torsoYaw: 0, torsoPitch: 0 })
     Object.assign(this.sacc, { n: 0, next: 0, last: -1, yaw: 0, pitch: 0 })
     Object.assign(this.jumpLook, createJumpLook())
@@ -731,6 +737,9 @@ class VrmCharacterVisual implements CharacterVisual {
         sw.shownHips.copy(hips.position)
       }
     }
+
+    // --- その場で向きを変える足踏み: 床に残る足を留め、持ち上げた足を次の所へ（turnStepPose.ts。置き場の位置も少し動かす） ---
+    applyTurnStepPose(character, vrm, group, this.turnPose, delta)
 
     // --- 足を地面の高さに合わせる（ラボの外の坂・石段。中の平らな床では何もしない）。跳ぶ姿勢の間は、歩く間の膝を伸ばす直しを弱める ---
     applyFootIk(character, vrm, this.footIk, delta, r.ankleRest, jumpCode ? Math.min(1, (jumpCode.crouch + jumpCode.tuck) * 3) : jw)

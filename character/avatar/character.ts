@@ -12,6 +12,7 @@ import type { CharacterJump } from './jump'
 import { CharacterLayers } from './layers'
 import { setVrmRimBlend, type VrmRim } from './loadVrm'
 import type { TravelRun } from './travel'
+import type { TurnStep } from './turnStep'
 
 /**
  * キャラクター（1 人ずつ状態を持つ。docs/design/map-split.md §5 の「段 2 の作りの決めごと」）。
@@ -78,6 +79,11 @@ export interface CharacterMotion {
   stride: number | null
   /** 跳ぶ様子（character/avatar/jump.ts。跳ぶのは使う側が jump(ch) を呼んだときだけ。air の間は position.y が足元の地面から height だけ上） */
   jump: CharacterJump
+  /**
+   * その場で向きを変える足踏み（character/avatar/turnStep.ts。着いて向きを合わせる・歩き出す前に向く・見る先へ体ごと向き直る間、足ごとの床に置いた向きと
+   * 持ち上げている足。見た目の character/avatar/turnStepPose.ts が脚に入れる）。歩き出す・乗る・座る・跳ぶ・置き直すと外れる
+   */
+  step: TurnStep
 }
 
 /** 歩きの途中の経路と、自分で巡るときの待ち（character/avatar/locomotion.ts が使う） */

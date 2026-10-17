@@ -9,6 +9,7 @@ import { riderFloorAt } from '../ride/rider'
 import { townWalk } from '../../world/walk/townWalk'
 import type { Character, CharacterMotion } from './character'
 import { endJump, stepJump } from './jump'
+import { releaseTurnStep, stepTurn, turnStepBusy } from './turnStep'
 
 /**
  * キャラクターの移動（状態は Character が持つ。character/avatar/character.ts）。
@@ -16,6 +17,8 @@ import { endJump, stepJump } from './jump'
  * 位置・向き・脚や腕の振り・立ち寄り先での行動を作る。
  *
  * 動きの段階: idle（止まっている）→ turnStart（その場で行き先の方へ向く）→ walk（歩く）→ turnEnd（着いて向きを合わせる）→ idle
+ * その場で向きを変える間（turnStart・turnEnd・見る先へ体ごと向き直る faceToward）は、足踏みで回る（character/avatar/turnStep.ts の stepTurn。
+ * 1 歩ずつ、軸足を床に置いたまま、もう片方の足を回る先へ置く。体は足が宙にある間に回る）
  *
  * 自分で巡るか・巡るのを止めるか・着いたときの行動は、使う側が入れた決まり ch.policy（character/avatar/character.ts）に聞く（アプリの状態は読まない。5-1d）。
  * 今いる立ち寄り先・行き先をアプリの状態へ書くのも使う側（kanon-lab は src/kanon/KanonAvatar.tsx の KanonNavigator が、updateLocomotion のすぐあとに）
@@ -29,17 +32,18 @@ export const WALK_SPEED = 1.1
 export const TOWN_WALK_SPEED = 80 / 60
 const ACCEL = 1.3
 const DECEL = 1.0
-/** その場で向きを変える最大の速さ（rad/s） */
+/** 歩きながら向きを変える最大の速さ（rad/s。その場で向きを変えるのは足踏み。turnStep.ts） */
 const TURN_RATE = 2.6
 /**
  * 見る先へ体ごと向き直る（使う側の決まり faceToward。kanon-lab は kanon.look_at で大きく後ろ寄りの物を見るとき）:
- * 見る先が立っていた向きから FACE_START（rad）より横・後ろなら、首と胸で届く分 FACE_KEEP を残して、FACE_RATE（rad/s）までの速さで
- * その場で向き直る（向きを変える速さが 0.25rad/s を超える間は足を踏み替える。finishFrame の stepping）。見るのをやめたら元の向きへ戻る。
+ * 見る先が立っていた向きから FACE_START（rad）より横・後ろなら、首と胸で届く分 FACE_KEEP を残して、
+ * その場で足踏みで向き直る（character/avatar/turnStep.ts の stepTurn。1 歩をゆっくり。FACE_STEP_MIN より小さなずれでは歩かない）。見るのをやめたら元の向きへ戻る。
  * 向き直るのは止まって立っている間（待機・present・展示を眺める look・窓の外を眺める gaze）だけ。座っている・物に手を置く行動の間は首と胸だけで見る
  */
 export const FACE_START = 1.2
 export const FACE_KEEP = 0.7
-const FACE_RATE = 1.1
+/** 見る先へ向き直るとき、これより小さなずれでは足を踏み替えない（rad。首と胸が残りを見る） */
+const FACE_STEP_MIN = 0.18
 const FACE_ACTIONS: ReadonlySet<string> = new Set(['present', 'look', 'gaze'])
 
 /** 歩幅（1 歩、m）。速さに合わせて伸び縮みさせ、足が床を滑って見えないようにする */
@@ -279,6 +283,7 @@ export function placeAt(ch: Character, id: PlaceId, activity = true) {
   m.moveDir.set(Math.sin(s.heading), 0, Math.cos(s.heading))
   m.speed = 0
   m.turnRate = 0
+  releaseTurnStep(m.step)
   m.walk = 0
   m.phase = 'idle'
   m.stopId = id
@@ -356,9 +361,10 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
         break
       }
       nav.curve.getTangentAt(0.02, _tan)
-      const err = turnToward(m, Math.atan2(_tan.x, _tan.z), dt)
+      // 足踏みで行き先の方へ向く。歩の途中は歩き出さない（足を置いてから）
+      const err = stepTurn(m, Math.atan2(_tan.x, _tan.z), dt, { min: 0.25 })
       // 行動の姿勢を解いてから歩き出す
-      if (Math.abs(err) < 0.4 && m.actionBlend < 0.35) m.phase = 'walk'
+      if (Math.abs(err) < 0.4 && !m.step.foot && m.actionBlend < 0.35) m.phase = 'walk'
       break
     }
     case 'walk': {
@@ -393,8 +399,9 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
         break
       }
       m.speed = Math.max(0, m.speed - DECEL * 2 * dt)
-      const err = turnToward(m, place(id).heading, dt)
-      if (Math.abs(err) < 0.015 && Math.abs(m.turnRate) < 0.08) {
+      // 足踏みで立ち寄り先の向きへ（小さなずれは足を上げずに合わせ、遅れた足はそろえる）
+      const err = stepTurn(m, place(id).heading, dt, { exact: true, close: true })
+      if (Math.abs(err) < 0.015 && !turnStepBusy(m.step, m.heading)) {
         m.phase = 'idle'
         m.stopId = id
         m.targetId = null
@@ -411,6 +418,8 @@ export function updateLocomotion(ch: Character, t: number, dt: number) {
     }
   }
   if (m.phase !== 'walk' && !traveling) m.speed = Math.max(0, m.speed - DECEL * 2 * dt)
+  // 歩いている・座っている・跳んでいる間は、その場の足踏みを外す（足はアニメーションのまま）
+  if (m.phase === 'walk' || m.speed > 0.05 || m.seat !== null || m.jump.phase !== 'none') releaseTurnStep(m.step)
 
   // 遠くのセットに置いたときに中の決まりが無かったら、できたときに階の床へ置き直す
   if (nav.snapPending && m.stopId && interiors.models.has(m.zone as InteriorZoneId)) {
@@ -458,14 +467,18 @@ function faceToward(ch: Character, dt: number) {
       nav.facePlace = m.placeSerial
     }
     const target = Math.abs(rel) > FACE_KEEP ? wrapAngle(want - Math.sign(rel) * FACE_KEEP) : home
-    turnToward(m, target, dt, FACE_RATE)
+    stepTurn(m, target, dt, { min: FACE_STEP_MIN, slow: true })
   } else if (nav.faceHome !== null) {
-    const err = turnToward(m, nav.faceHome, dt, FACE_RATE)
-    if (Math.abs(err) < 0.004) {
+    // 元の向きへ戻る（ぴったり合わせて、遅れた足もそろえる）
+    const err = stepTurn(m, nav.faceHome, dt, { slow: true, exact: true, close: true })
+    if (Math.abs(err) < 0.004 && !turnStepBusy(m.step, m.heading)) {
       m.heading = nav.faceHome
       m.turnRate = 0
       nav.faceHome = null
     }
+  } else if (m.step.foot || turnStepBusy(m.step, m.heading)) {
+    // 向き直りの途中の歩を終え、遅れた足をそろえる
+    stepTurn(m, m.heading, dt, { slow: true, close: true })
   }
   m.moveDir.set(Math.sin(m.heading), 0, Math.cos(m.heading))
 }
@@ -481,8 +494,9 @@ function finishFrame(ch: Character, t: number, dt: number) {
     m.moveDir.lerp(_tan, 1 - Math.exp(-dt * 3)).normalize()
   }
 
-  // 歩きの周期: 歩いているときは進んだ距離から（歩幅に合わせる）、その場で向きを変えるときは足踏み
-  const stepping = Math.abs(m.turnRate) > 0.25 && m.phase !== 'walk'
+  // 歩きの周期: 歩いているときは進んだ距離から（歩幅に合わせる）、その場で向きを変えるときは足踏み（足踏みを脚に入れる仕組み turnStep.ts を
+  // 使っていない回り方（乗り物の乗り降りなど）だけ。使っている間は見た目の turnStepPose.ts が足を運ぶ）
+  const stepping = Math.abs(m.turnRate) > 0.25 && m.phase !== 'walk' && !m.step.active
   if (m.speed > 0.01) m.gait += (Math.PI * m.speed * dt * m.timeScale) / (m.stride ?? stepLength(m.speed))
   else if (stepping) m.gait += Math.abs(m.turnRate) * dt * 1.6
   const walkTarget = m.phase === 'walk' ? Math.min(1, m.speed / 0.55) : stepping ? 0.3 : 0

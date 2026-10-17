@@ -13,6 +13,7 @@ import { stopDirect } from './direct'
 import { groundHeight, placeAt } from './locomotion'
 import { cancelTravel } from './travel'
 import type { Character } from './character'
+import { releaseTurnStep } from './turnStep'
 
 /**
  * ワープ（コードでは teleport。warp は時刻の早送り・カットの名前。docs/design/map-split.md §8 の段 6-5。例のアプリ town-walker が使う。kanon-lab は読まない）。
@@ -126,6 +127,7 @@ export function placeAtPoint(ch: Character, x: number, z: number, heading: numbe
   m.moveDir.set(Math.sin(heading), 0, Math.cos(heading))
   m.speed = 0
   m.turnRate = 0
+  releaseTurnStep(m.step)
   m.walk = 0
   m.phase = 'idle'
   m.stopId = null
