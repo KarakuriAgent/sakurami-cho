@@ -65,6 +65,12 @@ export const VISUAL_DEFAULTS = {
     damping: 3.5,
   },
 
+  /**
+   * 寄りの画で待機の体の揺れを弱める（character/avatar/characterVisual.ts の steady）。頭（0.25m）が画の縦に占める割合が headFraction の間で
+   * 0 → amount（顔のアップでいちばん強く。胸から上の画で半分ほど）。使う側の層の steady（話している間など）を足しても max まで
+   */
+  steady: { headFraction: [0.28, 0.55] as [number, number], amount: 0.75, max: 0.85 },
+
   /** 待機の姿勢とまばたき */
   idle: {
     /** 腕を下ろす角度（T ポーズから、ラジアン） */
@@ -128,6 +134,7 @@ export interface VisualConfig {
     saccade: { yaw: number; pitch: number; interval: readonly [number, number] }
     damping: number
   }
+  steady: { headFraction: readonly [number, number]; amount: number; max: number }
   idle: VisualIdleConfig
   blink: string
   mtoon: VrmMtoonConfig

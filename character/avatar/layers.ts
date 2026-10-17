@@ -14,8 +14,11 @@ import type { Character } from './character'
  * 4. overlay・lower … .vrma の再生の上にコードの姿勢を重ねる強さ（上半身と手・腰から下）。立ち寄り先での行動の強さとの max
  * 5. look … 視線の先（入りはカメラの位置）を書き換え、注意の強さ（0〜1）を返す。強さは層の max（首の追従・カメラを見る強さに使う）
  * 6. nod … 首を前に倒す角度（rad）。0 から層の分を足す
- * 7. face … 表情を書く（ch.expressions。共通のまばたきの前。まばたきの強さは ch.expressions.blinkScale）
- * 8. after … 揺れもの・vrm.update と体の位置（ch.anchors）を書いた後
+ * 7. adjust … 姿勢の仕上げ（首・視線まで入れた後、表情と vrm.update の前）。正規化ボーンを直接直してよい（顔に手を届かせる IK など。
+ *    骨の位置を読むなら、先に f.vrm.scene.updateMatrixWorld(true)）
+ * 8. face … 表情を書く（ch.expressions。共通のまばたきの前。まばたきの強さは ch.expressions.blinkScale）
+ * 9. after … 揺れもの・vrm.update と体の位置（ch.anchors）を書いた後
+ * steady … 待機（.vrma）の体の揺れ（左右の体重移動など）を弱める強さ（0〜1。層の max。見た目は顔のアップなどの寄りの画で、これとは別に弱める）
  *
  * 読み込んだときは onLoad を付けた順に呼ぶ（共通の物を作った後）。
  * 層は毎コマの閉包を作らない（段の関数は付けるときに 1 回作る）。層の中で乱数や壁の時計を使わない（撮影で毎回同じ画にする）。
@@ -65,6 +68,10 @@ export interface CharacterLayer {
   look?(target: THREE.Vector3, f: VisualFrame): number
   /** 首を前に倒す角度（rad。足す） */
   nod?(f: VisualFrame): number
+  /** 待機の体の揺れを弱める強さ（0〜1。話している間など） */
+  steady?(f: VisualFrame): number
+  /** 姿勢の仕上げ（首・視線の後、表情と vrm.update の前） */
+  adjust?(f: VisualFrame): void
   /** 表情を書く（f.ch.expressions） */
   face?(f: VisualFrame): void
   /** vrm.update と体の位置を書いた後 */

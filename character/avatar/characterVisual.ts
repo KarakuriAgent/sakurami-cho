@@ -48,6 +48,9 @@ import type { Car } from '../../world/outdoor/transit/vehicle'
  *   読めていない・待機の .vrma が無いときは、コードの姿勢（しゃがむ → 伸びる → 着いてしゃがむ）を重ねる。跳んでいる間は足の高さ合わせを弱める
  * - その場で向きを変える足踏み（ch.motion.step。character/avatar/turnStep.ts）: 床に残る足をその場に留め、持ち上げた足を次の所へ運ぶ
  *   （character/avatar/turnStepPose.ts。行動の姿勢を作った後・足の高さ合わせの前）
+ * - 寄りの画では待機の体の揺れを弱める（steady。顔のアップ = 頭が画の縦の steady.headFraction の割合を占めるほど強く、待機の .vrma の腰・背骨・首・脚を
+ *   クリップの平均の姿勢へ steady.amount まで寄せる。層の steady（花音は話している間）は、腰から上の画（medium・close）でその分を足す。引きの画はそのまま）
+ * - 姿勢の仕上げ（層の adjust。花音は顔・頭に触れる身ぶりで手を顔の目印へ届かせる）: 首・視線の後、表情と vrm.update の前
  */
 
 /** 読み込みの状態（idle = まだ読み込んでいない・やめた。使う側へは loading 以降を知らせる） */
@@ -98,6 +101,53 @@ export interface CharacterVisualRig {
   motions: Map<string, THREE.AnimationAction>
   /** 跳ぶ（踏み切り・跳んでいる間・着く。3 本とも読めたときだけ） */
   jump: { start: THREE.AnimationAction; loop: THREE.AnimationAction; land: THREE.AnimationAction } | null
+  /** 待機の .vrma の平均の姿勢（腰・背骨・首・脚。寄りの画で体の揺れを弱めるときに寄せる先） */
+  idleMean: IdleMeanBone[]
+}
+
+/** 待機の .vrma の平均の姿勢（1 本の骨） */
+export interface IdleMeanBone {
+  node: THREE.Object3D
+  q: THREE.Quaternion
+  /** 腰だけ（位置） */
+  p: THREE.Vector3 | null
+}
+
+/** 寄りの画で揺れを弱める骨 */
+const STEADY_BONES: readonly VRMHumanBoneName[] = ['hips', 'spine', 'chest', 'upperChest', 'neck', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg', 'leftFoot', 'rightFoot']
+/** 頭の大きさの目安（m。画の縦に占める割合を出す） */
+const HEAD_SIZE = 0.25
+
+const _mean = new THREE.Vector3()
+
+/** 待機のクリップの平均の姿勢（四元数は向きをそろえて足し、正規化。腰の位置は平均） */
+function idleMeanPose(vrm: VRM, clip: THREE.AnimationClip): IdleMeanBone[] {
+  const out: IdleMeanBone[] = []
+  for (const name of STEADY_BONES) {
+    const node = vrm.humanoid.getNormalizedBoneNode(name)
+    if (!node) continue
+    const qt = clip.tracks.find((t) => t.name === `${node.name}.quaternion`)
+    if (!qt) continue
+    const v = qt.values
+    const sum = new THREE.Vector4()
+    for (let i = 0; i + 3 < v.length; i += 4) {
+      const sign = i === 0 || v[i] * v[0] + v[i + 1] * v[1] + v[i + 2] * v[2] + v[i + 3] * v[3] >= 0 ? 1 : -1
+      sum.x += v[i] * sign
+      sum.y += v[i + 1] * sign
+      sum.z += v[i + 2] * sign
+      sum.w += v[i + 3] * sign
+    }
+    const q = new THREE.Quaternion(sum.x, sum.y, sum.z, sum.w).normalize()
+    let p: THREE.Vector3 | null = null
+    const pt = name === 'hips' ? clip.tracks.find((t) => t.name === `${node.name}.position`) : undefined
+    if (pt && pt.values.length >= 3) {
+      p = new THREE.Vector3()
+      const n = pt.values.length / 3
+      for (let i = 0; i < pt.values.length; i += 3) p.add(_mean.fromArray(pt.values, i).divideScalar(n))
+    }
+    out.push({ node, q, p })
+  }
+  return out
 }
 
 /** キャラクターの見た目（Character の visual に付けると ch.updateVisual で進む） */
@@ -265,6 +315,8 @@ class VrmCharacterVisual implements CharacterVisual {
   private readonly footIk: FootIkState = { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null }
   // その場で向きを変える足踏みを脚に入れる強さ（character/avatar/turnStepPose.ts）
   private readonly turnPose = createTurnStepPose()
+  // 寄りの画で待機の揺れを弱める今の強さ（なめらかに）
+  private steadyNow = 0
   // 跳ぶ姿勢の様子と、跳ぶ .vrma の時刻と強さ（character/avatar/jumpPose.ts）
   private readonly jumpLook = createJumpLook()
   private readonly jumpWeights = createJumpClipWeights()
@@ -333,6 +385,7 @@ class VrmCharacterVisual implements CharacterVisual {
     this.springCarry = -1
     Object.assign(this.footIk, { dL: 0, dR: 0, drop: 0, lift: 0, applied: 0, lastY: null })
     Object.assign(this.turnPose, createTurnStepPose())
+    this.steadyNow = 0
     Object.assign(this.anim, { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0, torsoYaw: 0, torsoPitch: 0 })
     Object.assign(this.sacc, { n: 0, next: 0, last: -1, yaw: 0, pitch: 0 })
     Object.assign(this.jumpLook, createJumpLook())
@@ -440,6 +493,7 @@ class VrmCharacterVisual implements CharacterVisual {
         codePose: this.animatedBones.map(() => new THREE.Quaternion()),
         motions,
         jump,
+        idleMean: idle && idleClip ? idleMeanPose(loaded, idleClip.clip) : [],
       }
       this.rig = r
       // シーンに置き、表情を読み込んだ VRM につなぎ、層の読み込み時の準備を付けた順に（花音はペンダント → 表情 → 工具 → ?debug の道具。Object3D・material を作る順）
@@ -532,6 +586,31 @@ class VrmCharacterVisual implements CharacterVisual {
     sc.yaw = center ? 0 : (h(1) * 2 - 1) * S.yaw * k
     sc.pitch = center ? 0 : (h(2) * 2 - 1) * S.pitch * k
     sc.next = t + S.interval[0] + h(4) * (S.interval[1] - S.interval[0])
+  }
+
+  /**
+   * 待機の揺れを弱める強さ（0〜steady.max。なめらかに）: 頭が画の縦に占める割合（カメラから頭までの距離と縦の画角から）が steady.headFraction の
+   * 間で 0 → steady.amount、層の steady（話している間など）は腰から上の画（割合 0.15〜0.3 で 0 → 1）でその分を足す
+   */
+  private steady(f: VisualFrame, camera: THREE.Camera, delta: number) {
+    const S = this.config.steady
+    const cam = camera as THREE.PerspectiveCamera
+    let want = 0
+    if (cam.isPerspectiveCamera) {
+      camera.getWorldPosition(this.tmp.target)
+      const dist = Math.max(0.05, this.tmp.target.distanceTo(this.ch.anchors.head))
+      const frac = HEAD_SIZE / (2 * dist * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) / (cam.zoom || 1))
+      let extra = 0
+      const layers = this.ch.layers.list
+      for (let i = 0; i < layers.length; i++) {
+        const l = layers[i]
+        if (l.steady) extra = Math.max(extra, l.steady(f))
+      }
+      want = Math.min(S.max, THREE.MathUtils.smoothstep(frac, S.headFraction[0], S.headFraction[1]) * S.amount + extra * THREE.MathUtils.smoothstep(frac, 0.15, 0.3))
+    }
+    // カメラを切り替えたコマで急に変わらないよう、0.3 秒ほどで
+    this.steadyNow += (want - this.steadyNow) * (1 - Math.exp(-Math.min(delta, 0.1) * 8))
+    return this.steadyNow
   }
 
   /** 取り消した読み込みの VRM が届いた: dispose() のあとなら、すぐ片付ける（stop() だけなら今までどおり何もしない） */
@@ -696,6 +775,14 @@ class VrmCharacterVisual implements CharacterVisual {
         }
       }
       r.mixer.update(delta)
+      // 寄りの画では待機の体の揺れ（腰・背骨・首・脚）を、クリップの平均の姿勢へ寄せて弱める（待機の強さの分だけ）
+      const steady = this.steady(f, camera, delta) * (r.walk ? 1 - m.walk : 1) * (1 - mw) * (1 - jw)
+      if (steady > 0.001) {
+        for (const b of r.idleMean) {
+          b.node.quaternion.slerp(b.q, steady)
+          if (b.p) b.node.position.lerp(b.p, steady)
+        }
+      }
       if (lower > 0.001) {
         ANIMATED_BONES.forEach((name, i) => {
           if (LOWER_BONES.has(name)) vrm.humanoid.getNormalizedBoneNode(name)?.quaternion.slerp(r.codePose[i], lower)
@@ -829,6 +916,9 @@ class VrmCharacterVisual implements CharacterVisual {
       lookProxy.updateMatrixWorld()
       vrm.lookAt.target = lookProxy
     }
+
+    // --- 姿勢の仕上げ（層の adjust。顔に手を届かせる IK など） ---
+    for (let i = 0; i < layers.length; i++) layers[i].adjust?.(f)
 
     // --- 表情（モデルに無い表情は ch.expressions が飛ばす）: 層の表情 → まばたき ---
     const ex = character.expressions
