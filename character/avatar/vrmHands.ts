@@ -199,19 +199,18 @@ function applyHand(rig: HandRig, s: HandShape, weight: number, what: 'fingers' |
 }
 
 /**
- * 指の骨に手の形を入れる。weight = 1 で置き換え、それより小さければ今の回転（.vrma の指など）から近づける
+ * 指の骨に手の形を入れる。weight = 1 で置き換え、それより小さければ今の回転（.vrma の指など）から近づける。
+ * weightR = 右手の強さ（省けば weight。片方の腕だけを重ねる行動。body.ts の ACTION_PART）
  */
-export function applyHandFingers(rig: HandsRig, L: HandShape, R: HandShape, weight = 1) {
-  if (weight <= 0.001) return
-  if (rig.L) applyHand(rig.L, L, weight, 'fingers')
-  if (rig.R) applyHand(rig.R, R, weight, 'fingers')
+export function applyHandFingers(rig: HandsRig, L: HandShape, R: HandShape, weight = 1, weightR = weight) {
+  if (rig.L && weight > 0.001) applyHand(rig.L, L, weight, 'fingers')
+  if (rig.R && weightR > 0.001) applyHand(rig.R, R, weightR, 'fingers')
 }
 
 /**
- * 前腕のひねりと手首の曲げを、今の腕の回転に重ねる（腕の姿勢を入れた後に呼ぶ）。weight は腕の姿勢と同じ強さ
+ * 前腕のひねりと手首の曲げを、今の腕の回転に重ねる（腕の姿勢を入れた後に呼ぶ）。weight は腕の姿勢と同じ強さ（weightR は右手。省けば weight）
  */
-export function applyHandTwist(rig: HandsRig, L: HandShape, R: HandShape, weight = 1) {
-  if (weight <= 0.001) return
-  if (rig.L) applyHand(rig.L, L, weight, 'arm')
-  if (rig.R) applyHand(rig.R, R, weight, 'arm')
+export function applyHandTwist(rig: HandsRig, L: HandShape, R: HandShape, weight = 1, weightR = weight) {
+  if (rig.L && weight > 0.001) applyHand(rig.L, L, weight, 'arm')
+  if (rig.R && weightR > 0.001) applyHand(rig.R, R, weightR, 'arm')
 }

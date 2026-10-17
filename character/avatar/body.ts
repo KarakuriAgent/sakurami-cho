@@ -169,6 +169,29 @@ function armOnDesk(a: ArmPose, drop: number, body: BodyMetrics) {
   a.elbow = Math.max(0.2, forearm - r)
 }
 
+/**
+ * 窓の外を眺める（gaze）ときの左腕: 上腕はほぼ下ろして肘を体の横に置き、肘を深く曲げて、手を胸のペンダントに添える。
+ * 角度は VRM（2026-10-05。肩幅 0.30m・上腕 0.28m・前腕 0.23m）の肩からペンダントまでを、腕の向きの式（applyBodyPose）で解いた物
+ */
+const GAZE_ARM = { raise: 0.5, out: 0.12, twist: 0.7, elbow: 2.25 } as const
+
+/**
+ * 行動の姿勢が .vrma の待機に重ねる所（.vrma があるとき。character/avatar/characterVisual.ts）。
+ * body = 上半身と腰から下（行動の姿勢のとおり）、armL・armR = その腕と手だけ（体・もう片方の腕・脚は待機の .vrma のまま。呼吸・重心の移しを残す）
+ */
+export type ActionPart = 'body' | 'armL' | 'armR'
+
+export const ACTION_PART: Record<PlaceAction, ActionPart> = {
+  present: 'body',
+  holo: 'body',
+  work: 'body',
+  type: 'body',
+  look: 'body',
+  gaze: 'armL',
+  pet: 'body',
+  sit: 'body',
+}
+
 /** 立ち寄り先での行動の姿勢（t はシーンの経過秒）。seat = 座る椅子（sit のとき）、body = 体の寸法（Character の body） */
 export function actionPose(action: PlaceAction, t: number, out: BodyPose, seat: SeatSpec | null | undefined, body: BodyMetrics) {
   restPose(out, t)
@@ -236,11 +259,18 @@ export function actionPose(action: PlaceAction, t: number, out: BodyPose, seat: 
       break
     }
     case 'gaze': {
-      // 窓に片手を当てて外を眺める
-      setArm(out.armL, 1.35, 0.3, 0.3)
+      // 窓の前に立って外を眺める。左手は胸のペンダントに軽く添え、右腕は下ろしたまま（.vrma があれば、右腕と体は待機の .vrma のまま。ACTION_PART）。
+      // 前は左腕を前へ伸ばして窓に手を当てていたが、立ち寄り先からガラスまでの距離は場所ごとに違い（ラボの窓際で約 0.6m）、
+      // 腕が届かずに手が宙に浮いて、腕が前へ伸びたまま固まって見えた
+      const sway = Math.sin(t * 0.43 + 0.6)
+      setArm(out.armL, GAZE_ARM.raise + sway * 0.015, GAZE_ARM.out, GAZE_ARM.elbow + Math.sin(t * 0.31) * 0.025, GAZE_ARM.twist)
+      // 指先がごくゆっくりペンダントをなぞる
+      const drift = Math.sin(t * 0.37 + 1.4) * 0.05
+      addCurl(out.handL, drift, drift * 0.8, drift * 0.6, drift * 0.4)
+      out.handL.thumbCurl += Math.sin(t * 0.29) * 0.04
       out.headPitch = -0.08 + Math.sin(t * 0.35) * 0.04
       out.headYaw = Math.sin(t * 0.22) * 0.3
-      out.tilt = 0.04
+      out.tilt = 0.02
       out.lookCamera = 0
       break
     }

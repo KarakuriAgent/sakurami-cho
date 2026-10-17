@@ -65,8 +65,8 @@ export const HANDS = {
   touch: hand(0.1, 0.2, 0.3, 0.4, 0.24, 0.12, 0.32, 0.95, -0.38),
   /** 後ろで手を組む */
   clasp: hand(0.48, 0.52, 0.56, 0.6, 0.45, 0.35, 0.02, 0, 0.1),
-  /** 窓に手を当てる（開いた手を反らす） */
-  palm: hand(0.08, 0.1, 0.12, 0.16, 0.1, 0.06, 0.22, 1.1, -0.55),
+  /** 胸のペンダントに手を添える（窓の外を眺める。指を軽く曲げ、手のひらを胸の方へ） */
+  pendant: hand(0.34, 0.44, 0.54, 0.62, 0.5, 0.3, 0.04, 0.6, 0.18),
   /** KB-001 をなでる（手のひらを下に、指をそろえて軽く曲げる） */
   stroke: hand(0.16, 0.18, 0.2, 0.24, 0.2, 0.1, 0.05, 1.3, 0.1),
   /** 開いた手（両手を上げる） */
@@ -94,7 +94,7 @@ export const ACTION_HANDS: Record<PlaceAction, { L: Readonly<HandShape>; R: Read
   work: { L: HANDS.pinch, R: HANDS.tool },
   type: { L: HANDS.keys, R: HANDS.keys },
   look: { L: HANDS.clasp, R: HANDS.clasp },
-  gaze: { L: HANDS.palm, R: HANDS.relaxed },
+  gaze: { L: HANDS.pendant, R: HANDS.relaxed },
   pet: { L: HANDS.relaxed, R: HANDS.stroke },
   sit: { L: HANDS.relaxed, R: HANDS.relaxed },
 }

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm'
-import { actionPose, applyGait, blendPose, createPose, restPose, setBodyMetrics, type BodyMetrics, type BodyPose } from './body'
+import { ACTION_PART, actionPose, applyGait, blendPose, createPose, restPose, setBodyMetrics, type ActionPart, type BodyMetrics, type BodyPose } from './body'
 import { blendHand, createHand, HAND_SMOOTHING, HANDS, setHand } from './hands'
 import { applyHandFingers, applyHandTwist, createHandsRig, type HandsRig } from './vrmHands'
 import { stepLength, WALK_SPEED } from './locomotion'
@@ -122,6 +122,12 @@ export interface CharacterVisual extends CharacterVisualLike {
 
 /** 腰から下のボーン（脚を使わない身ぶりでは .vrma のままにする） */
 const LOWER_BONES = new Set<VRMHumanBoneName>(['hips', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg', 'leftFoot', 'rightFoot', 'leftToes', 'rightToes'])
+
+/** 片方の腕だけの行動（body.ts の ACTION_PART）で .vrma に重ねるボーン（肩から手首まで。指は vrmHands.ts） */
+const ARM_BONES: Record<Exclude<ActionPart, 'body'>, Set<VRMHumanBoneName>> = {
+  armL: new Set<VRMHumanBoneName>(['leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand']),
+  armR: new Set<VRMHumanBoneName>(['rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand']),
+}
 
 /**
  * 毎フレーム回転を作り直すボーン（基本姿勢 + 手続き的な動き。指は vrmHands.ts が毎フレーム入れる）。
@@ -512,9 +518,12 @@ class VrmCharacterVisual implements CharacterVisual {
       // 腰から下は、行動と層の lower の身ぶり（花音はスパチャで跳ねる cheer）のときだけ。ほかの身ぶりは上半身だけに重ねる
       // 立ったままの全身の身ぶりの間は、立ち寄り先での行動の姿勢より身ぶりを優先する
       // 跳んでいる間は、跳ぶ .vrma の強さの分だけ行動を弱める（腰から下は跳ぶ姿勢にする）。跳ぶ .vrma が無ければ、コードの跳ぶ姿勢を腰から下に重ねる
+      // 片方の腕だけの行動（窓の外を眺める gaze。body.ts の ACTION_PART）は、その腕と手だけに重ね（armW）、体・もう片方の腕・脚は .vrma の待機のまま
       const actionW = (m.action === 'present' ? 0 : m.actionBlend) * (1 - mw) * (1 - jw)
-      let overlay = actionW
-      let lower = actionW
+      const part = m.action ? ACTION_PART[m.action] : 'body'
+      const armW = part === 'body' ? 0 : actionW
+      let overlay = part === 'body' ? actionW : 0
+      let lower = overlay
       for (let i = 0; i < layers.length; i++) {
         const l = layers[i]
         if (l.overlay) overlay = Math.max(overlay, l.overlay(f))
@@ -524,7 +533,7 @@ class VrmCharacterVisual implements CharacterVisual {
       lower = overlay > 0.001 ? lower * (1 - jw) : 0
       if (jumpCode) lower = Math.max(lower, Math.min(1, (jumpCode.crouch + jumpCode.tuck) * 3))
       const hips = vrm.humanoid.getNormalizedBoneNode('hips')
-      if (overlay > 0.001 || lower > 0.001) {
+      if (overlay > 0.001 || lower > 0.001 || armW > 0.001) {
         // 重ねる先 = コードだけのときの姿勢（腰は元の位置）を覚えておく
         applyBodyPose(vrm, pose)
         ANIMATED_BONES.forEach((name, i) => {
@@ -571,17 +580,22 @@ class VrmCharacterVisual implements CharacterVisual {
         })
         hips?.position.lerp(r.hipsRest, lower)
       }
-      if (overlay > 0.001) {
+      if (overlay > 0.001 || armW > 0.001) {
+        const armBones = part === 'body' ? null : ARM_BONES[part]
         ANIMATED_BONES.forEach((name, i) => {
           if (LOWER_BONES.has(name)) return
+          const w = armBones?.has(name) ? Math.max(overlay, armW) : overlay
+          if (w <= 0.001) return
           // 背骨の付け根では腰の回り（.vrma の待機の腰のひねりなど）を打ち消し、上半身の向きをコードの姿勢（腰は回さない）と同じにする。
           // 対象の位置に合わせた身ぶり（物に触る・画面を示す）の向きがずれないように
           const target = name === 'spine' && hips ? tmp.q.copy(hips.quaternion).invert().multiply(r.codePose[i]) : r.codePose[i]
-          vrm.humanoid.getNormalizedBoneNode(name)?.quaternion.slerp(target, overlay)
+          vrm.humanoid.getNormalizedBoneNode(name)?.quaternion.slerp(target, w)
         })
         // 手の形も腕と同じ強さで
-        applyHandFingers(r.hands, hands.L, hands.R, overlay)
-        applyHandTwist(r.hands, hands.L, hands.R, overlay)
+        const wL = part === 'armL' ? Math.max(overlay, armW) : overlay
+        const wR = part === 'armR' ? Math.max(overlay, armW) : overlay
+        applyHandFingers(r.hands, hands.L, hands.R, wL, wR)
+        applyHandTwist(r.hands, hands.L, hands.R, wL, wR)
       }
     } else {
       applyBodyPose(vrm, pose)
