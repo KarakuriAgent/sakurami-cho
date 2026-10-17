@@ -36,6 +36,9 @@ import type { Car } from '../../world/outdoor/transit/vehicle'
  * - 待機・歩きの .vrma（`pnpm sync:anim` で作る）があれば、それを再生し、行動・反応の身ぶりはコードの姿勢をその強さで上に重ねる。
  *   立ち寄り先での行動（立ち位置の待機 present を除く）と層の lower の身ぶりは全身、ほかの身ぶりは上半身だけ
  *   （足は .vrma の待機の立ち方のまま、床を滑らないように）。どちらも強さ 1 なら、上半身の向きはコードだけのときと同じになる
+ * - 行動の切り替え（ch.motion.action が替わる。kanon.activity の holo → type・行動 → 待機など）: 前のコマに見せた姿勢（正規化ボーンの回転・腰の位置・
+ *   体の上下と前後）を覚え、ACTION_SWITCH_SEC（0.5 秒）かけて新しい姿勢へ混ぜる。腕だけの行動（gaze・pet）と体全体の行動の間も同じ。
+ *   置き直した（placeSerial が進んだ）とき・前の行動がほとんど見えていなかった（歩いてきた）ときは混ぜない
  * - 立ったままの全身の身ぶり（clips。花音は kanon.gesture の look_around など）: 読み込んだクリップを、層の clip が返す強さ・時刻で
  *   待機の上に重ねる（腰から下もモーションのまま）。その間は首・目のカメラへの追従を弱めて、モーションの頭の動きを打ち消さないようにする。
  *   待機の .vrma が無いとき（コードの動き）は読み込まない
@@ -155,6 +158,14 @@ function animatedBones(basePose: Pose): VRMHumanBoneName[] {
   )
 }
 
+/**
+ * 行動を切り替えたとき（kanon.activity で holo → type、行動 → 待機など。ch.motion.action が替わる）、前に見せていた姿勢から新しい姿勢へ混ぜる秒。
+ * 行動の強さ（actionBlend）が 1 のまま行動だけが替わると、前は 1 コマで姿勢が飛んだ（混ぜていたのは手の形だけ）
+ */
+export const ACTION_SWITCH_SEC = 0.5
+/** 切り替えで混ぜないボーン（目・あご。視線と表情が毎コマ決める） */
+const SWITCH_SKIP = new Set<VRMHumanBoneName>(['leftEye', 'rightEye', 'jaw'])
+
 /** 腕を「下ろした状態」の向きから T ポーズの向きへ直す回転（体の左 = +1） */
 const R0 = { L: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2)), R: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -Math.PI / 2)) }
 const R0inv = { L: R0.L.clone().invert(), R: R0.R.clone().invert() }
@@ -257,6 +268,24 @@ class VrmCharacterVisual implements CharacterVisual {
   private readonly reach: BodyPoint = { right: 0, up: 0, fwd: 0 }
   /** 今の手の形（姿勢の手の形へ少しずつ近づける） */
   private readonly hands = { L: createHand(), R: createHand() }
+  /**
+   * 行動の切り替え（ACTION_SWITCH_SEC）: 前のコマに見せた姿勢（正規化ボーンの回転・腰の位置・体の上下と前後）と、切り替えた時に覚えた姿勢（from）。
+   * key = 行動の名前（無ければ ''）、place = その時の置き直しの回数（kanon.place などで置き直したら混ぜない）、at = 切り替えた時刻（シーンの秒）
+   */
+  private readonly sw = {
+    vrm: null as VRM | null,
+    bones: [] as { node: THREE.Object3D; shown: THREE.Quaternion; from: THREE.Quaternion }[],
+    shownHips: new THREE.Vector3(),
+    fromHips: new THREE.Vector3(),
+    shownBob: 0,
+    shownShift: 0,
+    fromBob: 0,
+    fromShift: 0,
+    key: null as string | null,
+    place: -1,
+    lastBlend: 0,
+    at: -100,
+  }
   private readonly lookProxy = new THREE.Object3D()
   private readonly tmp = {
     q: new THREE.Quaternion(),
@@ -298,6 +327,7 @@ class VrmCharacterVisual implements CharacterVisual {
     Object.assign(this.jumpLook, createJumpLook())
     setHand(this.hands.L, HANDS.relaxed)
     setHand(this.hands.R, HANDS.relaxed)
+    Object.assign(this.sw, { vrm: null, bones: [], key: null, place: -1, lastBlend: 0, at: -100 })
     this.status = 'loading'
     onStatus?.('loading')
     loadVrm(assetUrl(base, this.url), character.rim, { mtoon: cfg.mtoon, castShadow: cfg.castShadow }).then(async (result) => {
@@ -435,6 +465,41 @@ class VrmCharacterVisual implements CharacterVisual {
     this.owned.clear()
   }
 
+  /**
+   * 行動の切り替えの混ぜる強さ（1 = 切り替えた時に見せていた姿勢のまま → 0 = 新しい姿勢。0 なら混ぜない）。
+   * 行動（ch.motion.action）が替わったコマで、前のコマに見せた姿勢を from に写す。前の行動がほとんど見えていなかった（行動の強さ 0.05 未満。歩いてきた）とき・
+   * 置き直した（placeSerial が進んだ）ときは混ぜない
+   */
+  private actionSwitch(vrm: VRM, t: number) {
+    const sw = this.sw
+    const m = this.ch.motion
+    if (sw.vrm !== vrm) {
+      sw.vrm = vrm
+      sw.bones = []
+      for (const name of Object.keys(vrm.humanoid.humanBones) as VRMHumanBoneName[]) {
+        const node = vrm.humanoid.getNormalizedBoneNode(name)
+        if (node && !SWITCH_SKIP.has(name)) sw.bones.push({ node, shown: node.quaternion.clone(), from: new THREE.Quaternion() })
+      }
+      sw.key = null
+    }
+    const key = m.action ?? ''
+    if (sw.key === null || m.placeSerial !== sw.place) {
+      sw.at = -100
+    } else if (key !== sw.key && sw.lastBlend > 0.05) {
+      sw.at = t
+      for (const b of sw.bones) b.from.copy(b.shown)
+      sw.fromHips.copy(sw.shownHips)
+      sw.fromBob = sw.shownBob
+      sw.fromShift = sw.shownShift
+    }
+    sw.key = key
+    sw.place = m.placeSerial
+    sw.lastBlend = m.action ? m.actionBlend : 0
+    const u = (t - sw.at) / ACTION_SWITCH_SEC
+    if (u >= 1 || u < 0) return 0
+    return 1 - u * u * (3 - 2 * u)
+  }
+
   /** 取り消した読み込みの VRM が届いた: dispose() のあとなら、すぐ片付ける（stop() だけなら今までどおり何もしない） */
   private dropStale(run: number, vrm: VRM) {
     if (run <= this.disposedRun) releaseVrm(vrm, this.ch.rim)
@@ -513,6 +578,14 @@ class VrmCharacterVisual implements CharacterVisual {
     if (jumpCode) applyJumpPose(pose, jumpCode.crouch, jumpCode.tuck, character.body)
     // 層の身ぶり（付けた順に重ねる）
     for (let i = 0; i < layers.length; i++) layers[i].pose?.(pose, f)
+    // 行動の切り替え: 前のコマに見せた姿勢を覚え、ACTION_SWITCH_SEC かけて新しい姿勢へ混ぜる（下のボーンの混ぜと、ここの体の上下・前後）
+    const swW = this.actionSwitch(vrm, t)
+    if (swW > 0) {
+      pose.bob = THREE.MathUtils.lerp(pose.bob, this.sw.fromBob, swW)
+      pose.shift = THREE.MathUtils.lerp(pose.shift, this.sw.fromShift, swW)
+    }
+    this.sw.shownBob = pose.bob
+    this.sw.shownShift = pose.shift
     group.position.y += pose.bob
     // 座るときは体ごと前（座面の上）へ
     if (Math.abs(pose.shift) > 1e-4) {
@@ -615,6 +688,20 @@ class VrmCharacterVisual implements CharacterVisual {
     } else {
       applyBodyPose(vrm, pose)
       applyHandTwist(r.hands, hands.L, hands.R)
+    }
+
+    // 行動の切り替えの途中なら、切り替えた時に見せていた姿勢から混ぜる。混ぜた後の姿勢を、次の切り替えのために覚える（視線・首を足す前・足の高さ合わせの前）
+    {
+      const sw = this.sw
+      const hips = vrm.humanoid.getNormalizedBoneNode('hips')
+      for (const b of sw.bones) {
+        if (swW > 0) b.node.quaternion.slerp(b.from, swW)
+        b.shown.copy(b.node.quaternion)
+      }
+      if (hips) {
+        if (swW > 0) hips.position.lerp(sw.fromHips, swW)
+        sw.shownHips.copy(hips.position)
+      }
     }
 
     // --- 足を地面の高さに合わせる（ラボの外の坂・石段。中の平らな床では何もしない）。跳ぶ姿勢の間は、歩く間の膝を伸ばす直しを弱める ---
