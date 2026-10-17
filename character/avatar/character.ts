@@ -212,6 +212,11 @@ export class Character implements TownFocus {
   readonly expressions = new CharacterExpressions()
   /** 見た目（character/avatar/characterVisual.ts。付けるのは使う側（kanon-lab は src/kanon/KanonAvatar.tsx）。無ければ見た目を持たない） */
   visual: CharacterVisualLike | null = null
+  /**
+   * 立ち寄り先での行動で手を伸ばす先（ワールド座標。pet = なでる物の頭の上）。使う側が書き（kanon-lab は KB-001 の頭の上。src/kb001/KB001.tsx）、
+   * 見た目が体の中の点に直して行動の姿勢に渡す（character/avatar/body.ts の actionPose の reach）。null なら行動の既定の位置（body.ts の PET_REACH）
+   */
+  actionTarget: THREE.Vector3 | null = null
 
   constructor(init: CharacterInit) {
     this.id = init.id

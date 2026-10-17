@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { VRM, VRMHumanBoneName } from '@pixiv/three-vrm'
-import { ACTION_PART, actionPose, applyGait, blendPose, createPose, restPose, setBodyMetrics, type ActionPart, type BodyMetrics, type BodyPose } from './body'
+import { ACTION_PART, actionPose, applyGait, blendPose, createPose, restPose, setBodyMetrics, type ActionPart, type BodyMetrics, type BodyPoint, type BodyPose } from './body'
 import { blendHand, createHand, HAND_SMOOTHING, HANDS, setHand } from './hands'
 import { applyHandFingers, applyHandTwist, createHandsRig, type HandsRig } from './vrmHands'
 import { stepLength, WALK_SPEED } from './locomotion'
@@ -253,6 +253,8 @@ class VrmCharacterVisual implements CharacterVisual {
   // アニメーションの状態
   private readonly anim = { nextBlink: 2, blinkAt: -100, headYaw: 0, headPitch: 0 }
   private readonly poses = { rest: createPose(), action: createPose(), out: createPose() }
+  /** 行動で手を伸ばす先（体の中の点。Character の actionTarget から毎コマ作る） */
+  private readonly reach: BodyPoint = { right: 0, up: 0, fwd: 0 }
   /** 今の手の形（姿勢の手の形へ少しずつ近づける） */
   private readonly hands = { L: createHand(), R: createHand() }
   private readonly lookProxy = new THREE.Object3D()
@@ -487,7 +489,20 @@ class VrmCharacterVisual implements CharacterVisual {
     const pose = poses.out
     restPose(poses.rest, t)
     if (m.action && m.actionBlend > 0.001) {
-      actionPose(m.action, t, poses.action, m.seat, character.body)
+      // 手を伸ばす先（ワールド座標）を、足元から見た体の中の点に（右 = 体の向きから 90° 右）
+      const at = character.actionTarget
+      let reach: BodyPoint | null = null
+      if (at) {
+        const dx = at.x - m.position.x
+        const dz = at.z - m.position.z
+        const sh = Math.sin(m.heading)
+        const chd = Math.cos(m.heading)
+        reach = this.reach
+        reach.fwd = dx * sh + dz * chd
+        reach.right = -(dx * chd - dz * sh)
+        reach.up = at.y - m.position.y
+      }
+      actionPose(m.action, t, poses.action, m.seat, character.body, reach)
       blendPose(poses.rest, poses.action, m.actionBlend * m.actionBlend * (3 - 2 * m.actionBlend), pose)
     } else blendPose(poses.rest, poses.rest, 0, pose)
     const bobBeforeGait = pose.bob
@@ -518,7 +533,7 @@ class VrmCharacterVisual implements CharacterVisual {
       // 腰から下は、行動と層の lower の身ぶり（花音はスパチャで跳ねる cheer）のときだけ。ほかの身ぶりは上半身だけに重ねる
       // 立ったままの全身の身ぶりの間は、立ち寄り先での行動の姿勢より身ぶりを優先する
       // 跳んでいる間は、跳ぶ .vrma の強さの分だけ行動を弱める（腰から下は跳ぶ姿勢にする）。跳ぶ .vrma が無ければ、コードの跳ぶ姿勢を腰から下に重ねる
-      // 片方の腕だけの行動（窓の外を眺める gaze。body.ts の ACTION_PART）は、その腕と手だけに重ね（armW）、体・もう片方の腕・脚は .vrma の待機のまま
+      // 片方の腕だけの行動（窓の外を眺める gaze・KB-001 をなでる pet。body.ts の ACTION_PART）は、その腕と手だけに重ね（armW）、体・もう片方の腕・脚は .vrma の待機のまま
       const actionW = (m.action === 'present' ? 0 : m.actionBlend) * (1 - mw) * (1 - jw)
       const part = m.action ? ACTION_PART[m.action] : 'body'
       const armW = part === 'body' ? 0 : actionW
@@ -701,6 +716,7 @@ function measureBody(vrm: VRM, body: BodyMetrics) {
   const node = (n: VRMHumanBoneName) => vrm.humanoid.getNormalizedBoneNode(n)
   const leg = node('leftUpperLeg')
   const ua = node('leftUpperArm')
+  const uaR = node('rightUpperArm')
   const la = node('leftLowerArm')
   const hand = node('leftHand')
   if (!leg || !ua || !la || !hand) return
@@ -710,9 +726,13 @@ function measureBody(vrm: VRM, body: BodyMetrics) {
   const shoulderAboveHip = ua.getWorldPosition(_mb).y - _ma.y
   const upperArm = ua.getWorldPosition(_ma).distanceTo(la.getWorldPosition(_mb))
   const foreArm = la.getWorldPosition(_ma).distanceTo(hand.getWorldPosition(_mb))
+  // 左右の上腕の付け根の間の半分（右の上腕が無ければ既定のまま）
+  const half = uaR ? ua.getWorldPosition(_ma).distanceTo(uaR.getWorldPosition(_mb)) / 2 : 0
   if (hipHeight > 0.4 && hipHeight < 1.4 && upperArm > 0.1 && foreArm > 0.1 && shoulderAboveHip > 0.15 && shoulderAboveHip < 0.7) {
-    setBodyMetrics(body, { hipHeight, upperArm, foreArm, shoulderAboveHip })
-    console.info(`[sakurami-cho] 体の寸法: 股関節 ${hipHeight.toFixed(3)}m・肩は股関節の ${shoulderAboveHip.toFixed(3)}m 上・上腕 ${upperArm.toFixed(3)}m・前腕 ${foreArm.toFixed(3)}m`)
+    setBodyMetrics(body, { hipHeight, upperArm, foreArm, shoulderAboveHip, ...(half > 0.08 && half < 0.3 ? { shoulderHalf: half } : {}) })
+    console.info(
+      `[sakurami-cho] 体の寸法: 股関節 ${hipHeight.toFixed(3)}m・肩は股関節の ${shoulderAboveHip.toFixed(3)}m 上・上腕 ${upperArm.toFixed(3)}m・前腕 ${foreArm.toFixed(3)}m・肩の幅の半分 ${body.shoulderHalf.toFixed(3)}m`,
+    )
   }
 }
 

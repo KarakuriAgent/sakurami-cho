@@ -120,11 +120,13 @@ export interface BodyMetrics {
   /** 上腕・前腕の長さ */
   upperArm: number
   foreArm: number
+  /** 体の真ん中から肩（上腕の付け根）まで（左右の上腕の付け根の間の半分。手を伸ばす先から腕の角度を解くとき） */
+  shoulderHalf: number
 }
 
 /** 体の寸法の既定（VRM を測る前） */
 export function createBodyMetrics(): BodyMetrics {
-  return { hipHeight: 0.86, shoulderAboveHip: 0.35, upperArm: 0.25, foreArm: 0.22 }
+  return { hipHeight: 0.86, shoulderAboveHip: 0.35, upperArm: 0.25, foreArm: 0.22, shoulderHalf: 0.15 }
 }
 
 export function setBodyMetrics(body: BodyMetrics, m: Partial<BodyMetrics>) {
@@ -173,7 +175,68 @@ function armOnDesk(a: ArmPose, drop: number, body: BodyMetrics) {
  * 窓の外を眺める（gaze）ときの左腕: 上腕はほぼ下ろして肘を体の横に置き、肘を深く曲げて、手を胸のペンダントに添える。
  * 角度は VRM（2026-10-05。肩幅 0.30m・上腕 0.28m・前腕 0.23m）の肩からペンダントまでを、腕の向きの式（applyBodyPose）で解いた物
  */
-const GAZE_ARM = { raise: 0.5, out: 0.12, twist: 0.7, elbow: 2.25 } as const
+const GAZE_ARM = { raise: 0.61, out: 0.185, twist: 0.7, elbow: 2.135 } as const
+
+/** 体の中の点（足元から。本人の右 right・上 up・前 fwd、m） */
+export interface BodyPoint {
+  right: number
+  up: number
+  fwd: number
+}
+
+/**
+ * なでる（pet）ときの右の手のひらの既定の位置（足元から）。なでる物の頭の上がこのあたりに来るよう、使う側がなでる物を呼ぶ
+ * （kanon-lab の KB-001 は、花音がドックでなでている間、ドックから降りてここの下へ来る。src/kb001/follow.ts）。
+ * なでる物の位置を渡さない（actionPose の reach が null）ときは、ここへ手を伸ばす。
+ * 前はなでる物の位置を見ずに決まった角度で右腕を前へ伸ばしていて、ドックの上（肩より上・0.94m 先）の KB-001 に届かずに腕が宙を指していた
+ */
+export const PET_REACH: Readonly<BodyPoint> = { right: 0.2, up: 1.12, fwd: 0.44 }
+
+/** なでる物の頭の上が PET_REACH からこれより近ければ、そこへ手を伸ばす（m。遠くなるほど手を前に出して待つ形へ） */
+const PET_NEAR = 0.15
+
+/** 手首の骨から手のひらの真ん中まで（m。手を伸ばす先は手のひらの真ん中） */
+const PALM = 0.07
+
+/**
+ * 腕を、肩から手のひらの真ん中が to（足元から）へ届く角度にする（ねじりは 0。肘は体の横で下を向き、前腕が前へ曲がる）。
+ * side = 1 なら本人の左腕、-1 なら右腕。届かなければ伸ばした腕で to の方を指す。
+ *
+ * 腕の向きの式（character/avatar/characterVisual.ts の applyBodyPose）: 上腕 = Rx(−raise)·Rz(side·out)·(0, −1, 0)、
+ * 前腕 = 同じ回転·(0, −cos elbow, sin elbow)。Rz の後の手の位置は (A sinθ, −A cosθ, F sin e)（A = U + F cos e、θ = side·out）なので、
+ * 肘は肩から先までの長さ（余弦定理）、out は横の成分、raise は縦の面の中の角度の差で解ける
+ */
+export function reachArm(a: ArmPose, side: 1 | -1, to: Readonly<BodyPoint>, body: BodyMetrics) {
+  const U = body.upperArm
+  const F = body.foreArm + PALM
+  // 肩から先まで（体の座標: +X = 本人の左・+Y = 上・+Z = 前）
+  let tx = -(to.right - -side * body.shoulderHalf)
+  let ty = to.up - (body.hipHeight + body.shoulderAboveHip)
+  let tz = to.fwd
+  const len = Math.max(1e-6, Math.hypot(tx, ty, tz))
+  const D = THREE.MathUtils.clamp(len, Math.abs(U - F) + 0.02, U + F - 0.005)
+  // 届かない・近すぎる先は、同じ向きの届く長さの所へ
+  tx *= D / len
+  ty *= D / len
+  tz *= D / len
+  const e = Math.acos(THREE.MathUtils.clamp((D * D - U * U - F * F) / (2 * U * F), -1, 1))
+  const A = U + F * Math.cos(e)
+  const theta = Math.asin(THREE.MathUtils.clamp(tx / A, -1, 1))
+  const before = Math.atan2(F * Math.sin(e), A * Math.cos(theta))
+  const after = Math.atan2(tz, -ty)
+  a.raise = after - before
+  a.out = side * theta
+  a.twist = 0
+  a.elbow = e
+  a.elbowSide = 0
+  return a
+}
+
+/** 腕の長さ（肩から手のひらの真ん中まで。reachArm が届く遠さ） */
+export const armReach = (body: BodyMetrics) => body.upperArm + body.foreArm + PALM
+
+const _petAt: BodyPoint = { right: 0, up: 0, fwd: 0 }
+const _petArm = arm(0, 0, 0)
 
 /**
  * 行動の姿勢が .vrma の待機に重ねる所（.vrma があるとき。character/avatar/characterVisual.ts）。
@@ -188,12 +251,22 @@ export const ACTION_PART: Record<PlaceAction, ActionPart> = {
   type: 'body',
   look: 'body',
   gaze: 'armL',
-  pet: 'body',
+  pet: 'armR',
   sit: 'body',
 }
 
-/** 立ち寄り先での行動の姿勢（t はシーンの経過秒）。seat = 座る椅子（sit のとき）、body = 体の寸法（Character の body） */
-export function actionPose(action: PlaceAction, t: number, out: BodyPose, seat: SeatSpec | null | undefined, body: BodyMetrics) {
+/**
+ * 立ち寄り先での行動の姿勢（t はシーンの経過秒）。seat = 座る椅子（sit のとき）、body = 体の寸法（Character の body）、
+ * reach = 手を伸ばす先（足元から。pet = なでる物の頭の上。Character の actionTarget から見た目が作る。null なら行動の既定の位置）
+ */
+export function actionPose(
+  action: PlaceAction,
+  t: number,
+  out: BodyPose,
+  seat: SeatSpec | null | undefined,
+  body: BodyMetrics,
+  reach: Readonly<BodyPoint> | null = null,
+) {
   restPose(out, t)
   setHand(out.handL, ACTION_HANDS[action].L)
   setHand(out.handR, ACTION_HANDS[action].R)
@@ -342,19 +415,44 @@ export function actionPose(action: PlaceAction, t: number, out: BodyPose, seat: 
       break
     }
     case 'pet': {
-      // KB-001 をなでる
+      // KB-001 をなでる: 右手を、なでる物の頭の上（reach。無ければ PET_REACH）へ伸ばし、手のひらを下にして前後に小さく往復させる。
+      // 右腕だけを .vrma の待機に重ねる（ACTION_PART）。なでる物がまだ PET_REACH のそばに来ていない（ドックから降りてくる途中・
+      // 花音の右後ろに付いてきた所から回り込む途中）間は、手を前に出して待つ（肩より上・後ろの物へ腕を回さない）
+      const to = reach ?? PET_REACH
       const s = Math.sin(t * 2.4)
-      setArm(out.armR, 1.2 + s * 0.08, 0.1, 0.45 + s * 0.12)
-      out.handR.wrist += s * 0.12
-      out.headPitch = 0.1
-      out.headYaw = -0.1
+      const lift = Math.max(0, -Math.cos(t * 2.4)) * 0.01
+      const off = Math.hypot(to.right - PET_REACH.right, to.up - PET_REACH.up, to.fwd - PET_REACH.fwd)
+      // 届く: 頭の上で往復（戻すときに少し浮かせる）
+      _petAt.right = to.right
+      _petAt.up = to.up + lift
+      _petAt.fwd = to.fwd + s * 0.035
+      reachArm(out.armR, -1, _petAt, body)
+      // 待つ: PET_REACH の少し手前・下に手を出しておく
+      _petAt.right = PET_REACH.right - 0.02
+      _petAt.up = PET_REACH.up - 0.06
+      _petAt.fwd = PET_REACH.fwd - 0.08
+      reachArm(_petArm, -1, _petAt, body)
+      const k = 1 - smoothstep(off, PET_NEAR, PET_NEAR + 0.25)
+      for (const key of ['raise', 'out', 'twist', 'elbow', 'elbowSide'] as const) out.armR[key] = THREE.MathUtils.lerp(_petArm[key], out.armR[key], k)
+      // 手のひらを頭の丸みに沿わせる（手首を少し下へ）。往復に合わせて手首と指が遅れて付いてくる
+      out.handR.wrist += 0.18 + Math.sin(t * 2.4 - 0.7) * 0.1 * k
+      addCurl(out.handR, s * 0.04 * k, s * 0.035 * k, s * 0.03 * k, s * 0.025 * k)
+      // 頭をなでる物の方へ（首の高さはおよそ肩の 0.2m 上）
+      const neck = body.hipHeight + body.shoulderAboveHip + 0.2
+      out.headYaw = THREE.MathUtils.clamp(Math.atan2(-to.right, Math.max(0.1, to.fwd)), -0.9, 0.9) * 0.8
+      out.headPitch = THREE.MathUtils.clamp(Math.atan2(neck - to.up, Math.max(0.15, Math.hypot(to.right, to.fwd))), -0.3, 0.6) * 0.75
       out.headRoll = 0.08
-      out.lean = 0.06
-      out.lookCamera = 0.2
+      out.lookCamera = 0.15
       break
     }
   }
   return out
+}
+
+/** なめらかな 0〜1（x が a で 0、b で 1） */
+function smoothstep(x: number, a: number, b: number) {
+  const u = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1)
+  return u * u * (3 - 2 * u)
 }
 
 /**
