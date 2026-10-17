@@ -214,9 +214,10 @@ function armOnDesk(a: ArmPose, drop: number, body: BodyMetrics) {
 
 /**
  * 窓の外を眺める（gaze）ときの左腕: 上腕はほぼ下ろして肘を体の横に置き、肘を深く曲げて、手を胸のペンダントに添える。
- * 角度は VRM（2026-10-05。肩幅 0.30m・上腕 0.28m・前腕 0.23m）の肩からペンダントまでを、腕の向きの式（applyBodyPose）で解いた物
+ * 角度は VRM（2026-10-05。肩幅 0.30m・上腕 0.28m・前腕 0.23m）の肩からペンダントまでを、腕の向きの式（applyBodyPose）で解いた物。
+ * 手は胸から約 2.5cm 前に置き（前は手のひらがペンダントを覆い隠した）、指先でペンダントに添える（手の形 HANDS.pendant）
  */
-const GAZE_ARM = { raise: 0.61, out: 0.185, twist: 0.7, elbow: 2.135 } as const
+const GAZE_ARM = { raise: 0.585, out: 0.175, twist: 0.7, elbow: 2.17 } as const
 
 /** 体の中の点（足元から。本人の右 right・上 up・前 fwd、m） */
 export interface BodyPoint {
